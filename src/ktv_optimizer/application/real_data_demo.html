@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Real-data Snapshot Lab</title>
+  <style>
+    :root {
+      --blue: #175cff; --blue-dark: #1244c4; --blue-soft: #edf3ff;
+      --green: #159447; --green-soft: #eaf7ef; --orange: #ed6b2d;
+      --orange-soft: #fff2ea; --red: #c74b3d; --red-soft: #fcecea;
+      --purple: #713bc4; --ink: #1b2235; --muted: #727b8d;
+      --line: #e3e7ee; --page: #f6f7fb; --card: #fff;
+      --shadow: 0 9px 30px rgba(31, 45, 80, .07);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--page); font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .55; }
+    .shell { width: min(1320px, calc(100% - 32px)); margin: 0 auto; }
+    .topbar { height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .logo { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 12px; color: white; background: linear-gradient(145deg, var(--blue), var(--blue-dark)); font-weight: 900; box-shadow: 0 7px 16px rgba(23,92,255,.22); }
+    .brand strong, .brand span { display: block; }
+    .brand span { color: var(--muted); font-size: 11px; }
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .phase { padding: 5px 9px; border-radius: 99px; color: var(--blue); background: var(--blue-soft); font-size: 11px; font-weight: 850; }
+    .ghost { height: 34px; padding: 0 11px; border: 1px solid var(--line); border-radius: 9px; color: #556075; background: white; font-weight: 750; }
+    h1 { margin: 12px 0 3px; font-size: 25px; letter-spacing: -.4px; }
+    .lead { margin: 0; color: var(--muted); font-size: 13px; }
+    .card { min-width: 0; border: 1px solid var(--line); border-radius: 15px; background: var(--card); box-shadow: var(--shadow); }
+    .setup { display: grid; grid-template-columns: 1.15fr repeat(4, minmax(120px, .72fr)) auto; gap: 10px; align-items: end; margin-top: 16px; padding: 15px; }
+    .setup-copy strong { display: block; font-size: 13px; }
+    .setup-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+    label { display: block; margin-bottom: 4px; color: #626b7e; font-size: 10px; font-weight: 850; text-transform: uppercase; letter-spacing: .3px; }
+    input, select { width: 100%; min-width: 0; height: 36px; padding: 0 9px; border: 1px solid #d5dae4; border-radius: 9px; color: var(--ink); background: white; outline: none; }
+    input:focus, select:focus { border-color: #7ca4ff; box-shadow: 0 0 0 3px rgba(23,92,255,.08); }
+    .primary { height: 36px; padding: 0 14px; border: 0; border-radius: 9px; color: white; background: var(--blue); font-weight: 850; white-space: nowrap; }
+    .prepared { display: none; margin-top: 16px; padding: 13px 15px; }
+    .prepared.show { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .prepared strong { font-size: 13px; }
+    .prepared span { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .source-stats { display: flex; flex-wrap: wrap; gap: 7px; }
+    .mini-pill { padding: 5px 8px; border-radius: 99px; color: #586278; background: #f1f3f7; font-size: 10px; font-weight: 800; }
+    .flow-card { margin-top: 12px; padding: 14px; overflow: hidden; }
+    .section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .section-head h2, .section-head h3 { margin: 0; }
+    .section-head h2 { font-size: 14px; }
+    .section-head h3 { font-size: 12px; }
+    .section-head span { color: var(--muted); font-size: 11px; }
+    .flow { display: grid; grid-template-columns: repeat(6, minmax(115px, 1fr)); margin-top: 12px; overflow-x: auto; }
+    .flow-step { position: relative; min-width: 115px; padding-right: 23px; }
+    .flow-step::after { content: "→"; position: absolute; top: 15px; right: 7px; color: #b1b7c2; font-weight: 900; }
+    .flow-step:last-child::after { display: none; }
+    .flow-box { min-height: 58px; padding: 9px; border: 1px solid var(--line); border-radius: 10px; background: #fafbfc; }
+    .flow-box b, .flow-box small { display: block; }
+    .flow-box b { font-size: 11px; }
+    .flow-box small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+    .flow-step.done .flow-box { border-color: #a9dfbd; background: var(--green-soft); }
+    .flow-step.active .flow-box { border-color: #8db0ff; background: var(--blue-soft); box-shadow: 0 0 0 3px rgba(23,92,255,.06); }
+    .workspace { display: grid; grid-template-columns: 310px minmax(0, 1fr); gap: 12px; margin: 12px 0 32px; align-items: start; }
+    .timeline-card { padding: 14px; position: sticky; top: 10px; }
+    .timeline { margin-top: 10px; }
+    .timeline-item { position: relative; display: grid; grid-template-columns: 27px minmax(0, 1fr); gap: 8px; padding: 7px 0; }
+    .timeline-item::before { content: ""; position: absolute; left: 13px; top: 33px; bottom: -7px; width: 1px; background: var(--line); }
+    .timeline-item:last-child::before { display: none; }
+    .step-dot { width: 27px; height: 27px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 50%; color: #9299a8; background: white; font-size: 10px; font-weight: 900; z-index: 1; }
+    .timeline-item.completed .step-dot { color: white; border-color: var(--green); background: var(--green); }
+    .timeline-item.next .step-dot { color: white; border-color: var(--blue); background: var(--blue); box-shadow: 0 0 0 4px var(--blue-soft); }
+    .step-copy b, .step-copy span { display: block; }
+    .step-copy b { font-size: 11px; }
+    .step-copy span { color: var(--muted); font-size: 10px; }
+    .next-button { width: 100%; margin-top: 13px; padding: 10px; border: 0; border-radius: 9px; color: white; background: var(--blue); font-weight: 850; }
+    .next-hint { margin: 7px 0 0; color: var(--muted); font-size: 10px; text-align: center; }
+    .result-stack { display: grid; gap: 12px; min-width: 0; }
+    .empty { min-height: 340px; display: grid; place-items: center; padding: 30px; text-align: center; }
+    .empty-icon { width: 58px; height: 58px; display: grid; place-items: center; margin: auto; border-radius: 18px; color: var(--blue); background: var(--blue-soft); font-size: 25px; }
+    .empty h2 { margin: 13px 0 4px; font-size: 16px; }
+    .empty p { max-width: 460px; margin: 0; color: var(--muted); font-size: 12px; }
+    .hidden { display: none !important; }
+    .result-card { padding: 15px; }
+    .story { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+    .story h2 { margin: 0; font-size: 15px; }
+    .story p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+    .success-badge { padding: 5px 8px; border-radius: 99px; color: var(--green); background: var(--green-soft); font-size: 10px; font-weight: 850; white-space: nowrap; }
+    .metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 13px; }
+    .metric { min-width: 0; padding: 10px; border-radius: 10px; background: #f7f8fa; }
+    .metric span, .metric b, .metric small { display: block; }
+    .metric span { color: var(--muted); font-size: 9px; text-transform: uppercase; }
+    .metric b { margin-top: 2px; font-size: 16px; }
+    .metric small { color: var(--delta-color, var(--muted)); font-size: 9px; }
+    .stages { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+    .stage { display: inline-flex; align-items: center; gap: 5px; padding: 5px 7px; border-radius: 99px; color: #4f6a59; background: var(--green-soft); font-size: 9px; font-weight: 800; }
+    .stage::before { content: "✓"; }
+    .io-grid { display: grid; grid-template-columns: 1fr 36px 1fr; gap: 8px; align-items: center; margin-top: 12px; }
+    .io-box { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+    .io-box b { display: block; font-size: 10px; }
+    .io-box code { display: block; margin-top: 4px; color: var(--muted); font: 9px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+    .arrow { color: var(--blue); text-align: center; font-size: 19px; font-weight: 900; }
+    .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .map-card, .audit-card, .table-card { padding: 14px; }
+    #routeSelect { width: auto; max-width: 230px; height: 31px; font-size: 10px; }
+    #routeMap { display: block; width: 100%; min-height: 270px; margin-top: 9px; border-radius: 11px; background: #eef2f0; }
+    .route-note { margin-top: 7px; color: var(--muted); font-size: 10px; }
+    .audit-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .audit-box { min-width: 0; padding: 9px; border-radius: 9px; background: #f7f8fa; }
+    .audit-box > b { display: block; margin-bottom: 6px; font-size: 10px; }
+    .audit-row { padding: 5px 0; border-top: 1px solid var(--line); }
+    .audit-row:first-of-type { border-top: 0; }
+    .audit-row b, .audit-row span { display: block; overflow-wrap: anywhere; }
+    .audit-row b { font-size: 10px; }
+    .audit-row span { color: var(--muted); font-size: 9px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+    .chip { padding: 4px 6px; border-radius: 99px; color: #68552a; background: #fff1ca; font-size: 9px; font-weight: 800; }
+    .table-wrap { overflow-x: auto; margin-top: 9px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; font-size: 10px; }
+    th { color: var(--muted); background: #f8f9fb; font-size: 9px; text-transform: uppercase; }
+    .source-tag { padding: 3px 5px; border-radius: 99px; color: var(--blue); background: var(--blue-soft); font-size: 9px; font-weight: 800; }
+    .files details { margin-top: 9px; }
+    .files summary { cursor: pointer; color: var(--blue); font-size: 10px; font-weight: 800; }
+    .file-row { display: grid; grid-template-columns: 115px minmax(0, 1fr); gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); }
+    .file-row:first-child { margin-top: 7px; }
+    .file-row b { font-size: 9px; }
+    .file-row code { color: var(--muted); font: 9px/1.5 ui-monospace, monospace; overflow-wrap: anywhere; }
+    .toast { position: fixed; z-index: 50; right: 18px; bottom: 18px; max-width: min(380px, calc(100% - 36px)); padding: 10px 12px; border-radius: 10px; color: white; background: #26334e; box-shadow: 0 12px 28px rgba(24,32,51,.22); font-size: 11px; opacity: 0; transform: translateY(12px); transition: .2s; pointer-events: none; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { background: var(--red); }
+    @media (max-width: 1050px) { .setup { grid-template-columns: repeat(3, 1fr); } .setup-copy { grid-column: 1 / -1; } .workspace { grid-template-columns: 270px minmax(0,1fr); } .metrics { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 780px) { .workspace { grid-template-columns: 1fr; } .timeline-card { position: static; } .detail-grid { grid-template-columns: 1fr; } .flow { grid-template-columns: repeat(6, 130px); } }
+    @media (max-width: 580px) { .shell { width: min(100% - 20px, 1320px); } .setup { grid-template-columns: 1fr 1fr; } .setup-copy, .setup .primary { grid-column: 1 / -1; } .prepared.show { align-items: start; flex-direction: column; } .metrics { grid-template-columns: repeat(2, 1fr); } .io-grid { grid-template-columns: 1fr; } .arrow { transform: rotate(90deg); } .audit-columns { grid-template-columns: 1fr; } .story { flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <header class="shell topbar">
+    <div class="brand"><div class="logo">AI</div><div><strong>Real-data Snapshot Lab</strong><span>Quan sát pipeline theo từng click</span></div></div>
+    <div class="top-actions"><span id="phaseBadge" class="phase">Chưa chuẩn bị</span><button id="resetButton" class="ghost">Làm mới</button></div>
+  </header>
+
+  <main class="shell">
+    <h1>Data đi qua hệ thống như thế nào?</h1>
+    <p class="lead">Mỗi lần bấm chỉ chạy đúng một full snapshot. Kết quả, state và file output được giữ lại để so sánh bước kế tiếp.</p>
+
+    <section id="setupCard" class="card setup">
+      <div class="setup-copy"><strong>1. Chuẩn bị dữ liệu thật</strong><span>Roster là proxy suy từ lịch sử, không phải ca làm thật.</span></div>
+      <div><label for="branch">Chi nhánh</label><select id="branch"><option>HNI_04</option><option>HNI_07</option><option>HNI_05</option><option>HNI_06</option><option>HNI_03</option></select></div>
+      <div><label for="jobs">Job snapshot đầu</label><input id="jobs" type="number" min="100" max="10000" value="3000"></div>
+      <div><label for="addJobs">Batch thêm</label><input id="addJobs" type="number" min="0" max="5000" value="600"></div>
+      <div><label for="mode">Chế độ gán</label><select id="mode"><option value="task_location">Đúng việc + ở gần</option><option value="task">Đúng loại việc</option><option value="location">Ở gần</option></select></div>
+      <div><label for="transitionCount">Job chuyển trạng thái</label><input id="transitionCount" type="number" min="1" max="200" value="30"></div>
+      <button id="prepareButton" class="primary">Chuẩn bị data</button>
+    </section>
+
+    <section id="preparedCard" class="card prepared">
+      <div><strong id="preparedTitle"></strong><span id="workspacePath"></span></div>
+      <div id="sourceStats" class="source-stats"></div>
+    </section>
+
+    <section class="card flow-card">
+      <div class="section-head"><h2>Luồng dữ liệu</h2><span>Source → quyết định → state mới</span></div>
+      <div id="flow" class="flow"></div>
+    </section>
+
+    <div class="workspace">
+      <aside class="card timeline-card">
+        <div class="section-head"><h2>7 snapshot</h2><span id="progressText">0/7</span></div>
+        <div id="timeline" class="timeline"></div>
+        <button id="nextButton" class="next-button" disabled>Chuẩn bị dữ liệu trước</button>
+        <p id="nextHint" class="next-hint">Mỗi click tạo CSV, chạy optimizer và commit checkpoint.</p>
+      </aside>
+
+      <section class="result-stack">
+        <div id="emptyState" class="card empty"><div><div class="empty-icon">⇢</div><h2>Bắt đầu từ dữ liệu nguồn</h2><p>Chuẩn bị branch để tạo canonical checklist, roster proxy và boundary nhẹ. Sau đó bạn sẽ chạy từng snapshot ở cột bên trái.</p></div></div>
+
+        <div id="currentContent" class="result-stack hidden">
+          <section class="card result-card">
+            <div class="story"><div><h2 id="snapshotTitle"></h2><p id="snapshotStory"></p></div><span class="success-badge">✓ Checkpoint đã commit</span></div>
+            <div id="metrics" class="metrics"></div>
+            <div id="stages" class="stages"></div>
+            <div class="io-grid"><div class="io-box"><b>Input snapshot</b><code id="inputPath"></code></div><div class="arrow">→</div><div class="io-box"><b>Output + state mới</b><code id="outputPath"></code></div></div>
+          </section>
+
+          <div class="detail-grid">
+            <section class="card map-card"><div class="section-head"><h3>Tuyến mẫu</h3><select id="routeSelect"></select></div><svg id="routeMap" viewBox="0 0 700 300"></svg><div id="routeNote" class="route-note"></div></section>
+            <section class="card audit-card"><div class="section-head"><h3>Snapshot đã thay đổi gì?</h3><span id="auditMeta"></span></div><div id="auditChips" class="chips"></div><div class="audit-columns"><div class="audit-box"><b>Diff mẫu</b><div id="changes"></div></div><div class="audit-box"><b>Conflict mẫu</b><div id="conflicts"></div></div></div></section>
+          </div>
+
+          <section class="card table-card"><div class="section-head"><h3>Assignment mẫu</h3><span id="assignmentMeta"></span></div><div class="table-wrap"><table><thead><tr><th>Checklist</th><th>KTV</th><th>Nguồn</th><th>Khoảng cách</th><th>Cost</th></tr></thead><tbody id="assignmentBody"></tbody></table></div></section>
+
+          <section class="card result-card files"><div class="section-head"><h3>File được tạo ở bước này</h3><span>có thể mở bằng notebook/Excel</span></div><details><summary>Xem đường dẫn input/output/checkpoint</summary><div id="fileList"></div></details></section>
+        </div>
+      </section>
+    </div>
+  </main>
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    let state = null;
+    let busy = false;
+    let toastTimer = null;
+    const stageLabels = { VALIDATE_INPUT: 'Kiểm tra input', LOAD_INPUT: 'Đọc CSV', MAP_INPUT: 'Chuẩn hóa + GPS', LOAD_PREVIOUS_CHECKPOINT: 'Đọc state trước', OPTIMIZE: 'Gán + routing', WRITE_OUTPUT: 'Ghi output', COMMIT_CHECKPOINT: 'Commit state' };
+    const scenarioLabels = { BOOTSTRAP_LARGE_BACKLOG: 'Nạp batch lớn', ADD_JOB_BATCH: 'Thêm checklist', COMPLETE_AND_REFILL: 'Hoàn thành + refill', SYSTEM_ASSIGNMENT_OVERRIDE: 'System ghi đè', START_JOBS_AND_MARK_BUSY: 'KTV bắt đầu làm', ROSTER_SHORTAGE: 'Thiếu KTV roster', ROSTER_RECOVERY_AND_COMPLETE: 'Phục hồi + replan' };
+    const flowSteps = [
+      ['CSV nguồn', 'Maintenance + boundary'], ['Prepare', 'Branch + roster proxy'], ['Full snapshot', 'Checklist + KTV hiện tại'], ['Resolve state', 'Diff + conflict + availability'], ['Optimizer', 'Compatibility + assign + route'], ['Checkpoint', 'Output + latest.json']
+    ];
+    function esc(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    function fmt(value) { return Number(value ?? 0).toLocaleString('vi-VN'); }
+    function showToast(message, error=false) { clearTimeout(toastTimer); $('toast').textContent = message; $('toast').className = `toast show ${error ? 'error' : ''}`; toastTimer = setTimeout(() => $('toast').className = 'toast', 3600); }
+    async function api(path, payload) { const response = await fetch(path, { method: payload ? 'POST' : 'GET', headers: {'Content-Type':'application/json'}, body: payload ? JSON.stringify(payload) : undefined }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Không thể xử lý'); return result; }
+    function setBusy(value, label='Đang xử lý…') { busy = value; document.querySelectorAll('button').forEach(button => button.disabled = value || (button.id === 'nextButton' && (!state || state.phase === 'EMPTY' || state.phase === 'COMPLETE'))); if (value) { if ($('prepareButton').offsetParent) $('prepareButton').textContent = label; else $('nextButton').textContent = label; } else { $('prepareButton').textContent = 'Chuẩn bị data'; } }
+    function renderFlow(payload) { const progress = payload.phase === 'EMPTY' ? 0 : payload.completed_steps ? 6 : 2; $('flow').innerHTML = flowSteps.map((item,index) => `<div class="flow-step ${index < progress ? 'done' : index === progress ? 'active' : ''}"><div class="flow-box"><b>${item[0]}</b><small>${item[1]}</small></div></div>`).join(''); }
+    function renderTimeline(payload) { $('progressText').textContent = `${payload.completed_steps}/${payload.total_steps}`; $('timeline').innerHTML = payload.timeline.map((step,index) => `<div class="timeline-item ${step.status}"><span class="step-dot">${step.status === 'completed' ? '✓' : index + 1}</span><div class="step-copy"><b>${esc(step.snapshot_id)} · ${esc(scenarioLabels[step.scenario] || step.scenario)}</b><span>${esc(step.description)}</span></div></div>`).join(''); const next = payload.next_step; $('nextButton').disabled = busy || !next; $('nextButton').textContent = next ? `Chạy ${next.snapshot_id} · ${scenarioLabels[next.scenario] || next.scenario}` : '✓ Đã chạy đủ 7 snapshot'; $('nextHint').textContent = next ? next.description : 'Validation hoàn tất. Output vẫn được giữ trong workspace.'; }
+    function renderPrepared(payload) { const prepared = payload.prepared; $('setupCard').classList.toggle('hidden', !!prepared); $('preparedCard').classList.toggle('show', !!prepared); if (!prepared) return; $('preparedTitle').textContent = `${prepared.branch} · dữ liệu đã sẵn sàng`; $('workspacePath').textContent = payload.workspace; $('sourceStats').innerHTML = [[prepared.source_branch_rows,'row nguồn'],[prepared.source_unique_checklists,'checklist'],[prepared.source_technicians,'KTV proxy'],[(prepared.geocode_rate*100).toFixed(2)+'%','geocode']].map(item => `<span class="mini-pill">${typeof item[0] === 'string' ? item[0] : fmt(item[0])} ${item[1]}</span>`).join(''); }
+    function deltaText(value) { const number = Number(value || 0); return `${number > 0 ? '+' : ''}${fmt(number)} so với trước`; }
+    function renderCurrent(payload) { const current = payload.current; $('emptyState').classList.toggle('hidden', !!current); $('currentContent').classList.toggle('hidden', !current); if (!current) return; const summary = current.summary; $('snapshotTitle').textContent = `${summary.snapshot_id} · ${scenarioLabels[summary.scenario] || summary.scenario}`; $('snapshotStory').textContent = summary.description; const metricDefs = [['active_jobs','Job active'],['assignments','Assignment'],['unassigned','Backlog'],['conflicts','Conflict'],['elapsed_seconds','Thời gian (giây)']]; $('metrics').innerHTML = metricDefs.map(([key,label]) => { const delta = key === 'elapsed_seconds' ? '' : deltaText(current.deltas[key]); const color = Number(current.deltas[key]) > 0 ? '#c05a2a' : Number(current.deltas[key]) < 0 ? '#159447' : '#727b8d'; return `<div class="metric"><span>${label}</span><b>${fmt(summary[key])}</b><small style="--delta-color:${color}">${delta || 'pipeline runtime'}</small></div>`; }).join(''); $('stages').innerHTML = current.pipeline_stages.map(stage => `<span class="stage">${stageLabels[stage] || stage}</span>`).join(''); $('inputPath').textContent = current.files.snapshot_csv; $('outputPath').textContent = current.files.run_output; renderAudit(current); renderAssignments(current); renderRoutes(current.routes); const labels = {snapshot_csv:'Snapshot CSV',roster_csv:'Roster CSV',run_metadata:'Run metadata',latest_checkpoint:'Latest checkpoint',run_output:'Thư mục output'}; $('fileList').innerHTML = Object.entries(current.files).map(([key,value]) => `<div class="file-row"><b>${labels[key] || key}</b><code>${esc(value)}</code></div>`).join(''); }
+    function renderAudit(current) { const codeEntries = [...Object.entries(current.change_types),...Object.entries(current.conflict_codes),...Object.entries(current.unassigned_reasons).slice(0,3)]; $('auditChips').innerHTML = codeEntries.map(([key,value]) => `<span class="chip">${esc(key)} · ${fmt(value)}</span>`).join('') || '<span class="mini-pill">Không có thay đổi/conflict</span>'; $('auditMeta').textContent = `${fmt(current.summary.changes)} diff · ${fmt(current.summary.conflicts)} conflict`; $('changes').innerHTML = current.changes.slice(0,8).map(item => `<div class="audit-row"><b>${esc(item.change_type)} · ${esc(item.checklist_id)}</b><span>${esc(item.previous_status || '∅')} → ${esc(item.current_status || '∅')}</span></div>`).join('') || '<div class="audit-row"><span>Không có diff.</span></div>'; $('conflicts').innerHTML = current.conflicts.slice(0,8).map(item => `<div class="audit-row"><b>${esc(item.code)}</b><span>${esc(item.checklist_id || item.technician_id || '')} · ${esc(item.resolution)}</span></div>`).join('') || '<div class="audit-row"><span>Không có conflict.</span></div>'; }
+    function renderAssignments(current) { $('assignmentMeta').textContent = `Hiển thị ${Math.min(50,current.assignments.length)} / ${fmt(current.summary.assignments)}`; $('assignmentBody').innerHTML = current.assignments.map(item => `<tr><td><b>${esc(item.checklist_id)}</b></td><td>${esc(item.technician_id)}</td><td><span class="source-tag">${esc(item.source)}</span></td><td>${item.distance_km == null ? '—' : item.distance_km + ' km'}</td><td>${fmt(item.cost)}</td></tr>`).join('') || '<tr><td colspan="5">Không có assignment.</td></tr>'; }
+    function renderRoutes(routes) { $('routeSelect').innerHTML = routes.map((route,index) => `<option value="${index}">${esc(route.technician_id)} · ${route.stops.length} stop</option>`).join('') || '<option>Không có tuyến</option>'; $('routeSelect').onchange = () => drawRoute(routes[Number($('routeSelect').value)]); drawRoute(routes[0]); }
+    function drawRoute(route) { const svg = $('routeMap'); if (!route) { svg.innerHTML = '<text x="350" y="150" text-anchor="middle" fill="#727b8d">Không có tuyến</text>'; $('routeNote').textContent = ''; return; } const points = [route.start,...route.stops].filter(point => point && point.latitude != null); const lats=points.map(p=>p.latitude), lngs=points.map(p=>p.longitude); const minLat=Math.min(...lats)-.002,maxLat=Math.max(...lats)+.002,minLng=Math.min(...lngs)-.002,maxLng=Math.max(...lngs)+.002; const xy=p=>[45+(p.longitude-minLng)/(maxLng-minLng)*610,255-(p.latitude-minLat)/(maxLat-minLat)*210]; let out='<rect width="700" height="300" rx="11" fill="#eef2f0"/><path d="M30 230 C170 170 260 270 410 190 S590 80 730 120" fill="none" stroke="#d4eaf4" stroke-width="30"/><path d="M25 75 C180 120 310 45 670 95 M80 270 C170 150 350 150 620 30" fill="none" stroke="white" stroke-width="9"/>'; const line=points.map(p=>xy(p).join(',')).join(' '); out += `<polyline points="${line}" fill="none" stroke="white" stroke-width="11" stroke-linecap="round"/><polyline points="${line}" fill="none" stroke="#175cff" stroke-width="5" stroke-linecap="round"/>`; if(route.start){const [x,y]=xy(route.start);out+=`<rect x="${x-8}" y="${y-8}" width="16" height="16" rx="5" fill="#175cff" stroke="white" stroke-width="3"/><text x="${x+13}" y="${y+4}" font-size="9" font-weight="800" fill="#175cff">${esc(route.technician_id)}</text>`;} route.stops.forEach(stop=>{if(stop.latitude==null)return;const[x,y]=xy(stop);out+=`<circle cx="${x}" cy="${y}" r="13" fill="#159447" stroke="white" stroke-width="3"/><text x="${x}" y="${y+4}" text-anchor="middle" font-size="9" font-weight="900" fill="white">${stop.sequence}</text><text x="${x+17}" y="${y+4}" font-size="8" fill="#475266">${esc(stop.checklist_id)}</text>`;}); svg.innerHTML=out; $('routeNote').textContent=`${route.technician_id} · ${route.distance_km} km · ${route.travel_minutes} phút · khoảng cách Haversine`; }
+    function render(payload) { state = payload; const phaseLabels={EMPTY:'Chưa chuẩn bị',PREPARED:'Data đã sẵn sàng',RUNNING:`Đã chạy ${payload.completed_steps}/7`,COMPLETE:'✓ Hoàn tất 7/7'}; $('phaseBadge').textContent=phaseLabels[payload.phase]; renderPrepared(payload); renderFlow(payload); renderTimeline(payload); renderCurrent(payload); }
+    async function perform(path,payload,label) { try { setBusy(true,label); const result=await api(path,payload); render(result); const message=path.includes('prepare')?'Đã chuẩn bị dữ liệu thật':path.includes('reset')?'Đã tạo session sạch':result.current.summary.snapshot_id+' đã commit'; showToast(message); } catch(error) { showToast(error.message,true); } finally { setBusy(false); if(state) render(state); } }
+    $('prepareButton').onclick=()=>perform('/api/prepare',{branch:$('branch').value,jobs:Number($('jobs').value),add_jobs:Number($('addJobs').value),mode:$('mode').value,transition_count:Number($('transitionCount').value)},'Đang lọc branch + geocode…');
+    $('nextButton').onclick=()=>state.next_step&&perform('/api/next',{},`Đang chạy ${state.next_step.snapshot_id}…`);
+    $('resetButton').onclick=()=>perform('/api/reset',{},'Đang tạo session mới…');
+    api('/api/state').then(render).catch(error=>showToast(error.message,true));
+  </script>
+</body>
+</html>

@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI gợi ý sắp xếp tối ưu</title>
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://a.tile.openstreetmap.fr">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <style>
+    :root {
+      --blue: #1557f0;
+      --blue-dark: #0c3fc4;
+      --blue-soft: #edf3ff;
+      --ink: #172033;
+      --muted: #68738a;
+      --line: #e4e9f1;
+      --page: #f5f7fb;
+      --card: #fff;
+      --green: #159447;
+      --orange: #f06a24;
+      --purple: #713bc4;
+      --red: #d9413a;
+      --shadow: 0 12px 36px rgba(35, 52, 91, .08);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--page); font: 14px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: wait; opacity: .55; }
+    .shell { width: min(1280px, calc(100% - 32px)); margin: 0 auto; }
+    .topbar { position: sticky; top: 0; z-index: 1000; border-bottom: 1px solid rgba(228,233,241,.9); background: rgba(255,255,255,.92); backdrop-filter: blur(16px); }
+    .topbar-inner { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+    .identity { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .avatar { position: relative; width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 auto; border: 3px solid white; border-radius: 50%; color: white; background: linear-gradient(145deg, #133e9c, #16a0c6); box-shadow: 0 3px 12px rgba(20,73,154,.25); font-weight: 900; }
+    .avatar::after { content: ""; position: absolute; right: -1px; bottom: 1px; width: 10px; height: 10px; border: 2px solid white; border-radius: 50%; background: #18a957; }
+    .identity-copy { min-width: 0; }
+    .identity-copy strong, .identity-copy span { display: block; }
+    .identity-copy strong { font-size: 14px; white-space: nowrap; }
+    .identity-copy span { color: var(--muted); font-size: 11px; }
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .live-pill { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; color: #18763c; background: #eaf7ef; font-size: 11px; font-weight: 800; }
+    .live-pill i { width: 7px; height: 7px; border-radius: 50%; background: #18a957; }
+    .icon-button { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 10px; color: #58647b; background: white; font-weight: 900; }
+    main { padding: 24px 0 38px; }
+    .page-head { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+    .eyebrow { display: flex; align-items: center; gap: 7px; margin: 0 0 4px; color: var(--blue); font-size: 11px; font-weight: 850; text-transform: uppercase; letter-spacing: .45px; }
+    .eyebrow::before { content: "AI"; padding: 2px 5px; border-radius: 5px; color: white; background: var(--blue); font-size: 9px; }
+    h1 { margin: 0; font-size: clamp(24px, 3vw, 34px); line-height: 1.15; letter-spacing: -.7px; }
+    .subtitle { margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+    .snapshot-progress { display: flex; align-items: center; gap: 8px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: var(--shadow); }
+    .snapshot-step { min-width: 92px; padding: 7px 10px; border-radius: 8px; color: #8a93a5; font-size: 10px; font-weight: 800; text-align: center; }
+    .snapshot-step.active { color: var(--blue); background: var(--blue-soft); }
+    .snapshot-step.done { color: var(--green); background: #eaf7ef; }
+    .card { min-width: 0; border: 1px solid var(--line); border-radius: 17px; background: var(--card); box-shadow: var(--shadow); }
+    .task-panel { margin-top: 20px; padding: 16px; }
+    .section-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .section-head h2, .section-head h3 { margin: 0; }
+    .section-head h2 { font-size: 15px; }
+    .section-head h3 { font-size: 14px; }
+    .section-head span { color: var(--muted); font-size: 11px; }
+    .mode-wrap { display: flex; align-items: center; gap: 8px; }
+    .mode-wrap label { color: var(--muted); font-size: 11px; }
+    select { height: 36px; padding: 0 32px 0 10px; border: 1px solid #d6dce6; border-radius: 9px; color: var(--ink); background: white; outline: none; }
+    select:focus { border-color: #8cacfa; box-shadow: 0 0 0 3px rgba(21,87,240,.08); }
+    .task-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 13px; }
+    .task-option { position: relative; display: grid; grid-template-columns: 46px minmax(0,1fr); gap: 11px; align-items: center; min-height: 72px; padding: 11px; border: 1px solid var(--line); border-radius: 13px; color: var(--ink); background: #fafbfe; text-align: left; transition: .18s ease; }
+    .task-option:hover { transform: translateY(-2px); border-color: #a9bff3; box-shadow: 0 9px 22px rgba(31,70,155,.09); }
+    .task-option.selected { border-color: var(--blue); background: var(--blue-soft); box-shadow: 0 0 0 3px rgba(21,87,240,.07); }
+    .task-icon { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 14px; color: var(--blue); background: white; font-size: 21px; box-shadow: 0 5px 14px rgba(35,63,120,.08); }
+    .task-copy strong, .task-copy span { display: block; }
+    .task-copy strong { font-size: 13px; }
+    .task-copy span { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .task-count { position: absolute; top: 8px; right: 8px; min-width: 19px; height: 19px; display: grid; place-items: center; padding: 0 5px; border-radius: 99px; color: white; background: var(--red); font-size: 9px; font-weight: 900; }
+    .content-grid { display: grid; grid-template-columns: minmax(0,1fr) 330px; gap: 14px; margin-top: 14px; align-items: start; }
+    .map-card { overflow: hidden; }
+    .map-head { padding: 14px 16px; }
+    .map-meta { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 10px; }
+    .map-source { padding: 4px 7px; border-radius: 99px; color: var(--blue); background: var(--blue-soft); font-weight: 800; }
+    .map-wrap { position: relative; height: 520px; background: #e9eef3; }
+    #map { width: 100%; height: 100%; z-index: 1; }
+    .map-empty { position: absolute; inset: 0; z-index: 500; display: grid; place-items: center; padding: 24px; background: linear-gradient(145deg, rgba(239,244,250,.94), rgba(250,252,255,.9)); text-align: center; }
+    .map-empty.hidden { display: none; }
+    .empty-visual { width: 68px; height: 68px; display: grid; place-items: center; margin: 0 auto 12px; border-radius: 21px; color: var(--blue); background: white; box-shadow: 0 12px 32px rgba(40,72,143,.12); font-size: 30px; }
+    .map-empty h3 { margin: 0; font-size: 16px; }
+    .map-empty p { max-width: 360px; margin: 5px auto 0; color: var(--muted); font-size: 12px; }
+    .legend { display: flex; align-items: center; flex-wrap: wrap; gap: 13px; min-height: 48px; padding: 10px 16px; border-top: 1px solid var(--line); }
+    .legend-item { display: flex; align-items: center; gap: 6px; color: #4e596e; font-size: 10px; font-weight: 750; }
+    .legend-item i { width: 10px; height: 10px; border-radius: 50%; background: var(--cluster); }
+    .side-stack { display: grid; gap: 14px; }
+    .summary-card { padding: 16px; }
+    .route-state { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 99px; color: var(--green); background: #eaf7ef; font-size: 10px; font-weight: 850; }
+    .summary-title { margin: 14px 0 2px; font-size: 18px; }
+    .summary-subtitle { margin: 0; color: var(--muted); font-size: 11px; }
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin-top: 15px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--line); }
+    .metric { min-height: 79px; padding: 11px; background: white; }
+    .metric span, .metric b, .metric small { display: block; }
+    .metric span { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .3px; }
+    .metric b { margin-top: 3px; color: var(--blue); font-size: 18px; }
+    .metric small { color: var(--muted); font-size: 9px; }
+    .primary { width: 100%; min-height: 42px; border: 0; border-radius: 10px; color: white; background: linear-gradient(135deg, var(--blue), var(--blue-dark)); font-weight: 850; box-shadow: 0 7px 16px rgba(21,87,240,.2); }
+    .start-button { margin-top: 13px; }
+    .snapshot-card { position: relative; overflow: hidden; padding: 16px; }
+    .snapshot-card::before { content: ""; position: absolute; width: 120px; height: 120px; right: -55px; top: -55px; border-radius: 50%; background: var(--blue-soft); }
+    .snapshot-kicker { position: relative; margin: 0; color: var(--blue); font-size: 10px; font-weight: 850; text-transform: uppercase; }
+    .snapshot-card h3 { position: relative; margin: 4px 0 3px; font-size: 15px; }
+    .snapshot-card > p { position: relative; margin: 0; color: var(--muted); font-size: 11px; }
+    .snapshot-form { position: relative; display: grid; gap: 9px; margin-top: 13px; }
+    .field label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; }
+    .field select { width: 100%; }
+    .add-button { margin-top: 2px; }
+    .snapshot-done { position: relative; display: none; margin-top: 13px; padding: 12px; border-radius: 11px; color: #176e38; background: #eaf7ef; font-size: 11px; }
+    .snapshot-done.show { display: block; }
+    .snapshot-done b { display: block; font-size: 12px; }
+    .route-card { margin-top: 14px; padding: 16px; }
+    .route-list { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; margin-top: 13px; }
+    .stop { position: relative; display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 9px; min-height: 86px; padding: 11px; border: 1px solid var(--line); border-radius: 12px; background: #fafbfc; }
+    .stop.new { border-color: #86a9ff; background: #f3f7ff; box-shadow: 0 0 0 3px rgba(21,87,240,.06); }
+    .stop-number { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--cluster); font-size: 11px; font-weight: 900; }
+    .stop-copy { min-width: 0; }
+    .stop-copy strong, .stop-copy span { display: block; }
+    .stop-copy strong { font-size: 11px; overflow-wrap: anywhere; }
+    .stop-copy span { margin-top: 2px; color: var(--muted); font-size: 9px; }
+    .new-label { position: absolute; top: 7px; right: 7px; padding: 2px 5px; border-radius: 99px; color: var(--blue); background: var(--blue-soft); font-size: 8px; font-weight: 900; }
+    .complete-button { grid-column: 1 / -1; min-height: 30px; border: 1px solid #b8ddc5; border-radius: 8px; color: #16783b; background: #edf8f1; font-size: 10px; font-weight: 850; transition: .16s ease; }
+    .complete-button:hover { border-color: var(--green); color: white; background: var(--green); }
+    .route-empty { grid-column: 1 / -1; padding: 28px; border: 1px dashed #b8ddc5; border-radius: 12px; color: #16783b; background: #f1faf4; text-align: center; }
+    .route-empty b, .route-empty span { display: block; }
+    .route-empty span { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .toast { position: fixed; z-index: 2000; right: 20px; bottom: 20px; max-width: min(380px, calc(100% - 40px)); padding: 11px 14px; border-radius: 11px; color: white; background: #25324a; box-shadow: 0 14px 34px rgba(20,29,48,.22); font-size: 12px; opacity: 0; transform: translateY(12px); pointer-events: none; transition: .2s; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.error { background: #c9473d; }
+    .leaflet-control-attribution { font-size: 9px; }
+    .plain-map-icon { background: transparent; border: 0; }
+    .job-pin { position: relative; width: 30px; height: 30px; display: grid; place-items: center; border: 3px solid white; border-radius: 50% 50% 50% 5px; color: white; background: var(--pin); box-shadow: 0 4px 10px rgba(20,31,50,.3); transform: rotate(-45deg); font-size: 11px; font-weight: 900; }
+    .job-pin span { transform: rotate(45deg); }
+    .job-pin.new::after { content: "MỚI"; position: absolute; left: 23px; top: -8px; padding: 2px 5px; border: 2px solid white; border-radius: 99px; color: white; background: var(--blue); transform: rotate(45deg); font-size: 7px; }
+    .job-pin.new { animation: pulse 1.7s infinite; }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 9px rgba(21,87,240,.16), 0 4px 10px rgba(20,31,50,.3); } }
+    .tech-pin { width: 38px; height: 38px; display: grid; place-items: center; border: 4px solid white; border-radius: 12px; color: white; background: var(--blue); box-shadow: 0 5px 15px rgba(21,87,240,.3); font-size: 10px; font-weight: 900; }
+    .leaflet-popup-content-wrapper { border-radius: 11px; box-shadow: 0 8px 24px rgba(27,38,65,.18); }
+    .map-popup b { display: block; margin-bottom: 3px; }
+    .map-popup span { display: block; color: var(--muted); font-size: 10px; }
+    @media (max-width: 980px) { .task-grid { grid-template-columns: repeat(2, 1fr); } .content-grid { grid-template-columns: 1fr; } .side-stack { grid-template-columns: 1fr 1fr; } .route-list { grid-template-columns: repeat(2,1fr); } }
+    @media (max-width: 650px) { .shell { width: min(100% - 20px, 1280px); } .topbar-inner { min-height: 62px; } .live-pill { display: none; } main { padding-top: 17px; } .page-head { align-items: start; flex-direction: column; } .snapshot-progress { width: 100%; } .snapshot-step { flex: 1; min-width: 0; } .section-head { align-items: start; flex-direction: column; } .mode-wrap { width: 100%; justify-content: space-between; } .task-grid { grid-template-columns: 1fr 1fr; } .task-option { grid-template-columns: 38px minmax(0,1fr); min-height: 66px; padding: 9px; } .task-icon { width: 38px; height: 38px; font-size: 18px; } .map-wrap { height: 440px; } .side-stack { grid-template-columns: 1fr; } .route-list { grid-template-columns: 1fr; } }
+    @media (max-width: 430px) { .identity-copy strong { max-width: 178px; overflow: hidden; text-overflow: ellipsis; } .task-grid { grid-template-columns: 1fr; } .map-wrap { height: 400px; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <div class="identity">
+        <div class="avatar">AT</div>
+        <div class="identity-copy"><strong id="technicianId">PNC09.F.TUANNA41</strong><span id="branchName">Phương Nam - 09 · Ca 08:00–17:30</span></div>
+      </div>
+      <div class="top-actions"><span class="live-pill"><i></i> Đang trong ca</span><button id="resetButton" class="icon-button" title="Làm mới">↻</button></div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <div class="page-head">
+      <div><p class="eyebrow">Gợi ý cho ca hôm nay</p><h1>AI sắp xếp tuyến tối ưu</h1><p class="subtitle">Chọn tác vụ, xem tuyến và cập nhật checklist mới trong hai snapshot.</p></div>
+      <div class="snapshot-progress"><span id="stepOne" class="snapshot-step active">1 · Tuyến ban đầu</span><span id="stepTwo" class="snapshot-step">2 · Thêm checklist</span></div>
+    </div>
+
+    <section class="card task-panel">
+      <div class="section-head">
+        <div><h2>Chọn nhóm tác vụ</h2><span>Chạm một lựa chọn để tạo tuyến 5 job</span></div>
+        <div class="mode-wrap"><label for="modeSelect">Ưu tiên</label><select id="modeSelect"><option value="task_location">Đúng việc + ở gần</option><option value="location">Ở gần nhất</option><option value="task">Cùng loại việc</option></select></div>
+      </div>
+      <div id="taskGrid" class="task-grid"></div>
+    </section>
+
+    <div class="content-grid">
+      <section class="card map-card">
+        <div class="section-head map-head"><div><h2>Tuyến gợi ý</h2><span id="mapSubtitle">Chưa có tuyến</span></div><div class="map-meta"><span id="mapSource" class="map-source">OpenStreetMap</span><span id="mapTime"></span></div></div>
+        <div class="map-wrap"><div id="map"></div><div id="mapEmpty" class="map-empty"><div><div class="empty-visual">⌁</div><h3>Chọn một nhóm tác vụ</h3><p>Hệ thống sẽ lọc 5 checklist phù hợp cho KTV và vẽ tuyến ngay trên bản đồ.</p></div></div></div>
+        <div id="legend" class="legend"><span class="legend-item" style="--cluster:#aeb6c5"><i></i>Chưa có cụm</span></div>
+      </section>
+
+      <aside class="side-stack">
+        <section class="card summary-card">
+          <span id="routeState" class="route-state">○ Chờ chọn tác vụ</span>
+          <h2 id="summaryTitle" class="summary-title">Tuyến hôm nay</h2>
+          <p id="summarySubtitle" class="summary-subtitle">Thông số sẽ xuất hiện sau khi tối ưu.</p>
+          <div class="metrics">
+            <div class="metric"><span>Tổng công việc</span><b id="jobMetric">—</b><small>checklist</small></div>
+            <div class="metric"><span>Tổng thời gian</span><b id="timeMetric">—</b><small>di chuyển + xử lý</small></div>
+            <div class="metric"><span>Quãng đường</span><b id="distanceMetric">—</b><small id="distanceSource">ước tính</small></div>
+            <div class="metric"><span>Đúng hẹn dự kiến</span><b id="onTimeMetric">—</b><small>theo kế hoạch</small></div>
+          </div>
+          <button id="startButton" class="primary start-button" disabled>▶ Bắt đầu theo tuyến gợi ý</button>
+        </section>
+
+        <section class="card snapshot-card">
+          <p class="snapshot-kicker">Snapshot 2</p><h3>Thêm checklist mới</h3><p>Job mới sẽ xuất hiện trên map và tuyến được tối ưu lại.</p>
+          <div id="snapshotForm" class="snapshot-form">
+            <div class="field"><label for="newTaskGroup">Loại tác vụ</label><select id="newTaskGroup"><option value="maintenance">Bảo trì</option><option value="deployment">Triển khai</option><option value="recovery">Thu hồi</option></select></div>
+            <div class="field"><label for="newCluster">Khu vực</label><select id="newCluster"><option value="q7">Quận 7</option><option value="q4">Quận 4</option><option value="nhabe">Nhà Bè</option></select></div>
+            <button id="addSnapshotButton" class="primary add-button" disabled>+ Thêm checklist và tối ưu lại</button>
+          </div>
+          <div id="snapshotDone" class="snapshot-done"><b>✓ Đã cập nhật tuyến</b><span id="snapshotDoneText">Checklist mới đã được thêm.</span></div>
+        </section>
+      </aside>
+    </div>
+
+    <section class="card route-card">
+      <div class="section-head"><div><h3>Thứ tự điểm dừng</h3><span id="routeCaption">Chọn tác vụ để xem lịch trình</span></div><span id="routeMode"></span></div>
+      <div id="routeList" class="route-list"></div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    const $ = id => document.getElementById(id);
+    const iconByName = { wrench: '🛠', gear: '⚙', box: '▣', spark: '✦' };
+    let state = null;
+    let map = null;
+    let markerLayer = null;
+    let routeLayer = null;
+    let busy = false;
+    let routeToken = 0;
+    let toastTimer = null;
+
+    function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])); }
+    function formatNumber(value, digits=0) { return Number(value ?? 0).toLocaleString('vi-VN', {maximumFractionDigits: digits}); }
+    function formatMinutes(value) { const minutes=Math.round(Number(value||0)); const hours=Math.floor(minutes/60); const rest=minutes%60; return hours ? `${hours}h ${String(rest).padStart(2,'0')}` : `${rest} phút`; }
+    function showToast(message, isError=false) { clearTimeout(toastTimer); $('toast').textContent=message; $('toast').className=`toast show ${isError?'error':''}`; toastTimer=setTimeout(()=>$('toast').className='toast',3200); }
+    async function api(path, payload) { const response=await fetch(path,{method:payload?'POST':'GET',headers:{'Content-Type':'application/json'},body:payload?JSON.stringify(payload):undefined}); const result=await response.json(); if(!response.ok) throw new Error(result.error||'Không thể xử lý'); return result; }
+    function setBusy(value) { busy=value; document.querySelectorAll('button,select').forEach(control=>control.disabled=value); if(!value && state) { $('addSnapshotButton').disabled=!state.can_add_snapshot; $('startButton').disabled=!state.plan||state.plan.summary.jobs===0; } }
+
+    function initMap() {
+      if (typeof L === 'undefined') { $('mapSource').textContent='Không tải được bản đồ'; return; }
+      map=L.map('map',{zoomControl:true,scrollWheelZoom:true}).setView([10.735,106.715],13);
+      L.tileLayer('https://a.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors · HOT'}).addTo(map);
+      markerLayer=L.layerGroup().addTo(map);
+      routeLayer=L.layerGroup().addTo(map);
+    }
+
+    function renderTasks(payload) {
+      const selected=payload.plan?.selected_group;
+      $('taskGrid').innerHTML=payload.options.map(option=>`<button class="task-option ${selected===option.id?'selected':''}" data-group="${option.id}"><span class="task-icon">${iconByName[option.icon]||'•'}</span><span class="task-copy"><strong>${escapeHtml(option.label)}</strong><span>${escapeHtml(option.short)}</span></span><i class="task-count">5</i></button>`).join('');
+      $('taskGrid').querySelectorAll('.task-option').forEach(button=>button.onclick=()=>optimize(button.dataset.group));
+    }
+
+    function renderProgress(payload) {
+      const hasPlan=!!payload.plan, updated=payload.phase==='UPDATED';
+      $('stepOne').className=`snapshot-step ${updated?'done':hasPlan?'active':''}`;
+      $('stepTwo').className=`snapshot-step ${updated?'active':''}`;
+    }
+
+    function renderSummary(plan) {
+      const summary=plan.summary;
+      $('routeState').textContent=plan.last_completed_id?`✓ ${plan.last_completed_id} hoàn thành`:plan.added_job_ids.length?'✓ Tuyến đã cập nhật':'✓ Đã tối ưu tuyến';
+      $('summaryTitle').textContent=`${plan.selected_group_label} · ${plan.snapshot_id}`;
+      $('summarySubtitle').textContent=plan.technician.location_job_id?`KTV đang tại ${plan.technician.location_job_id} · ${plan.completed_job_ids.length} job đã xong`:`1 KTV · ${plan.clusters.length} cụm · ${plan.completed_job_ids.length} job đã xong`;
+      $('jobMetric').textContent=summary.jobs;
+      $('timeMetric').textContent=formatMinutes(summary.total_minutes);
+      $('distanceMetric').textContent=`${formatNumber(summary.distance_km,1)} km`;
+      $('distanceSource').textContent='Haversine V0';
+      $('onTimeMetric').textContent=`${summary.on_time_rate}%`;
+      $('startButton').disabled=summary.jobs===0;
+      $('mapSubtitle').textContent=`${summary.jobs} điểm · ${plan.clusters.length} cụm`;
+      $('mapTime').textContent=`${plan.snapshot_id}`;
+      $('routeMode').textContent=plan.mode_label;
+      $('routeCaption').textContent=`${plan.technician.technician_id} · ${summary.jobs} điểm theo thứ tự`;
+    }
+
+    function renderRouteList(plan) {
+      if(!plan.route.stops.length) { $('routeList').innerHTML='<div class="route-empty"><b>✓ Đã hoàn thành toàn bộ công việc</b><span>Không còn job active trên tuyến.</span></div>'; return; }
+      $('routeList').innerHTML=plan.route.stops.map(stop=>`<article class="stop ${stop.is_new?'new':''}" style="--cluster:${stop.cluster_color}"><span class="stop-number">${stop.sequence}</span><div class="stop-copy"><strong>${escapeHtml(stop.checklist_id)}</strong><span>${escapeHtml(stop.task_type)}</span><span>${escapeHtml(stop.address)}</span><span>ETA ${escapeHtml(stop.estimated_arrival||'—')} · ${stop.service_minutes} phút</span></div>${stop.is_new?'<em class="new-label">MỚI</em>':''}<button class="complete-button" data-job="${escapeHtml(stop.checklist_id)}">✓ Hoàn thành</button></article>`).join('');
+      $('routeList').querySelectorAll('.complete-button').forEach(button=>button.onclick=()=>completeJob(button.dataset.job,button));
+    }
+
+    function renderLegend(plan) {
+      $('legend').innerHTML=plan.clusters.map(cluster=>`<span class="legend-item" style="--cluster:${cluster.color}"><i></i>${escapeHtml(cluster.label)} · ${cluster.jobs} job</span>`).join('');
+    }
+
+    function jobIcon(stop) { return L.divIcon({className:'plain-map-icon',html:`<div class="job-pin ${stop.is_new?'new':''}" style="--pin:${stop.cluster_color}"><span>${stop.sequence}</span></div>`,iconSize:[34,38],iconAnchor:[17,34],popupAnchor:[0,-30]}); }
+    function technicianIcon() { return L.divIcon({className:'plain-map-icon',html:'<div class="tech-pin">KTV</div>',iconSize:[38,38],iconAnchor:[19,19],popupAnchor:[0,-18]}); }
+    function fallbackLeg(start, stop) { return [[start.latitude,start.longitude],[stop.latitude,stop.longitude]]; }
+    function stepCoordinates(leg, start, stop) {
+      const result=[];
+      (leg?.steps||[]).forEach(step=>(step.geometry?.coordinates||[]).forEach(([lng,lat])=>{ const last=result[result.length-1]; if(!last||last[0]!==lat||last[1]!==lng) result.push([lat,lng]); }));
+      return result.length>1?result:fallbackLeg(start,stop);
+    }
+
+    async function drawMap(plan) {
+      if(!map) return;
+      const token=++routeToken;
+      markerLayer.clearLayers(); routeLayer.clearLayers();
+      const points=[plan.route.start,...plan.route.stops];
+      const technicianLocationLabel=plan.technician.location_job_id?`Vị trí sau khi hoàn thành ${plan.technician.location_job_id}`:'Điểm bắt đầu ca';
+      L.marker([plan.route.start.latitude,plan.route.start.longitude],{icon:technicianIcon(),zIndexOffset:800}).bindPopup(`<div class="map-popup"><b>${escapeHtml(plan.technician.technician_id)}</b><span>${escapeHtml(technicianLocationLabel)}</span><span>${escapeHtml(plan.technician.branch)}</span></div>`).addTo(markerLayer);
+      plan.route.stops.forEach(stop=>L.marker([stop.latitude,stop.longitude],{icon:jobIcon(stop),zIndexOffset:stop.is_new?500:0}).bindPopup(`<div class="map-popup"><b>${stop.sequence}. ${escapeHtml(stop.checklist_id)}</b><span>${escapeHtml(stop.task_type)}</span><span>${escapeHtml(stop.address)}</span><span>ETA ${escapeHtml(stop.estimated_arrival||'—')}</span></div>`).addTo(markerLayer));
+      if(!plan.route.stops.length) { map.setView([plan.route.start.latitude,plan.route.start.longitude],15,{animate:true}); $('mapSource').textContent='Không còn job active'; return; }
+      let legs=null, roadRoute=null;
+      const validPoints=points.filter(p=>Number.isFinite(Number(p.longitude))&&Number.isFinite(Number(p.latitude))&&(Number(p.longitude)!==0||Number(p.latitude)!==0));
+      if(validPoints.length>=2) {
+        const coordinates=validPoints.map(point=>`${point.longitude},${point.latitude}`).join(';');
+        try {
+          const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),7000);
+          const response=await fetch(`https://router.project-osrm.org/route/v1/driving/${coordinates}?overview=false&steps=true&geometries=geojson`,{signal:controller.signal});
+          clearTimeout(timer); const data=await response.json();
+          if(data.code==='Ok'&&data.routes?.[0]) { roadRoute=data.routes[0]; legs=roadRoute.legs; }
+        } catch(error) { legs=null; }
+      }
+      if(token!==routeToken) return;
+      plan.route.stops.forEach((stop,index)=>{
+        const start=index===0?plan.route.start:plan.route.stops[index-1];
+        const line=stepCoordinates(legs?.[index],start,stop);
+        L.polyline(line,{color:'#fff',weight:10,opacity:.94,lineCap:'round',lineJoin:'round'}).addTo(routeLayer);
+        L.polyline(line,{color:stop.cluster_color,weight:5,opacity:.95,lineCap:'round',lineJoin:'round'}).addTo(routeLayer);
+      });
+      const bounds=L.latLngBounds(points.map(point=>[point.latitude,point.longitude])); map.fitBounds(bounds.pad(.16),{animate:true});
+      if(roadRoute) {
+        const roadDistance=roadRoute.distance/1000, roadMinutes=roadRoute.duration/60;
+        $('distanceMetric').textContent=`${formatNumber(roadDistance,1)} km`;
+        $('distanceSource').textContent='theo đường bộ';
+        $('timeMetric').textContent=formatMinutes(roadMinutes+plan.summary.service_minutes);
+        $('mapSource').textContent='Đường bộ · OSRM';
+      } else {
+        $('mapSource').textContent='Tuyến dự phòng';
+        $('distanceSource').textContent='Haversine V0';
+      }
+    }
+
+    function renderSnapshot(payload) {
+      const plan=payload.plan;
+      $('snapshotForm').style.display=payload.can_add_snapshot?'grid':'none';
+      $('snapshotDone').classList.toggle('show',payload.phase==='UPDATED');
+      $('addSnapshotButton').disabled=!payload.can_add_snapshot;
+      if(payload.phase==='UPDATED') $('snapshotDoneText').textContent=`${plan.added_job_ids.join(', ')} đã thành node mới; tuyến hiện có ${plan.summary.jobs} điểm.`;
+    }
+
+    function render(payload) {
+      state=payload; renderTasks(payload); renderProgress(payload);
+      $('technicianId').textContent=payload.technician.technician_id;
+      $('branchName').textContent=`${payload.technician.branch} · Ca ${payload.technician.shift}`;
+      const plan=payload.plan;
+      $('mapEmpty').classList.toggle('hidden',!!plan);
+      if(!plan) {
+        $('routeList').innerHTML=''; $('routeCaption').textContent='Chọn tác vụ để xem lịch trình'; $('routeMode').textContent='';
+        $('jobMetric').textContent=$('timeMetric').textContent=$('distanceMetric').textContent=$('onTimeMetric').textContent='—';
+        $('routeState').textContent='○ Chờ chọn tác vụ'; $('summaryTitle').textContent='Tuyến hôm nay'; $('summarySubtitle').textContent='Thông số sẽ xuất hiện sau khi tối ưu.';
+        $('startButton').disabled=true; $('snapshotForm').style.display='grid'; $('snapshotDone').classList.remove('show'); $('addSnapshotButton').disabled=true;
+        if(markerLayer){markerLayer.clearLayers();routeLayer.clearLayers();map.setView([10.735,106.715],13);} return;
+      }
+      renderSummary(plan); renderRouteList(plan); renderLegend(plan); renderSnapshot(payload); drawMap(plan);
+    }
+
+    async function optimize(group) {
+      try { setBusy(true); showToast('Đang gom cụm và tối ưu tuyến…'); const result=await api('/api/optimize',{task_group:group,mode:$('modeSelect').value}); render(result); showToast(`Đã tạo tuyến ${result.plan.summary.jobs} job cho ${result.plan.selected_group_label}`); }
+      catch(error){showToast(error.message,true);} finally{setBusy(false);}
+    }
+    async function addSnapshot() {
+      try { setBusy(true); showToast('Đang thêm checklist và tối ưu lại…'); const result=await api('/api/snapshot',{task_group:$('newTaskGroup').value,cluster_id:$('newCluster').value}); render(result); showToast(`${result.plan.added_job_ids[0]} đã được thêm vào tuyến`); }
+      catch(error){showToast(error.message,true);} finally{setBusy(false);}
+    }
+    async function completeJob(checklistId, button) {
+      try { setBusy(true); button.textContent='Đang hoàn thành…'; const result=await api('/api/complete',{checklist_id:checklistId}); render(result); showToast(`${checklistId} đã hoàn thành và được gỡ khỏi tuyến`); }
+      catch(error){showToast(error.message,true);} finally{setBusy(false);}
+    }
+    async function reset() {
+      try { setBusy(true); const result=await api('/api/reset',{}); render(result); showToast('Đã tạo ca demo mới'); }
+      catch(error){showToast(error.message,true);} finally{setBusy(false);}
+    }
+
+    $('addSnapshotButton').onclick=addSnapshot;
+    $('resetButton').onclick=reset;
+    $('startButton').onclick=()=>showToast('Tuyến đã sẵn sàng để bắt đầu');
+    initMap();
+    api('/api/state').then(render).catch(error=>showToast(error.message,true));
+  </script>
+</body>
+</html>
