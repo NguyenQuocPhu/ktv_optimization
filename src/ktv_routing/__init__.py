@@ -1,0 +1,102 @@
+"""KTV routing: xếp thứ tự làm việc cho job đã gán sẵn của từng KTV.
+
+Đây là phần deploy. Không phụ thuộc pandas, database hay file dữ liệu công ty;
+km đường bộ lấy qua HTTP tới OSRM bằng thư viện chuẩn. Rule nghiệp vụ nằm ở
+``rules.py``.
+"""
+
+from .contract import (
+    ContractError,
+    GeoPoint,
+    Issue,
+    JobFilter,
+    JobInput,
+    JobState,
+    LocationFix,
+    PlannedStop,
+    PreviousRoute,
+    RouteRequest,
+    RouteResponse,
+    RouteSummary,
+    SequenceSource,
+    StartSource,
+    TechnicianInput,
+    TechnicianRoute,
+    WorkloadProvider,
+    WorkloadQuery,
+    query_from_dict,
+    request_from_dict,
+    to_json_dict,
+)
+from .planner import (
+    TIME_MODEL_FORMAT,
+    RoutingConfig,
+    TransitionTable,
+    load_time_model,
+    plan_routes,
+    time_model_config,
+)
+from .rules import (
+    HARD_RULES,
+    RULES_FORMAT,
+    SOFT_RULES,
+    BusinessRules,
+    load_rules,
+    rules_from_dict,
+    rules_to_dict,
+)
+from .service import RoutingService
+from .travel import (
+    PUBLIC_OSRM_URL,
+    HaversineTravel,
+    OsrmTravel,
+    TravelMatrix,
+    TravelModel,
+    distance_km,
+    travel_model,
+)
+
+__all__ = [
+    "HARD_RULES",
+    "PUBLIC_OSRM_URL",
+    "RULES_FORMAT",
+    "SOFT_RULES",
+    "TIME_MODEL_FORMAT",
+    "BusinessRules",
+    "ContractError",
+    "GeoPoint",
+    "HaversineTravel",
+    "Issue",
+    "JobFilter",
+    "JobInput",
+    "JobState",
+    "LocationFix",
+    "OsrmTravel",
+    "PlannedStop",
+    "PreviousRoute",
+    "RouteRequest",
+    "RouteResponse",
+    "RouteSummary",
+    "RoutingConfig",
+    "RoutingService",
+    "SequenceSource",
+    "StartSource",
+    "TechnicianInput",
+    "TechnicianRoute",
+    "TransitionTable",
+    "TravelMatrix",
+    "TravelModel",
+    "WorkloadProvider",
+    "WorkloadQuery",
+    "distance_km",
+    "load_rules",
+    "load_time_model",
+    "plan_routes",
+    "query_from_dict",
+    "request_from_dict",
+    "rules_from_dict",
+    "rules_to_dict",
+    "time_model_config",
+    "to_json_dict",
+    "travel_model",
+]

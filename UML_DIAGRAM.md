@@ -1,397 +1,721 @@
-# UML Diagram - KTV Optimization System
+# UML — KTV Routing
 
-## Architecture Overview
+Sơ đồ theo code hiện tại. Repo chia làm 3 phần:
+- `src/ktv_routing`: phần deploy;
+- `simulator/ktv_simulator`: tạm đóng vai team data, không deploy;
+- `research`: phân tích offline.
 
-Sơ đồ UML dưới đây thể hiện kiến trúc OOP của hệ thống tối ưu hóa KTV (Kỹ Thuật Viên):
+| Ký hiệu | Nghĩa |
+|---|---|
+| `<<frozen>>` | `@dataclass(frozen=True, slots=True)`: tạo xong không sửa được |
+| `<<mutable>>` | `@dataclass` thường |
+| `<<enum>>` | `str, Enum`: ra JSON là chuỗi |
+| `<<interface>>` | `Protocol`: phía team khác hiện thực |
+| `<<module>>` | file chỉ gồm hàm/hằng, vẽ thành một khối |
+
+## 1. Luồng giữa các team
+
+```mermaid
+flowchart LR
+    UI["Frontend<br/>chọn điều kiện lọc"]
+    DATA["Team data / hệ thống checklist<br/>lọc, lấy job đã gán,<br/>vị trí KTV, ca làm"]
+    SIM["simulator<br/>EventWorkloadProvider<br/>(đọc luồng sự kiện)"]
+    subgraph ROUTING["Team routing: src/ktv_routing"]
+        SVC["RoutingService"]
+        PLAN["plan_routes"]
+    end
+    UI -- "WorkloadQuery<br/>planned_at + filter" --> SVC
+    SVC -- "WorkloadQuery" --> DATA
+    DATA -- "RouteRequest" --> SVC
+    SVC --> PLAN
+    PLAN -- "RouteResponse" --> UI
+    SIM -. "tạm thay, cùng hợp đồng" .-> DATA
+```
+
+## 2. Module và chiều import
+
+Mũi tên nghĩa là "import". Không có mũi tên nào đi từ phần deploy sang simulator hay research.
+
+```mermaid
+flowchart TB
+    subgraph DEPLOY["src/ktv_routing — deploy, chỉ thư viện chuẩn"]
+        contract["contract.py<br/>dataclass + JSON"]
+        planner["planner.py<br/>xếp tuyến"]
+        rules["rules.py<br/>rule nghiệp vụ, tầng, trọng số"]
+        travel["travel.py<br/>km/phút: OSRM hoặc chim bay"]
+        service["service.py<br/>query → data → planner"]
+        cli["__main__.py<br/>request.json → response.json"]
+    end
+    subgraph SIMULATOR["simulator/ktv_simulator — không deploy"]
+        events["events.py<br/>export QOS → luồng sự kiện (pandas)"]
+        provider["provider.py<br/>luồng sự kiện → RouteRequest"]
+        geocoding["geocoding.py<br/>địa chỉ → tâm phường/xã"]
+        simcli["__main__.py<br/>--at, --replay, --serve"]
+        convert["convert_xlsx.py<br/>xlsx → CSV"]
+        fake["fake_boundary.py<br/>TẠM: boundary giả từ check-in"]
+        web["web.py + web.html<br/>demo frontend + tua realtime"]
+    end
+    subgraph RESEARCH["research — offline"]
+        timemodel["time_model.py<br/>học thời gian → JSON"]
+        backtest["backtest_routing.py<br/>planner so với KTV thật"]
+        qos["qos_data.py"]
+        features["features.py"]
+        baselines["baselines.py"]
+        build["build_dataset.py"]
+        evaluate["evaluate_baselines.py"]
+    end
+    OSRM[("OSRM /table<br/>public hoặc tự host")]
+    planner --> contract
+    planner --> rules
+    planner --> travel
+    cli --> rules
+    travel --> contract
+    travel -. "HTTP" .-> OSRM
+    service --> contract
+    service --> planner
+    service --> travel
+    cli --> contract
+    cli --> planner
+    cli --> travel
+    simcli --> travel
+    web --> travel
+    geocoding --> contract
+    provider --> contract
+    events --> provider
+    events --> geocoding
+    simcli --> provider
+    simcli --> planner
+    fake --> geocoding
+    fake --> events
+    simcli --> web
+    web --> provider
+    web --> planner
+    web --> contract
+    build --> qos
+    build --> features
+    evaluate --> baselines
+    timemodel --> planner
+    timemodel --> events
+    backtest --> timemodel
+    backtest --> provider
+    backtest --> planner
+```
+
+## 3. Hợp đồng vào (`contract.py`)
 
 ```mermaid
 classDiagram
-    %% Domain Models - GeoPoint
+    direction LR
+    class WorkloadQuery {
+        <<frozen>>
+        +planned_at: datetime
+        +filter: JobFilter
+    }
+    class JobFilter {
+        <<frozen>>
+        +case_types: tuple~str~
+        +branch_names: tuple~str~
+        +emp_accounts: tuple~str~
+    }
+    class WorkloadProvider {
+        <<interface>>
+        +fetch_workload(query: WorkloadQuery) RouteRequest
+    }
+    class RouteRequest {
+        <<frozen>>
+        +planned_at: datetime
+        +technicians: tuple~TechnicianInput~
+        +filter: JobFilter
+    }
+    class TechnicianInput {
+        <<frozen>>
+        +emp_account: str
+        +jobs: tuple~JobInput~
+        +last_location: LocationFix | None
+        +shift_start: datetime | None
+        +shift_end: datetime | None
+        +previous_sequence: tuple~str~
+    }
+    class JobInput {
+        <<frozen>>
+        +job_id: str
+        +state: JobState
+        +location: GeoPoint | None
+        +case_type: str | None
+        +address: str | None
+        +due_at: datetime | None
+        +priority: int | None
+        +started_at: datetime | None
+        +appointment_start: datetime | None
+        +complete_by: datetime | None
+        +area: str | None
+    }
+    class LocationFix {
+        <<frozen>>
+        +location: GeoPoint
+        +recorded_at: datetime
+        +source: str
+    }
     class GeoPoint {
-        -latitude: float
-        -longitude: float
-        +is_in_vietnam_bounds() -> bool
-        +distance_km_to(other: GeoPoint) -> float
+        <<frozen>>
+        +lat: float
+        +lng: float
     }
-
-    %% Domain Models - Job
-    class Job {
-        -checklist_id: str
-        -object_id: str | None
-        -branch_name: str | None
-        -status: str | None
-        -created_at: datetime | None
-        -finished_at: datetime | None
-        -services: tuple[str, ...]
-        -object_location: str | None
-        -case_type: str | None
-        -customer_type: str | None
-        -vip_type: str | None
-        -on_time_flag: str | None
-        -discussion_count: int
-        -sos_discussion_count: int
-        -appointment_count: int
-        -technician_account: str | None
-        -technician_level: str | None
-        -reassignment_count: int
-        +is_finished() bool
-        +has_assignment() bool
-        +elapsed_minutes() float | None
+    class JobState {
+        <<enum>>
+        PENDING
+        IN_PROGRESS
     }
+    WorkloadQuery *-- JobFilter
+    WorkloadProvider ..> WorkloadQuery : nhận
+    WorkloadProvider ..> RouteRequest : trả
+    RouteRequest *-- JobFilter
+    RouteRequest *-- "0..*" TechnicianInput
+    TechnicianInput *-- "0..*" JobInput
+    TechnicianInput *-- "0..1" LocationFix
+    JobInput --> JobState
+    JobInput *-- "0..1" GeoPoint
+    LocationFix *-- GeoPoint
+```
 
-    %% Domain Models - Technician
-    class Technician {
-        -account: str
-        -level: str | None
-        -branch_name: str | None
-        -historical_job_count: int
-        -historical_visit_count: int
+## 4. Hợp đồng ra (`contract.py`)
+
+```mermaid
+classDiagram
+    direction LR
+    class RouteResponse {
+        <<frozen>>
+        +planned_at: datetime
+        +filter: JobFilter
+        +routes: tuple~TechnicianRoute~
+        +issues: tuple~Issue~
+        +summary: RouteSummary
     }
-
-    %% Domain Models - Visit
-    class Visit {
-        -checklist_id: str
-        -technician_code: str | None
-        -checkin_at: datetime | None
-        -checkout_at: datetime | None
-        -checkin_location: GeoPoint | None
-        -checkout_location: GeoPoint | None
-        +service_minutes() float | None
-        +movement_km() float | None
+    class TechnicianRoute {
+        <<frozen>>
+        +emp_account: str
+        +start_at: datetime
+        +start_location: GeoPoint | None
+        +start_source: StartSource
+        +in_progress_job_id: str | None
+        +travel_source: str
+        +sequence_source: SequenceSource
+        +previous_route: PreviousRoute
+        +score: dict
+        +stops: tuple~PlannedStop~
+        +total_km: float
+        +total_travel_minutes: float
+        +total_service_minutes: float
+        +finish_at: datetime | None
     }
-
-    %% Domain Models - SystemState
-    class SystemState {
-        -timestamp: datetime
-        -jobs: tuple[Job, ...]
-        -technicians: tuple[Technician, ...]
-        -visits: tuple[Visit, ...]
-        +active_jobs() tuple[Job, ...]
-        +unassigned_jobs() tuple[Job, ...]
+    class PlannedStop {
+        <<frozen>>
+        +sequence: int
+        +job_id: str
+        +location: GeoPoint
+        +leg_km: float | None
+        +leg_minutes: float | None
+        +eta: datetime | None
+        +wait_minutes: float | None
+        +finish_at: datetime | None
+        +due_at: datetime | None
+        +late: bool | None
+        +completion_late: bool | None
+        +after_shift_end: bool | None
     }
-
-    %% Relationships
-    SystemState "1" --> "many" Job : contains
-    SystemState "1" --> "many" Technician : manages
-    SystemState "1" --> "many" Visit : tracks
-    
-    Job "1" --> "0..1" Technician : assigned_to
-    Visit "1" --> "1" GeoPoint : checkin_location
-    Visit "1" --> "1" GeoPoint : checkout_location
-    Visit "many" --> "1" Job : records
-    Visit "many" --> "1" Technician : performed_by
+    class Issue {
+        <<frozen>>
+        +code: str
+        +emp_account: str | None
+        +job_id: str | None
+        +detail: str | None
+    }
+    class RouteSummary {
+        <<frozen>>
+        +technicians: int
+        +jobs: int
+        +pending_jobs: int
+        +in_progress_jobs: int
+        +routed_stops: int
+        +stops_without_eta: int
+        +late_stops: int
+        +completion_late_stops: int
+        +stops_after_shift_end: int
+        +sla_evaluable_jobs: int
+        +on_time_stops: int
+        +on_time_rate_percent: float | None
+        +total_km: float
+        +travel_ms: float
+        +planning_ms: float
+    }
+    class StartSource {
+        <<enum>>
+        IN_PROGRESS_JOB
+        LAST_LOCATION
+        STALE_LOCATION
+        UNKNOWN
+    }
+    class SequenceSource {
+        <<enum>>
+        OPTIMAL
+        APPROXIMATE
+        HEURISTIC
+    }
+    class PreviousRoute {
+        <<enum>>
+        NONE
+        KEPT
+        CHANGED
+    }
+    RouteResponse *-- "0..*" TechnicianRoute
+    RouteResponse *-- "0..*" Issue
+    RouteResponse *-- RouteSummary
+    TechnicianRoute *-- "0..*" PlannedStop
+    TechnicianRoute --> StartSource
+    TechnicianRoute --> SequenceSource
+    TechnicianRoute --> PreviousRoute
 ```
 
----
+## 5. Lõi routing (`planner.py`, `travel.py`, `service.py`, JSON)
 
-## Detailed Class Hierarchy
-
-### 🏛️ Domain Layer (Tầng Miền)
-
-Chứa các đối tượng business core không phụ thuộc vào infrastructure.
-
-#### 1. **GeoPoint** - Vị trí địa lý
-- **Mục đích**: Biểu diễn một điểm tọa độ GPS
-- **Thuộc tính**:
-  - `latitude: float` - Vĩ độ (độ)
-  - `longitude: float` - Kinh độ (độ)
-- **Phương thức**:
-  - `is_in_vietnam_bounds() -> bool` - Kiểm tra điểm có nằm trong ranh giới Việt Nam (8°N-24°N, 102°E-110°E)
-  - `distance_km_to(other: GeoPoint) -> float` - Tính khoảng cách giữa hai điểm (km) sử dụng Haversine formula
-
-#### 2. **Job** - Nhiệm vụ bảo trì
-- **Mục đích**: Đại diện cho một checklist bảo trì duy nhất
-- **Thuộc tính chính**:
-  - `checklist_id: str` - ID duy nhất
-  - `object_id: str | None` - Mã hợp đồng/đối tượng
-  - `status: str | None` - Trạng thái xử lý (Chưa phân công, Đã phân công, v.v.)
-  - `services: tuple[str, ...]` - Danh sách dịch vụ cần kiểm tra
-  - `created_at: datetime | None` - Thời gian tạo
-  - `finished_at: datetime | None` - Thời gian hoàn tất
-  - `technician_account: str | None` - KTV được gán
-- **Thuộc tính theo dõi**:
-  - `discussion_count: int` - Số lần giục
-  - `sos_discussion_count: int` - Số lần bị giục ở mức SOS
-  - `appointment_count: int` - Số lần hẹn xử lý
-  - `reassignment_count: int` - Số lần thay đổi KTV
-- **Thuộc tính phân loại**:
-  - `branch_name: str | None` - Chi nhánh
-  - `customer_type: str | None` - Loại khách hàng
-  - `vip_type: str | None` - Phân loại VIP
-  - `on_time_flag: str | None` - Trạng thái SLA (YES/NO/NA/INPROCESS)
-  - `case_type: str | None` - Loại ca vụ
-  - `object_location: str | None` - Địa chỉ lắp đặt
-  - `technician_level: str | None` - Cấp độ KTV được gán
-- **Phương thức**:
-  - `is_finished() -> bool` - Kiểm tra đã hoàn tất (trả về True nếu `finished_at` không None)
-  - `has_assignment() -> bool` - Kiểm tra đã được gán KTV (trả về True nếu `technician_account` có giá trị)
-  - `elapsed_minutes() -> float | None` - Tính thời gian đã trôi qua (phút) từ `created_at` đến `finished_at`
-
-#### 3. **Technician** - Kỹ thuật viên
-- **Mục đích**: Đại diện cho một nhân viên kỹ thuật
-- **Thuộc tính**:
-  - `account: str` - Account định danh (khóa chính)
-  - `level: str | None` - Cấp độ nghiệp vụ
-  - `branch_name: str | None` - Chi nhánh trực thuộc
-  - `historical_job_count: int` - Số checklist từng xử lý
-  - `historical_visit_count: int` - Số lượt check-in từng thực hiện
-- **Phương thức**: Không có (là value object)
-
-#### 4. **Visit** - Lượt thực hiện công việc
-- **Mục đích**: Ghi lại mỗi lần KTV check-in/check-out
-- **Thuộc tính**:
-  - `checklist_id: str` - Checklist mà lượt này phục vụ
-  - `technician_code: str | None` - Mã nhân viên
-  - `checkin_at: datetime | None` - Thời gian bắt đầu
-  - `checkout_at: datetime | None` - Thời gian kết thúc
-  - `checkin_location: GeoPoint | None` - GPS tại check-in
-  - `checkout_location: GeoPoint | None` - GPS tại check-out
-- **Phương thức**:
-  - `service_minutes() -> float | None` - Tính thời gian làm việc (phút) từ `checkin_at` đến `checkout_at`
-  - `movement_km() -> float | None` - Tính quãng đường di chuyển (km) từ `checkin_location` đến `checkout_location`
-
-#### 5. **SystemState** - Trạng thái hệ thống
-- **Mục đích**: Snapshot không thay đổi của toàn bộ trạng thái tại một thời điểm
-- **Thuộc tính**:
-  - `timestamp: datetime` - Thời điểm chụp snapshot
-  - `jobs: tuple[Job, ...]` - Tất cả checklist
-  - `technicians: tuple[Technician, ...]` - Tất cả KTV
-  - `visits: tuple[Visit, ...]` - Các lượt thực hiện đã biết (default rỗng)
-- **Phương thức**:
-  - `active_jobs() -> tuple[Job, ...]` - Lấy các checklist chưa hoàn tất (là các Job mà `is_finished()` trả về False)
-  - `unassigned_jobs() -> tuple[Job, ...]` - Lấy các checklist chưa được gán KTV (là các active_jobs mà `has_assignment()` trả về False)
-
----
-
-## 📊 Relationship Patterns
-
-### Mối Quan Hệ Chính:
-
-1. **SystemState → Job** (1:N)
-   - Một snapshot chứa nhiều checklist
-   - Job là bất biến (immutable), được tạo từ dữ liệu CSV
-
-2. **SystemState → Technician** (1:N)
-   - Một snapshot quản lý danh sách KTV
-   - Mỗi Technician là một đơn vị độc lập
-
-3. **SystemState → Visit** (1:N)
-   - Một snapshot theo dõi tất cả lượt thực hiện
-   - Visit ghi lại các sự kiện check-in/out
-
-4. **Job ← Technician** (N:1)
-   - Một Job có thể được gán cho một Technician
-   - Một Technician có thể xử lý nhiều Job
-
-5. **Visit → Job** (N:1)
-   - Một lượt Visit phục vụ một Job
-   - Một Job có thể có nhiều Visit (ví dụ: 2 lần check-in/out)
-
-6. **Visit → Technician** (N:1)
-   - Một Visit được thực hiện bởi một Technician
-   - Một Technician có nhiều Visit
-
-7. **Visit → GeoPoint** (N:1)
-   - Mỗi Visit có 2 GeoPoint (check-in và check-out)
-
----
-
-## 🔧 Chi Tiết Tất Cả Các Method
-
-### GeoPoint Methods
-
-| Method | Signature | Return Type | Mô Tả |
-|--------|-----------|-------------|-------|
-| `is_in_vietnam_bounds` | `is_in_vietnam_bounds(self)` | `bool` | Kiểm tra tọa độ có nằm trong ranh giới Việt Nam (8°N-24°N, 102°E-110°E) |
-| `distance_km_to` | `distance_km_to(self, other: GeoPoint)` | `float` | Tính khoảng cách giữa 2 điểm sử dụng công thức Haversine (great-circle distance) |
-
-**Ví dụ:**
-```python
-point1 = GeoPoint(21.0285, 105.8542)  # Hà Nội
-point2 = GeoPoint(10.7769, 106.7009)  # TP.HCM
-
-point1.is_in_vietnam_bounds()        # True
-point1.distance_km_to(point2)        # ~1693.5 km
+```mermaid
+classDiagram
+    direction LR
+    class RoutingService {
+        +provider: WorkloadProvider
+        +config: RoutingConfig
+        +travel: TravelModel | None
+        +plan(query: WorkloadQuery) RouteResponse
+    }
+    class TravelModel {
+        <<interface>>
+        +matrices(groups) list~TravelMatrix~
+    }
+    class TravelMatrix {
+        <<frozen>>
+        +km: tuple
+        +minutes: tuple
+        +source: str
+        +note: str | None
+    }
+    class HaversineTravel {
+        <<frozen>>
+        +average_speed_kmh: float
+        +minutes(km) float
+        +matrix(points, note) TravelMatrix
+        +matrices(groups) list~TravelMatrix~
+    }
+    class OsrmTravel {
+        +base_url: str
+        +profile: str
+        +max_locations: int
+        +timeout_seconds: float
+        +min_interval_seconds: float
+        +parallel_requests: int
+        +fallback: HaversineTravel
+        +calls: int
+        +matrices(groups) list~TravelMatrix~
+        -_solve(groups, batch) list~TravelMatrix~
+        -_slice(group, position, distances, durations) TravelMatrix
+        -_table(points) tuple
+    }
+    class OsrmError {
+        <<exception>>
+    }
+    class travel {
+        <<module>>
+        +PUBLIC_OSRM_URL
+        +distance_km(first, second) float
+        +travel_model(kind, osrm_url, average_speed_kmh) TravelModel
+    }
+    class RoutingConfig {
+        <<frozen>>
+        +average_speed_kmh: float
+        +location_max_age_minutes: float
+        +default_service_minutes: float
+        +service_minutes_by_case_type: dict
+        +service_minutes_by_emp: dict
+        +transition: TransitionTable | None
+        +rules: BusinessRules
+        +service_minutes(job: JobInput, emp_account) float
+    }
+    class BusinessRules {
+        <<frozen>>
+        +tiers: tuple~dict~
+        +priority_weights: dict
+        +default_priority_weight: float
+        +max_exact_jobs: int
+        +max_labels_per_state: int
+        +previous_route_policy: str
+        +reroute_min_gain: float
+        +priority_weight(priority) float
+        +objective_key(score) tuple
+        +catalog() dict
+    }
+    class RuleInfo {
+        <<frozen>>
+        +code: str
+        +name: str
+        +unit: str
+        +source: str
+        +description: str
+    }
+    class rules_module {
+        <<module>>
+        +SOFT_RULES
+        +HARD_RULES
+        +DEFAULT_TIERS
+        +DEFAULT_PRIORITY_WEIGHTS
+        +rules_to_dict(rules) dict
+        +rules_from_dict(data) BusinessRules
+        +load_rules(path) BusinessRules
+    }
+    class _Problem {
+        +solve(before) tuple
+        +heuristic(before) list
+        +improve(order, before) list
+        +walk(order) tuple
+        -step(mask, here, job, clock) tuple
+        -extend(label, mask, here, job) _Label
+        -keep(bucket, label) bool
+    }
+    class TransitionTable {
+        <<frozen>>
+        +km_edges: tuple
+        +minutes: tuple
+        +minutes_by_hour: dict
+        +leg_minutes(km, depart_at) float
+    }
+    class planner {
+        <<module>>
+        +DEFAULT_SERVICE_MINUTES: dict
+        +TIME_MODEL_FORMAT
+        +plan_routes(request, config, travel) RouteResponse
+        +time_model_config(model, config) RoutingConfig
+        +load_time_model(path, config) RoutingConfig
+        -resolve_start() điểm và giờ xuất phát
+        -sequence() QHĐ theo rule, giữ/đổi tuyến cũ, tính ETA từng điểm
+    }
+    class contract {
+        <<module>>
+        +to_json_dict(value) dict
+        +query_from_dict(data) WorkloadQuery
+        +request_from_dict(data) RouteRequest
+    }
+    class ContractError {
+        <<exception>>
+    }
+    class WorkloadProvider {
+        <<interface>>
+    }
+    RoutingService --> WorkloadProvider : gọi fetch_workload
+    RoutingService --> RoutingConfig
+    RoutingService --> TravelModel
+    RoutingService ..> planner : gọi plan_routes
+    RoutingService ..> ContractError : filter/planned_at lệch
+    planner ..> RoutingConfig
+    RoutingConfig *-- "0..1" TransitionTable : mô hình thời gian
+    RoutingConfig *-- BusinessRules : rule nghiệp vụ
+    BusinessRules ..> RuleInfo : mô tả rule
+    rules_module ..> BusinessRules : đọc/ghi JSON
+    planner ..> _Problem : mỗi KTV một bài QHĐ
+    _Problem ..> BusinessRules : tầng, trọng số, giới hạn
+    planner ..> TransitionTable : load_time_model tạo
+    planner ..> TravelModel : 1 lần cho mọi KTV
+    TravelModel ..> TravelMatrix : trả mỗi KTV một ma trận
+    HaversineTravel ..|> TravelModel
+    OsrmTravel ..|> TravelModel
+    OsrmTravel --> HaversineTravel : dự phòng khi lỗi
+    OsrmTravel ..> OsrmError : bắt nội bộ, không ném ra ngoài
+    travel ..> OsrmTravel : travel_model tạo
+    contract ..> ContractError : JSON sai hợp đồng
 ```
 
----
+## 6. Một lần lập tuyến
 
-### Job Methods
-
-| Method | Signature | Return Type | Mô Tả |
-|--------|-----------|-------------|-------|
-| `is_finished` | `@property is_finished(self)` | `bool` | Kiểm tra Job đã hoàn tất: `finished_at is not None` |
-| `has_assignment` | `@property has_assignment(self)` | `bool` | Kiểm tra Job đã được gán KTV: `bool(technician_account)` |
-| `elapsed_minutes` | `@property elapsed_minutes(self)` | `float \| None` | Tính thời gian trôi qua (phút): `(finished_at - created_at).total_seconds() / 60` |
-
-**Ví dụ:**
-```python
-job = Job(
-    checklist_id="CLK-2026-001",
-    status="Đang xử lý",
-    created_at=datetime(2026, 9, 10, 9, 0),
-    finished_at=datetime(2026, 9, 10, 11, 30),
-    technician_account="A001",
-    # ... other fields
-)
-
-job.is_finished          # True
-job.has_assignment       # True
-job.elapsed_minutes      # 150.0 phút
+```mermaid
+sequenceDiagram
+    actor User as Người dùng
+    participant UI as Frontend
+    participant SVC as RoutingService
+    participant DATA as Team data hoặc simulator
+    participant PLAN as plan_routes
+    participant OSRM as OSRM /table
+    User->>UI: chọn MAINTENANCE, chi nhánh HNI_04
+    UI->>SVC: WorkloadQuery(planned_at, filter)
+    SVC->>DATA: fetch_workload(query)
+    DATA-->>SVC: RouteRequest: job đã gán, vị trí, ca làm
+    SVC->>SVC: kiểm tra planned_at và filter khớp query
+    SVC->>PLAN: plan_routes(request, config, travel)
+    PLAN->>PLAN: từng KTV: chọn điểm và giờ xuất phát
+    PLAN->>OSRM: tự host = mỗi KTV 1 request song song, public = gom ≤ 100 điểm
+    OSRM-->>PLAN: ma trận mét và giây
+    loop từng KTV
+        PLAN->>PLAN: QHĐ trên (tập job đã làm, job cuối), so theo tầng rule
+        PLAN->>PLAN: có tuyến cũ thì giữ, trừ khi tuyến mới tốt hơn rõ
+        PLAN->>PLAN: tới = xong trước + leg_minutes, chờ mốc hẹn, trễ khi check-in sau hạn
+    end
+    PLAN-->>SVC: RouteResponse
+    SVC-->>UI: tuyến, ETA, issue, summary
 ```
 
----
+## 7. Simulator (`simulator/ktv_simulator`)
 
-### Technician Methods
-
-| Method | Signature | Return Type | Mô Tả |
-|--------|-----------|-------------|-------|
-| *(Không có method)* | - | - | Technician là value object thuần túy |
-
-**Ghi chú:** Technician chỉ lưu trữ thông tin, không có logic tính toán.
-
----
-
-### Visit Methods
-
-| Method | Signature | Return Type | Mô Tả |
-|--------|-----------|-------------|-------|
-| `service_minutes` | `@property service_minutes(self)` | `float \| None` | Tính thời gian làm việc (phút): `(checkout_at - checkin_at).total_seconds() / 60` |
-| `movement_km` | `@property movement_km(self)` | `float \| None` | Tính quãng đường di chuyển (km): `checkin_location.distance_km_to(checkout_location)` |
-
-**Ví dụ:**
-```python
-visit = Visit(
-    checklist_id="CLK-2026-001",
-    technician_code="A001",
-    checkin_at=datetime(2026, 9, 10, 9, 0),
-    checkout_at=datetime(2026, 9, 10, 10, 30),
-    checkin_location=GeoPoint(21.0285, 105.8542),    # Công ty XYZ
-    checkout_location=GeoPoint(21.0500, 105.8700),   # Nhà máy ABC
-)
-
-visit.service_minutes    # 90.0 phút
-visit.movement_km        # ~3.5 km
+```mermaid
+classDiagram
+    direction LR
+    class WorkloadProvider {
+        <<interface>>
+        +fetch_workload(query: WorkloadQuery) RouteRequest
+    }
+    class EventWorkloadProvider {
+        +path: Path
+        +shift: tuple | None
+        +info: dict
+        +clock: datetime
+        +fetch_workload(query: WorkloadQuery) RouteRequest
+        +build(query: WorkloadQuery) tuple
+        +advance_to(at, collect) list~Change~
+        +close() None
+        -_read(offset) tuple | None
+        -_apply(state, event, at, changes) None
+    }
+    class _State {
+        <<mutable>>
+        +clock: datetime
+        +offset: int
+        +applied: int
+        +jobs: dict
+        +visiting: dict
+        +locations: dict
+        +copy() _State
+    }
+    class _Job {
+        <<frozen>>
+        +job_id: str
+        +emp_account: str | None
+        +branch_name: str | None
+        +case_type: str | None
+        +address: str | None
+        +location: GeoPoint | None
+        +created_at: datetime
+        +started_at: datetime | None
+    }
+    class Change {
+        <<frozen>>
+        +at: datetime
+        +type: str
+        +job_id: str
+        +emp_account: str | None
+        +branch_name: str | None
+        +case_type: str | None
+    }
+    class BuildStats {
+        <<frozen>>
+        +open_onsite_jobs: int
+        +matched_jobs: int
+        +missing_technician: int
+        +without_location: int
+        +in_progress_jobs: int
+        +technicians: int
+        +technicians_with_location: int
+        +events_applied: int
+    }
+    class provider_rules {
+        <<module>>
+        +EVENT_FORMAT
+        +EVENT_TYPES
+        +CASE_TYPE_RULES
+        +REMOTE_CASE_TYPES
+        +filter_changes(changes, job_filter) list~Change~
+    }
+    class events {
+        <<module>>
+        +OPEN_STATUSES
+        +geocode(addresses, boundary_geojson, workers) dict
+        +build_events(maintenance_csv, boundary_geojson) tuple
+        +write_events(path, header, events) None
+    }
+    class web {
+        <<module>>
+        +catalog(provider, travel) dict
+        +replay_step(provider, config, travel, query, to) dict
+        +make_server(provider, config, travel, host, port) ThreadingHTTPServer
+        +serve(provider, config, travel, host, port) None
+    }
+    class WardBoundaryIndex {
+        +boundaries: tuple
+        +from_geojson(path) WardBoundaryIndex
+        +match(address, fuzzy_threshold) LocationMatch
+    }
+    class WardBoundary {
+        <<frozen>>
+        +ward_code: str
+        +ward_name: str
+        +province_name: str
+        +point: GeoPoint
+        +normalized_ward: str
+        +normalized_province: str
+    }
+    class LocationMatch {
+        <<frozen>>
+        +address: str
+        +ward_code: str
+        +ward_name: str
+        +province_name: str
+        +point: GeoPoint
+        +confidence: float
+        +method: str
+    }
+    EventWorkloadProvider ..|> WorkloadProvider
+    EventWorkloadProvider *-- "1..*" _State : hiện tại + snapshot mỗi ngày
+    _State *-- "0..*" _Job : job đang mở
+    EventWorkloadProvider ..> Change : advance_to trả
+    EventWorkloadProvider ..> BuildStats : build trả kèm
+    EventWorkloadProvider ..> provider_rules : giả định nghiệp vụ
+    events ..> provider_rules : EVENT_FORMAT
+    events ..> WardBoundaryIndex : geocode địa chỉ
+    web --> EventWorkloadProvider
+    web ..> Change : lọc ra KTV cần xếp lại
+    WardBoundaryIndex *-- "0..*" WardBoundary
+    WardBoundaryIndex ..> LocationMatch : match trả
 ```
 
----
+`provider_rules` là tên vẽ cho nhóm hằng số và hàm lọc ở đầu `provider.py`; `events` và `web` là hai file module. Không file nào là class.
 
-### SystemState Methods
+### Một nhịp realtime (`web.replay_step`, dùng cho `--replay` và nút ▶ Chạy)
 
-| Method | Signature | Return Type | Mô Tả |
-|--------|-----------|-------------|-------|
-| `active_jobs` | `@property active_jobs(self)` | `tuple[Job, ...]` | Lọc các Job chưa hoàn tất: `tuple(job for job in jobs if not job.is_finished)` |
-| `unassigned_jobs` | `@property unassigned_jobs(self)` | `tuple[Job, ...]` | Lọc các active Job chưa được gán: `tuple(job for job in active_jobs if not job.has_assignment)` |
-
-**Ví dụ:**
-```python
-state = SystemState(
-    timestamp=datetime.now(),
-    jobs=(job1, job2, job3, job4),  # 4 jobs
-    technicians=(tech1, tech2),
-    visits=()
-)
-
-# job1: hoàn tất, có gán KTV
-# job2: hoàn tất, không gán KTV
-# job3: chưa hoàn tất, có gán KTV
-# job4: chưa hoàn tất, không gán KTV
-
-state.active_jobs        # (job3, job4)
-state.unassigned_jobs    # (job4,)
+```mermaid
+sequenceDiagram
+    participant UI as Web demo hoặc --replay
+    participant DATA as EventWorkloadProvider
+    participant FILE as events_2026-06.jsonl
+    participant PLAN as plan_routes
+    UI->>DATA: advance_to(T), advance_to(T + bước, collect)
+    DATA->>FILE: đọc tiếp từ offset
+    DATA-->>UI: Change của job đang mở, gồm VISIT_ENDED
+    UI->>UI: lọc theo filter, lấy KTV bị ảnh hưởng
+    alt có KTV bị ảnh hưởng
+        UI->>DATA: build(WorkloadQuery(T + bước, filter + emp_accounts))
+        DATA-->>UI: RouteRequest của riêng các KTV đó
+        UI->>PLAN: plan_routes(request)
+        PLAN-->>UI: tuyến mới, ghép vào bảng
+    else không có
+        UI->>UI: giữ nguyên mọi tuyến
+    end
 ```
 
----
+## 8. Research (`research/`)
 
-
-
-### 1. **Immutable Data Objects (Frozen Dataclass)**
-```python
-@dataclass(frozen=True, slots=True)
-class Job:
-    ...
+```mermaid
+classDiagram
+    direction LR
+    class QosCsvSource {
+        +maintenance_path: Path
+        +checkins_path: Path
+        +read_maintenance(nrows) DataFrame
+        +read_checkins(nrows) DataFrame
+    }
+    class ValidationReport {
+        <<frozen>>
+        +dataset: str
+        +row_count: int
+        +issues: tuple~ValidationIssue~
+        +is_valid: bool
+        +to_frame() DataFrame
+    }
+    class ValidationIssue {
+        <<frozen>>
+        +severity: str
+        +code: str
+        +count: int
+        +message: str
+    }
+    class OfflineDatasetBuilder {
+        +source: QosCsvSource
+        +max_service_minutes: float
+        +build(nrows) DatasetBuildResult
+    }
+    class DatasetBuildResult {
+        <<frozen>>
+        +dataset: DataFrame
+        +maintenance_validation: ValidationReport
+        +checkin_validation: ValidationReport
+    }
+    class FeatureRegistry {
+        <<mutable>>
+        +builders: dict
+        +register(name, builder) None
+        +build(name, frame) DataFrame
+    }
+    class DurationBaseline {
+        <<mutable>>
+        +group_columns: tuple
+        +global_median_: float | None
+        +lookup_: DataFrame | None
+        +fit(frame) DurationBaseline
+        +predict(frame) Series
+    }
+    class LatenessBaseline {
+        <<mutable>>
+        +group_columns: tuple
+        +smoothing: float
+        +global_rate_: float | None
+        +lookup_: DataFrame | None
+        +fit(frame) LatenessBaseline
+        +predict_proba(frame) Series
+    }
+    class time_model {
+        <<module>>
+        +KM_EDGES
+        +load_visits(maintenance_csv, checkins_csv) DataFrame
+        +load_transitions(visits) DataFrame
+        +fit_time_model(visits, transitions, start, end) dict
+        +evaluate_time_model(model, visits, transitions, start, end) dict
+    }
+    class backtest_routing {
+        <<module>>
+        +next_job_decisions(provider, transitions) tuple
+        +day_replays(visits, configs, travel) tuple
+        +follow_order(jobs, emp_account, origin, at, config, travel) TechnicianRoute
+        +summarize_decisions(frame, skipped) dict
+        +summarize_days(days, config_names) dict
+        +summarize_etas(etas) dict
+    }
+    backtest_routing ..> time_model : load_visits, load_transitions
+    OfflineDatasetBuilder --> QosCsvSource
+    OfflineDatasetBuilder ..> DatasetBuildResult : trả
+    DatasetBuildResult *-- "2" ValidationReport
+    ValidationReport *-- "0..*" ValidationIssue
 ```
-- **Lợi ích**: Thread-safe, dễ debug, hiệu suất tốt
-- **Ứng dụng**: Tất cả domain models đều immutable
 
-### 2. **Property Pattern**
-```python
-@property
-def is_finished(self) -> bool:
-    return self.finished_at is not None
-```
-- **Lợi ích**: Encapsulation, logic dễ đọc
-- **Ứng dụng**: Computed properties như `active_jobs`, `unassigned_jobs`
+## 9. File → nội dung
 
-### 3. **Value Object Pattern**
-- `GeoPoint`: Không có ID riêng, được so sánh theo giá trị
-- `SystemState`: Đại diện một snapshot toàn bộ trạng thái tại một thời điểm
+| File | Class / hàm chính |
+|---|---|
+| `src/ktv_routing/contract.py` | `WorkloadQuery`, `JobFilter`, `RouteRequest`, `TechnicianInput`, `JobInput`, `LocationFix`, `GeoPoint`, `JobState`, `WorkloadProvider`, `RouteResponse`, `TechnicianRoute`, `PlannedStop`, `Issue`, `RouteSummary`, `StartSource`, `ContractError`, `to_json_dict`, `query_from_dict`, `request_from_dict` |
+| `src/ktv_routing/rules.py` | `BusinessRules`, `RuleInfo`, `SOFT_RULES`, `HARD_RULES`, `rules_to_dict`, `rules_from_dict`, `load_rules` — rule nghiệp vụ, tầng, trọng số |
+| `src/ktv_routing/planner.py` | `RoutingConfig`, `TransitionTable`, `plan_routes` (QHĐ qua `_Problem`), `load_time_model`, `time_model_config` |
+| `src/ktv_routing/travel.py` | `TravelModel`, `TravelMatrix`, `HaversineTravel`, `OsrmTravel`, `distance_km`, `travel_model` |
+| `src/ktv_routing/service.py` | `RoutingService` |
+| `simulator/ktv_simulator/events.py` | `build_events`, `write_events`, `geocode` + CLI — export QOS → luồng sự kiện JSONL (pandas) |
+| `simulator/ktv_simulator/provider.py` | `EventWorkloadProvider`, `Change`, `BuildStats`, `filter_changes`, giả định SLA |
+| `simulator/ktv_simulator/geocoding.py` | `WardBoundaryIndex`, `WardBoundary`, `LocationMatch` |
+| `simulator/ktv_simulator/fake_boundary.py` | TẠM: `ward_and_province`, `build` — boundary giả từ check-in |
+| `simulator/ktv_simulator/convert_xlsx.py` | `convert`, `read_shared_strings` — workbook → CSV UTF-8 |
+| `simulator/ktv_simulator/web.py` + `web.html` | `make_server`, `serve`, `catalog`, `replay_step` — web demo: `GET /api/options`, `POST /api/plan`, `POST /api/replay` |
+| `research/time_model.py` | `load_visits`, `load_transitions`, `fit_time_model`, `evaluate_time_model` + CLI — học thời gian làm và khoảng chuyển job |
+| `research/backtest_routing.py` | `next_job_decisions`, `day_replays`, `follow_order` + CLI — planner so với KTV thật, sai số ETA |
+| `research/qos_data.py` | `QosCsvSource`, chuẩn hóa CSV, `ValidationReport`, `ValidationIssue` |
+| `research/features.py` | `FeatureRegistry`, `build_job_features`, `add_technician_history_features` |
+| `research/baselines.py` | `DurationBaseline`, `LatenessBaseline` |
+| `research/build_dataset.py` | `OfflineDatasetBuilder`, `DatasetBuildResult` + CLI |
 
-### 4. **Composition Pattern**
-- `SystemState` chứa `Job`, `Technician`, `Visit` (không thừa kế)
+## 10. Đã bỏ so với bản trước
 
----
-
-## 📦 Các Module Liên Quan
-
-### Tầng Data (`src/ktv_optimizer/data/`)
-- **Mappers**: Chuyển đổi dữ liệu CSV → Domain objects
-- **Validators**: Kiểm tra tính hợp lệ dữ liệu
-- **Sources**: Tải dữ liệu từ nhiều nguồn (CSV, GeoJSON)
-
-### Tầng Optimization (`src/ktv_optimizer/optimization/`)
-- **Assignment**: Gán Job cho Technician
-- **Routing**: Tối ưu tuyến đường
-- **Scoring**: Đánh giá chất lượng phân công
-- **Clustering**: Nhóm Job theo vùng địa lý
-
-### Tầng Evaluation (`src/ktv_optimizer/evaluation/`)
-- **Outcome**: Đánh giá kết quả thực tế của phân công
-
-### Tầng State (`src/ktv_optimizer/state/`)
-- **Snapshot**: Quản lý snapshot trạng thái
-- **Reducer**: Xử lý các thay đổi trạng thái
-- **Queue**: Quản lý hàng đợi Job
-
----
-
-## 🎯 Use Case Chính
-
-### 1. Load và Parse Dữ Liệu
-```
-CSV File → Mapper → Job/Technician Objects → SystemState
-```
-
-### 2. Phân Công Job cho KTV
-```
-SystemState.unassigned_jobs → Assignment Engine → Job(technician_account=...) → Updated SystemState
-```
-
-### 3. Theo Dõi Thực Hiện Công Việc
-```
-Technician check-in/out → Visit Objects → SystemState.visits
-GeoPoint (latitude, longitude) → distance_km_to() → optimization
-```
-
-### 4. Đánh Giá Hiệu Suất
-```
-SystemState + Job history → Evaluation → Performance Metrics
-```
-
----
-
-## 💡 Lợi Ích Của Kiến Trúc OOP Này
-
-1. **Tách biệt Concern**: Domain logic hoàn toàn độc lập với data storage
-2. **Khả năng Mở Rộng**: Dễ thêm các attribute mới mà không làm ảnh hưởng các module khác
-3. **Testability**: Mỗi class có trách nhiệm rõ ràng, dễ viết unit test
-4. **Type Safety**: Sử dụng Python dataclass giúp type checking tốt hơn
-5. **Immutability**: Ngăn chặn unintended side effects
-6. **Performance**: Slots tối ưu bộ nhớ, frozen dataclass tối ưu hashing
-
----
-
-*Diagram này được tạo dựa trên phân tích mã nguồn tại:*
-- `src/ktv_optimizer/domain/`
-- `src/ktv_optimizer/optimization/`
-- `src/ktv_optimizer/state/`
+| Phần cũ | Lý do |
+|---|---|
+| `domain/checklist_status.py`, `state/events.py` (8 status, vòng đời, event) | Việc của hệ thống checklist; routing chỉ cần `PENDING` / `IN_PROGRESS` |
+| `storage/` SQLite, `pipeline/`, `evaluation/` | Việc của team database / BI; routing không lưu trạng thái |
+| `optimization/assignment`, `compatibility`, `scoring`, `optimizer`, `domain/job`… | Routing không gán việc |
+| 3 web demo trong `application/` | Việc của frontend |

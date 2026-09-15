@@ -41,6 +41,9 @@ htmlcov/
 
 # Artifacts & Outputs
 artifacts/
+*.db
+*.db-wal
+*.db-shm
 *.log
 *.csv
 *.json
@@ -53,6 +56,13 @@ data/boundary_2026-07-31.geojson
 data/Mô tả loại tác vụ*.xlsx
 data/METADATA_*.xlsx
 data/temp_real_replay/
+data/osrm/
+data/boundary_fake_from_checkins.geojson
+data/events_*.jsonl
+
+# Bộ dữ liệu mẫu nhỏ (HNI_04, tháng 6) được commit để pull về chạy được ngay
+!data/sample/
+!data/sample/**
 
 # OS
 .DS_Store

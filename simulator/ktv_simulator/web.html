@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KTV Routing demo</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #fff; --line: #e2e5ea; --text: #1d2330; --muted: #6b7280;
+    --accent: #2563eb; --late: #dc2626; --ok: #16a34a; --warn: #b45309;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 18px; }
+  h1 small { margin-left: 6px; font-size: 13px; font-weight: 400; color: var(--muted); }
+  .flow { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  .flow li { padding: 4px 10px; border-radius: 999px; background: #eef0f4; color: var(--muted); font-size: 12px; }
+  .flow li.done { background: #dbeafe; color: #1e40af; }
+  main { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 16px; padding: 16px 20px; }
+  aside, .content { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .card h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+  .field { margin-bottom: 10px; font-size: 13px; font-weight: 600; }
+  .field input, .field select { display: block; width: 100%; margin-top: 4px; padding: 7px 8px; font: inherit; font-weight: 400; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  .checks { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 4px; font-weight: 400; }
+  .checks label { display: flex; align-items: center; gap: 6px; }
+  button { width: 100%; padding: 9px; font: inherit; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 6px; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: progress; }
+  .muted { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+  .error { color: var(--late); }
+  .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stat { padding: 8px 10px; border-radius: 8px; background: #f8f9fb; }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  #issues details { margin: 4px 0; }
+  #issues summary { cursor: pointer; }
+  #issues ul { max-height: 160px; margin: 4px 0 0; padding-left: 18px; overflow: auto; font-size: 12px; color: var(--muted); }
+  #tech-search { width: 100%; margin-bottom: 8px; padding: 6px 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; }
+  #technicians { max-height: 420px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+  #technicians li { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: 6px; cursor: pointer; }
+  #technicians li:hover { background: #f3f4f6; }
+  #technicians li.active { background: #dbeafe; }
+  .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+  .grow { flex: 1; min-width: 0; }
+  .tech-name { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .tech-meta { font-size: 12px; color: var(--muted); }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; background: #eef0f4; color: var(--muted); }
+  .badge.late { background: #fee2e2; color: var(--late); }
+  .badge.ok { background: #dcfce7; color: var(--ok); }
+  .badge.warn { background: #fef3c7; color: var(--warn); }
+  .badge.fresh { background: #dbeafe; color: #1e40af; }
+  .live-clock { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .live-clock b { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .live-controls { display: flex; gap: 8px; }
+  .live-controls button, .live-controls select { flex: 1; }
+  .live-controls select { padding: 7px 8px; font: inherit; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  button.stop { background: var(--late); }
+  #live-feed { max-height: 220px; margin: 8px 0 0; padding: 0; overflow: auto; list-style: none; font-size: 12px; }
+  #live-feed li { padding: 3px 0; border-bottom: 1px solid var(--line); }
+  #live-feed time { margin-right: 6px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #rules-card summary { cursor: pointer; font-weight: 600; }
+  #rules td { white-space: normal; vertical-align: top; }
+  #rules ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; }
+  #rules li { margin-bottom: 4px; }
+  #map { display: flex; align-items: center; justify-content: center; height: 56vh; min-height: 320px; border: 1px solid var(--line); border-radius: 10px; background: #e5e7eb; color: var(--muted); }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { font-size: 12px; font-weight: 600; color: var(--muted); }
+  td.address { min-width: 220px; white-space: normal; }
+  .pin { display: inline-block; transform: translate(-50%, -50%); padding: 0 6px; border: 2px solid #fff; border-radius: 12px; background: var(--pin); color: #fff; font: 600 11px/18px system-ui, sans-serif; white-space: nowrap; box-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
+  #payload-card summary { cursor: pointer; font-weight: 600; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+  .tabs button { width: auto; padding: 5px 10px; font-weight: 500; color: var(--text); background: #eef0f4; }
+  .tabs button.active { color: #fff; background: var(--accent); }
+  pre { max-height: 420px; margin: 0; padding: 12px; overflow: auto; border-radius: 8px; background: #0f172a; color: #e2e8f0; font-size: 12px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>KTV Routing <small>demo đóng vai frontend · không deploy</small></h1>
+  <ol class="flow">
+    <li id="step-query">1 · UI gửi WorkloadQuery (điều kiện lọc)</li>
+    <li id="step-request">2 · Team data (luồng sự kiện) trả RouteRequest</li>
+    <li id="step-response">3 · Routing trả RouteResponse</li>
+  </ol>
+</header>
+<main>
+  <aside>
+    <form id="query-form" class="card">
+      <h2>Điều kiện lọc</h2>
+      <div class="field">Thời điểm lập tuyến<input type="datetime-local" id="planned-at" required></div>
+      <div class="field">Loại việc<div class="checks" id="case-types"></div></div>
+      <div class="field">Chi nhánh<select id="branch"><option value="">Tất cả chi nhánh</option></select></div>
+      <div class="field">KTV<input id="emps" placeholder="account, cách nhau dấu phẩy; trống = mọi KTV"></div>
+      <button type="submit" id="submit">Lập tuyến</button>
+      <p class="muted" id="status">Đang tải danh mục…</p>
+    </form>
+    <details class="card" id="rules-card" hidden>
+      <summary>Rule nghiệp vụ đang dùng</summary>
+      <div id="rules"></div>
+    </details>
+    <section class="card" id="live-card" hidden>
+      <h2>Realtime · tua luồng sự kiện</h2>
+      <div class="live-clock"><b id="live-clock">—</b><span class="muted">giờ đang xem</span></div>
+      <div class="live-controls">
+        <button type="button" id="live-toggle">▶ Chạy</button>
+        <select id="live-step" aria-label="Độ dài mỗi nhịp">
+          <option value="1">+1 phút mỗi giây</option>
+          <option value="5" selected>+5 phút mỗi giây</option>
+          <option value="15">+15 phút mỗi giây</option>
+          <option value="60">+60 phút mỗi giây</option>
+        </select>
+      </div>
+      <p class="muted" id="live-status"></p>
+      <ul id="live-feed"></ul>
+    </section>
+    <section class="card" id="summary-card" hidden>
+      <h2>Tổng quan</h2>
+      <div class="stats" id="stats"></div>
+      <p class="muted" id="data-notes"></p>
+    </section>
+    <section class="card" id="issues-card" hidden>
+      <h2>Cảnh báo</h2>
+      <div id="issues"></div>
+    </section>
+    <section class="card" id="tech-card" hidden>
+      <h2>Tuyến theo KTV</h2>
+      <input id="tech-search" placeholder="Tìm account KTV">
+      <ul id="technicians"></ul>
+    </section>
+  </aside>
+  <section class="content">
+    <div id="map">Chọn điều kiện lọc rồi bấm “Lập tuyến”.</div>
+    <section class="card" id="detail-card" hidden>
+      <h2 id="detail-title"></h2>
+      <p class="muted" id="detail-meta"></p>
+      <p class="muted" id="detail-score"></p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Job</th><th>Địa chỉ</th><th>km</th><th>Đi (phút)</th><th>Tới</th><th>Chờ</th><th>Xong</th><th>Hạn check-in</th><th>SLA</th></tr></thead>
+          <tbody id="stops"></tbody>
+        </table>
+      </div>
+    </section>
+    <p class="muted" id="detail-hint" hidden>Bấm vào một KTV trong danh sách hoặc một đường trên bản đồ để xem thứ tự làm.</p>
+    <details class="card" id="payload-card" hidden>
+      <summary>Dữ liệu trao đổi giữa các team (JSON)</summary>
+      <div class="tabs" id="payload-tabs">
+        <button type="button" data-key="query" class="active">1 · WorkloadQuery</button>
+        <button type="button" data-key="request">2 · RouteRequest</button>
+        <button type="button" data-key="response">3 · RouteResponse</button>
+        <button type="button" data-key="step">4 · Nhịp realtime gần nhất</button>
+      </div>
+      <pre id="payload"></pre>
+    </details>
+  </section>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const ISSUE_TEXT = {
+  JOB_LOCATION_UNKNOWN: "Job không có tọa độ",
+  DUPLICATE_JOB: "Job trùng giữa nhiều KTV",
+  DUPLICATE_TECHNICIAN: "KTV bị gửi trùng",
+  MULTIPLE_IN_PROGRESS: "KTV có nhiều job đang làm",
+  IN_PROGRESS_START_UNKNOWN: "Job đang làm thiếu giờ bắt đầu",
+  STALE_TECHNICIAN_LOCATION: "Vị trí KTV cũ hơn 4 giờ",
+  TECHNICIAN_LOCATION_UNKNOWN: "Không biết vị trí KTV",
+  TECHNICIAN_OFF_SHIFT: "KTV đã hết ca",
+  ROAD_DISTANCE_FALLBACK: "Không lấy được km đường bộ, dùng chim bay",
+  SEQUENCE_NOT_OPTIMAL: "Thứ tự chưa chắc tối ưu (quá nhiều job hoặc quá nhiều nhãn)",
+};
+const SEQUENCE_TEXT = { OPTIMAL: "tối ưu (QHĐ)", APPROXIMATE: "gần tối ưu (QHĐ cắt nhãn)", HEURISTIC: "heuristic (quá nhiều job)" };
+const PREVIOUS_TEXT = { NONE: "", KEPT: "giữ thứ tự tuyến cũ", CHANGED: "đã đổi tuyến cũ vì tốt hơn rõ" };
+const START_TEXT = {
+  IN_PROGRESS_JOB: ["Đang làm job", "ok"],
+  LAST_LOCATION: ["Vị trí mới", "ok"],
+  STALE_LOCATION: ["Vị trí cũ", "warn"],
+  UNKNOWN: ["Không rõ vị trí", "late"],
+};
+const EVENT_TEXT = {
+  JOB_CREATED: "tạo job",
+  CHECKIN: "check-in",
+  CHECKOUT: "checkout",
+  JOB_CLOSED: "đóng job",
+  VISIT_ENDED: "hết lượt (check-in job khác)",
+};
+const STEPS = ["step-query", "step-request", "step-response"];
+const state = {
+  data: null,
+  selected: null,
+  payloadKey: "query",
+  map: null,
+  layer: null,
+  // plannedAt: KTV → giờ tuyến được tính; fresh: KTV vừa xếp lại ở nhịp gần nhất.
+  live: { running: false, timer: null, clock: null, max: null, plannedAt: {}, fresh: new Set() },
+};
+
+function escapeHtml(value) {
+  const table = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  return String(value ?? "").replace(/[&<>"']/g, (character) => table[character]);
+}
+const clock = (iso) => (iso ? iso.slice(11, 16) : "—");
+function dayClock(iso, plannedAt) {
+  if (!iso) return "—";
+  if (iso.slice(0, 10) === plannedAt.slice(0, 10)) return clock(iso);
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${clock(iso)}`;
+}
+function color(account) {
+  let hue = 0;
+  for (const character of account) hue = (hue * 31 + character.charCodeAt(0)) % 360;
+  return `hsl(${hue} 70% 40%)`;
+}
+function setStatus(text, isError = false) {
+  $("status").textContent = text;
+  $("status").classList.toggle("error", isError);
+}
+// Hạn đã qua ngay tại giờ lập tuyến: trễ không do thứ tự routing chọn.
+const overdueAtStart = (stop, plannedAt) => stop.due_at !== null && stop.due_at <= plannedAt;
+// Khi tua realtime, KTV không có sự kiện giữ tuyến tính ở nhịp trước.
+const routePlannedAt = (route) => state.live.plannedAt[route.emp_account] || state.data.response.planned_at;
+
+async function loadOptions() {
+  const response = await fetch("/api/options");
+  const options = await response.json();
+  $("case-types").innerHTML = options.case_types
+    .map((type) => `<label><input type="checkbox" value="${escapeHtml(type)}" ${type === "MAINTENANCE" ? "checked" : ""}> ${escapeHtml(type)}</label>`)
+    .join("");
+  for (const branch of options.branches) {
+    $("branch").add(new Option(`${branch.name} (${branch.jobs.toLocaleString("vi-VN")} checklist)`, branch.name));
+  }
+  if (options.branches.some((branch) => branch.name === "HNI_04")) $("branch").value = "HNI_04";
+  const from = options.created_from.slice(0, 10);
+  const to = options.created_to.slice(0, 10);
+  const preferred = "2026-06-15";
+  $("planned-at").value = `${preferred >= from && preferred <= to ? preferred : from}T09:00`;
+  $("planned-at").min = `${from}T00:00`;
+  $("planned-at").max = options.events_to.slice(0, 16);
+  state.live.max = options.events_to;
+  renderRules(options.rules);
+  const shift = options.shift ? ` · ca ${options.shift.join("–")}` : " · chưa có ca làm";
+  setStatus(`Job tạo từ ${from} đến ${to}, sự kiện tới ${options.events_to.slice(0, 10)}${shift} · km ${options.travel} · thời gian ${options.time_model}`);
+}
+
+// Rule nghiệp vụ lấy từ server (rules.py hoặc --rules), để người dùng thấy routing đang ưu tiên gì.
+function renderRules(rules) {
+  state.ruleNames = Object.fromEntries(
+    [...rules.tiers.flat(), ...rules.unused].map((rule) => [rule.code, `${rule.name} (${rule.unit})`]),
+  );
+  const rows = rules.tiers
+    .map((tier, index) =>
+      tier
+        .map(
+          (rule) => `<tr><td>${index + 1}</td>
+            <td><b>${escapeHtml(rule.name)}</b><div class="tech-meta">${escapeHtml(rule.description)}</div>
+                <div class="tech-meta">Nguồn: ${escapeHtml(rule.source)}</div></td>
+            <td>${rule.weight} / ${escapeHtml(rule.unit)}</td></tr>`,
+        )
+        .join(""),
+    )
+    .join("");
+  const hard = rules.hard.map((rule) => `<li><b>${escapeHtml(rule.name)}</b>: ${escapeHtml(rule.description)}</li>`).join("");
+  const weights = Object.entries(rules.priority_weights).map(([priority, weight]) => `ưu tiên ${priority} = ${weight}`).join(" · ");
+  $("rules").innerHTML = `
+    <p class="muted">So từ tầng 1; tầng dưới chỉ phân xử khi tầng trên bằng nhau. Trong một tầng, chi phí cộng có trọng số.</p>
+    <div class="table-wrap"><table><thead><tr><th>Tầng</th><th>Rule mềm</th><th>Trọng số</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted">Trọng số ưu tiên trong ngày: ${escapeHtml(weights)} · QHĐ chính xác tới ${rules.max_exact_jobs} job/KTV ·
+      tuyến cũ: ${escapeHtml(rules.previous_route_policy.description)} (ngưỡng ${rules.reroute_min_gain})</p>
+    <ul>${hard}</ul>`;
+  $("rules-card").hidden = false;
+}
+
+function currentQuery() {
+  const caseTypes = [...document.querySelectorAll("#case-types input:checked")].map((input) => input.value);
+  const branch = $("branch").value;
+  const emps = $("emps").value.split(",").map((value) => value.trim()).filter(Boolean);
+  return {
+    planned_at: $("planned-at").value,
+    filter: { case_types: caseTypes, branch_names: branch ? [branch] : [], emp_accounts: emps },
+  };
+}
+
+async function plan(event) {
+  event.preventDefault();
+  stopLive();
+  STEPS.forEach((id, index) => $(id).classList.toggle("done", index === 0));
+  $("submit").disabled = true;
+  setStatus("Đang lập tuyến… (lần đầu phải đọc luồng sự kiện tới giờ đã chọn, mất vài giây)");
+  const started = performance.now();
+  try {
+    const response = await fetch("/api/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentQuery()),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || response.statusText);
+    state.data = body;
+    state.selected = null;
+    resetLive(body);
+    render();
+    setStatus(`Xong trong ${Math.round(performance.now() - started)} ms (gồm lọc dữ liệu, tra km và xếp tuyến)`);
+  } catch (error) {
+    STEPS.forEach((id) => $(id).classList.remove("done"));
+    setStatus(`Lỗi: ${error.message}`, true);
+  } finally {
+    $("submit").disabled = false;
+  }
+}
+
+function render(fit = true) {
+  STEPS.forEach((id) => $(id).classList.add("done"));
+  const { stats, response } = state.data;
+  renderSummary(stats, response);
+  renderIssues(response.issues);
+  renderTechnicians();
+  renderMap(fit);
+  renderDetail();
+  renderPayload();
+  $("summary-card").hidden = false;
+  $("tech-card").hidden = false;
+  $("payload-card").hidden = false;
+  $("issues-card").hidden = response.issues.length === 0;
+}
+
+function renderSummary(stats, response) {
+  const summary = response.summary;
+  const overdue = response.routes
+    .flatMap((route) => route.stops.filter((stop) => stop.late && overdueAtStart(stop, routePlannedAt(route))))
+    .length;
+  const step = state.data.step;
+  const timing = step
+    ? [
+        `${Math.round(step.data_ms + (step.response ? step.response.summary.planning_ms : 0))} ms`,
+        `nhịp gần nhất: xếp lại ${step.affected.length} KTV (data ${Math.round(step.data_ms)} ms)`,
+      ]
+    : [`${Math.round(summary.planning_ms)} ms`, `xếp tuyến (tra km ${Math.round(summary.travel_ms)} ms)`];
+  const roadRoutes = response.routes.filter((route) => route.travel_source === "OSRM").length;
+  const kmSource =
+    roadRoutes === response.routes.length ? "đường bộ" : roadRoutes === 0 ? "chim bay" : `${roadRoutes}/${response.routes.length} tuyến đường bộ`;
+  const items = [
+    [summary.technicians, "KTV có tuyến"],
+    [stats.matched_jobs, `job khớp lọc / ${stats.open_onsite_jobs.toLocaleString("vi-VN")} job mở`],
+    [summary.routed_stops, "điểm dừng"],
+    [summary.late_stops, `check-in trễ hẹn (${overdue} đã quá hạn từ trước)`],
+    [summary.on_time_rate_percent === null ? "—" : `${summary.on_time_rate_percent}%`, "dự kiến kịp hạn"],
+    [summary.total_km, `km tổng (${kmSource})`],
+    [summary.in_progress_jobs, "job đang làm"],
+    timing,
+  ];
+  $("stats").innerHTML = items
+    .map(([value, text]) => `<div class="stat"><b>${escapeHtml(value)}</b><span>${escapeHtml(text)}</span></div>`)
+    .join("");
+  $("data-notes").textContent =
+    `Không có KTV: ${stats.missing_technician} job · không geocode: ${stats.without_location} job · ` +
+    `KTV có vị trí: ${stats.technicians_with_location}/${stats.technicians} · ` +
+    `đã đọc ${stats.events_applied.toLocaleString("vi-VN")} sự kiện`;
+}
+
+function renderIssues(issues) {
+  const groups = new Map();
+  for (const issue of issues) {
+    if (!groups.has(issue.code)) groups.set(issue.code, []);
+    groups.get(issue.code).push(issue);
+  }
+  $("issues").innerHTML = [...groups]
+    .map(([code, items]) => {
+      const rows = items
+        .slice(0, 50)
+        .map((issue) => `<li>${escapeHtml([issue.emp_account, issue.job_id, issue.detail].filter(Boolean).join(" · "))}</li>`)
+        .join("");
+      const more = items.length > 50 ? `<li>… và ${items.length - 50} mục khác</li>` : "";
+      return `<details><summary><span class="badge warn">${items.length}</span> ${escapeHtml(ISSUE_TEXT[code] || code)}</summary><ul>${rows}${more}</ul></details>`;
+    })
+    .join("");
+}
+
+function renderTechnicians() {
+  const term = $("tech-search").value.trim().toLowerCase();
+  const routes = state.data.response.routes
+    .filter((route) => route.emp_account.toLowerCase().includes(term))
+    .sort((a, b) => b.stops.length - a.stops.length || a.emp_account.localeCompare(b.emp_account));
+  $("technicians").innerHTML =
+    routes
+      .map((route) => {
+        const late = route.stops.filter((stop) => stop.late).length;
+        const [startText, tone] = START_TEXT[route.start_source];
+        const lateText = late ? ` · <span style="color:var(--late)">${late} trễ</span>` : "";
+        const boardAt = state.data.response.planned_at;
+        const plannedAt = routePlannedAt(route);
+        const plannedText = plannedAt !== boardAt ? ` · xếp lúc ${dayClock(plannedAt, boardAt)}` : "";
+        const fresh = state.live.fresh.has(route.emp_account) ? `<span class="badge fresh">vừa xếp lại</span>` : "";
+        return `<li data-account="${escapeHtml(route.emp_account)}" class="${route.emp_account === state.selected ? "active" : ""}">
+          <span class="dot" style="background:${color(route.emp_account)}"></span>
+          <div class="grow">
+            <div class="tech-name">${escapeHtml(route.emp_account)}</div>
+            <div class="tech-meta">${route.stops.length} điểm · ${route.total_km} km${lateText}${plannedText}</div>
+          </div>
+          ${fresh}<span class="badge ${tone}">${startText}</span>
+        </li>`;
+      })
+      .join("") || `<li class="tech-meta">Không có KTV nào</li>`;
+  $("detail-hint").hidden = Boolean(state.selected) || routes.length === 0;
+}
+
+function select(account) {
+  state.selected = state.selected === account ? null : account;
+  renderTechnicians();
+  renderMap();
+  renderDetail();
+}
+
+function ensureMap() {
+  if (!window.L) {
+    $("map").textContent = "Không tải được thư viện bản đồ (cần internet). Danh sách và bảng vẫn dùng được.";
+    return null;
+  }
+  if (!state.map) {
+    $("map").textContent = "";
+    state.map = L.map("map", { preferCanvas: true });
+    L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap",
+    }).addTo(state.map);
+    state.layer = L.layerGroup().addTo(state.map);
+  }
+  return state.map;
+}
+
+const latLng = (location) => [location.lat, location.lng];
+
+function renderMap(fit = true) {
+  const map = ensureMap();
+  if (!map) return;
+  state.layer.clearLayers();
+  const bounds = [];
+  for (const route of state.data.response.routes) {
+    const selected = route.emp_account === state.selected;
+    const dimmed = Boolean(state.selected) && !selected;
+    const path = [route.start_location, ...route.stops.map((stop) => stop.location)].filter(Boolean).map(latLng);
+    if (path.length === 0) continue;
+    L.polyline(path, {
+      color: color(route.emp_account),
+      weight: selected ? 5 : 2,
+      opacity: dimmed ? 0.15 : selected ? 1 : 0.6,
+    })
+      .bindTooltip(route.emp_account, { sticky: true })
+      .on("click", () => select(route.emp_account))
+      .addTo(state.layer);
+    if (!state.selected || selected) bounds.push(...path);
+    if (selected) {
+      addPins(route);
+    } else if (route.start_location && !dimmed) {
+      L.circleMarker(latLng(route.start_location), { radius: 3, color: color(route.emp_account), weight: 1, fillOpacity: 1 })
+        .addTo(state.layer);
+    }
+  }
+  if (fit && bounds.length) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
+}
+
+// Boundary cấp phường làm nhiều điểm trùng tọa độ: gộp số thứ tự vào một nhãn.
+function addPins(route) {
+  const groups = new Map();
+  const add = (location, label) => {
+    const key = `${location.lat},${location.lng}`;
+    if (!groups.has(key)) groups.set(key, { location, labels: [] });
+    groups.get(key).labels.push(label);
+  };
+  if (route.start_location) add(route.start_location, "Đầu");
+  route.stops.forEach((stop) => add(stop.location, String(stop.sequence)));
+  for (const { location, labels } of groups.values()) {
+    const text = labels.length > 3 ? `${labels[0]}…${labels[labels.length - 1]} (${labels.length})` : labels.join(",");
+    const icon = L.divIcon({
+      className: "",
+      iconSize: null,
+      html: `<span class="pin" style="--pin:${color(route.emp_account)}">${escapeHtml(text)}</span>`,
+    });
+    L.marker(latLng(location), { icon })
+      .bindTooltip(labels.length > 1 ? `Cùng tọa độ: ${labels.join(", ")}` : labels[0])
+      .addTo(state.layer);
+  }
+}
+
+function renderDetail() {
+  const route = state.data.response.routes.find((item) => item.emp_account === state.selected);
+  $("detail-card").hidden = !route;
+  if (!route) return;
+  const plannedAt = state.data.response.planned_at;
+  const routeAt = routePlannedAt(route);
+  const jobs = new Map(
+    state.data.request.technicians.flatMap((technician) => technician.jobs.map((job) => [job.job_id, job])),
+  );
+  const [startText] = START_TEXT[route.start_source];
+  const running = route.in_progress_job_id ? ` ${route.in_progress_job_id}` : "";
+  $("detail-title").textContent = `${route.emp_account} — ${route.stops.length} điểm`;
+  $("detail-meta").textContent = [
+    `Tuyến tính lúc ${dayClock(routeAt, plannedAt)}`,
+    `thứ tự ${SEQUENCE_TEXT[route.sequence_source] || route.sequence_source}`,
+    ...(PREVIOUS_TEXT[route.previous_route] ? [PREVIOUS_TEXT[route.previous_route]] : []),
+    `xuất phát ${dayClock(route.start_at, plannedAt)} (${startText}${running})`,
+    `xong ${dayClock(route.finish_at, plannedAt)}`,
+    `${route.total_km} km ${route.travel_source === "OSRM" ? "đường bộ (OSRM)" : "chim bay"}`,
+    `đi ${route.total_travel_minutes} phút`,
+    `làm ${route.total_service_minutes} phút`,
+  ].join(" · ");
+  const score = Object.entries(route.score || {}).filter(([, value]) => value);
+  $("detail-score").textContent = score.length
+    ? `Chi phí theo rule: ${score.map(([code, value]) => `${(state.ruleNames || {})[code] || code} ${value}`).join(" · ")}`
+    : "";
+  $("stops").innerHTML = route.stops
+    .map((stop) => {
+      const job = jobs.get(stop.job_id) || {};
+      let sla = `<span class="badge">không hạn</span>`;
+      if (stop.late === true) {
+        sla = `<span class="badge late">${overdueAtStart(stop, routeAt) ? "đã quá hạn" : "trễ hẹn"}</span>`;
+      } else if (stop.late === false) {
+        sla = `<span class="badge ok">kịp hẹn</span>`;
+      } else if (stop.due_at) {
+        sla = `<span class="badge">chưa rõ ETA</span>`;
+      }
+      if (stop.completion_late) sla += ` <span class="badge late">xong quá hạn</span>`;
+      if (stop.after_shift_end) sla += ` <span class="badge warn">ngoài ca</span>`;
+      return `<tr>
+        <td>${stop.sequence}</td>
+        <td>${escapeHtml(stop.job_id)}</td>
+        <td class="address">${escapeHtml(job.address || "")}</td>
+        <td>${stop.leg_km ?? "—"}</td>
+        <td>${stop.leg_minutes ?? "—"}</td>
+        <td>${dayClock(stop.eta, plannedAt)}</td>
+        <td>${stop.wait_minutes ? `${Math.round(stop.wait_minutes)} phút` : "—"}</td>
+        <td>${dayClock(stop.finish_at, plannedAt)}</td>
+        <td>${dayClock(stop.due_at, plannedAt)}</td>
+        <td>${sla}</td>
+      </tr>`;
+    })
+    .join("");
+}
+
+function renderPayload() {
+  document.querySelectorAll("#payload-tabs button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.key === state.payloadKey);
+  });
+  if (!state.data || !$("payload-card").open) return;
+  const value = state.data[state.payloadKey];
+  const text = value === undefined ? "Chưa có nhịp realtime nào. Bấm ▶ Chạy." : JSON.stringify(value, null, 2);
+  const limit = 300000;
+  $("payload").textContent = text.length > limit ? `${text.slice(0, limit)}\n… (đã cắt bớt; bản đầy đủ xem bằng CLI --at)` : text;
+}
+
+// ---- Realtime: mỗi nhịp gửi (giờ đang xem → giờ mới); server trả sự kiện và tuyến mới
+// của riêng các KTV có sự kiện job. Trang ghép vào bảng tuyến hiện có, KTV khác giữ nguyên.
+
+const addMinutes = (iso, minutes) => new Date(Date.parse(`${iso}Z`) + minutes * 60000).toISOString().slice(0, 19);
+const byAccount = (a, b) => (a.emp_account < b.emp_account ? -1 : a.emp_account > b.emp_account ? 1 : 0);
+
+// Cùng cách đếm với RouteSummary của routing, tính lại sau khi ghép tuyến từ nhiều nhịp.
+function summarize(technicians, routes, timing) {
+  const jobs = technicians.flatMap((technician) => technician.jobs);
+  const pending = jobs.filter((job) => job.state === "PENDING");
+  const stops = routes.flatMap((route) => route.stops);
+  const slaEvaluable = pending.filter((job) => job.due_at !== null).length;
+  const onTime = stops.filter((stop) => stop.late === false).length;
+  return {
+    technicians: routes.length,
+    jobs: jobs.length,
+    pending_jobs: pending.length,
+    in_progress_jobs: jobs.length - pending.length,
+    routed_stops: stops.length,
+    stops_without_eta: stops.filter((stop) => stop.eta === null).length,
+    late_stops: stops.filter((stop) => stop.late === true).length,
+    completion_late_stops: stops.filter((stop) => stop.completion_late === true).length,
+    stops_after_shift_end: stops.filter((stop) => stop.after_shift_end === true).length,
+    sla_evaluable_jobs: slaEvaluable,
+    on_time_stops: onTime,
+    on_time_rate_percent: slaEvaluable ? Math.round((onTime / slaEvaluable) * 10000) / 100 : null,
+    total_km: Math.round(routes.reduce((sum, route) => sum + route.total_km, 0) * 1000) / 1000,
+    travel_ms: timing.travel_ms,
+    planning_ms: timing.planning_ms,
+  };
+}
+
+function mergeStep(body) {
+  const data = state.data;
+  const affected = new Set(body.affected);
+  const untouched = (item) => !affected.has(item.emp_account);
+  const technicians = data.request.technicians.filter(untouched);
+  const routes = data.response.routes.filter(untouched);
+  const issues = data.response.issues.filter((issue) => !issue.emp_account || untouched(issue));
+  for (const account of affected) delete state.live.plannedAt[account];
+  const step = body.response;
+  if (step) {
+    technicians.push(...body.request.technicians);
+    routes.push(...step.routes);
+    issues.push(...step.issues);
+    for (const route of step.routes) state.live.plannedAt[route.emp_account] = step.planned_at;
+  }
+  technicians.sort(byAccount);
+  routes.sort(byAccount);
+  const timing = step ? step.summary : { travel_ms: 0, planning_ms: 0 };
+  data.query = { ...data.query, planned_at: body.to };
+  data.request = { ...data.request, planned_at: body.to, technicians };
+  data.response = { ...data.response, planned_at: body.to, routes, issues, summary: summarize(technicians, routes, timing) };
+  data.stats = body.stats;
+  data.step = body;
+  state.live.clock = body.to;
+  state.live.fresh = new Set(step ? step.routes.map((route) => route.emp_account) : []);
+}
+
+function renderClock() {
+  const iso = state.live.clock;
+  $("live-clock").textContent = iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)} ${iso.slice(11, 16)}` : "—";
+}
+
+function setLiveStatus(text, isError = false) {
+  $("live-status").textContent = text;
+  $("live-status").classList.toggle("error", isError);
+}
+
+function resetLive(body) {
+  const plannedAt = body.response.planned_at;
+  state.live.clock = plannedAt;
+  state.live.plannedAt = Object.fromEntries(body.response.routes.map((route) => [route.emp_account, plannedAt]));
+  state.live.fresh = new Set();
+  $("live-feed").innerHTML = "";
+  $("live-card").hidden = false;
+  renderClock();
+  setLiveStatus("Bấm Chạy để tua: team data áp sự kiện mới, chỉ KTV có sự kiện job được xếp lại.");
+}
+
+function addFeed(body) {
+  const items = body.changes
+    .slice()
+    .reverse()
+    .map(
+      (change) =>
+        `<li><time>${dayClock(change.at, body.to)}</time>${escapeHtml(EVENT_TEXT[change.type] || change.type)} · ` +
+        `${escapeHtml(change.job_id)} · ${escapeHtml(change.emp_account || "chưa gán KTV")}</li>`,
+    );
+  if (body.events > body.changes.length) items.push(`<li class="tech-meta">… và ${body.events - body.changes.length} sự kiện khác</li>`);
+  $("live-feed").insertAdjacentHTML("afterbegin", items.join(""));
+  while ($("live-feed").children.length > 100) $("live-feed").lastElementChild.remove();
+}
+
+function stopLive() {
+  state.live.running = false;
+  clearTimeout(state.live.timer);
+  $("live-toggle").textContent = "▶ Chạy";
+  $("live-toggle").classList.remove("stop");
+}
+
+function startLive() {
+  if (!state.data) return;
+  state.live.running = true;
+  $("live-toggle").textContent = "⏸ Dừng";
+  $("live-toggle").classList.add("stop");
+  liveTick();
+}
+
+async function liveTick() {
+  if (!state.live.running) return;
+  const from = state.live.clock;
+  const to = addMinutes(from, Number($("live-step").value));
+  if (state.live.max && to > state.live.max) {
+    stopLive();
+    setLiveStatus("Đã tới cuối luồng sự kiện.");
+    return;
+  }
+  const started = performance.now();
+  try {
+    const response = await fetch("/api/replay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: { ...state.data.query, planned_at: from }, to }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || response.statusText);
+    if (state.live.clock !== from) return; // Đã lập tuyến lại trong lúc chờ.
+    mergeStep(body);
+    render(false);
+    renderClock();
+    addFeed(body);
+    const routingMs = body.response ? body.response.summary.planning_ms : 0;
+    setLiveStatus(
+      `${clock(from)} → ${clock(to)}: ${body.events} sự kiện job, xếp lại ${body.affected.length} KTV · ` +
+        `data ${Math.round(body.data_ms)} ms · routing ${Math.round(routingMs)} ms · cả nhịp ${Math.round(performance.now() - started)} ms`,
+    );
+  } catch (error) {
+    stopLive();
+    setLiveStatus(`Lỗi: ${error.message}`, true);
+    return;
+  }
+  if (state.live.running) state.live.timer = setTimeout(liveTick, 1000);
+}
+
+$("live-toggle").addEventListener("click", () => (state.live.running ? stopLive() : startLive()));
+$("query-form").addEventListener("submit", plan);
+$("tech-search").addEventListener("input", renderTechnicians);
+$("technicians").addEventListener("click", (event) => {
+  const item = event.target.closest("li[data-account]");
+  if (item) select(item.dataset.account);
+});
+$("payload-card").addEventListener("toggle", renderPayload);
+$("payload-tabs").addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-key]");
+  if (!button) return;
+  state.payloadKey = button.dataset.key;
+  renderPayload();
+});
+loadOptions().catch((error) => setStatus(`Không tải được danh mục: ${error.message}`, true));
+</script>
+</body>
+</html>

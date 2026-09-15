@@ -1,2 +1,0 @@
-"""External data-source adapters."""
-

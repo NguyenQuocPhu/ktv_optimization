@@ -1,259 +1,267 @@
-# KTV Optimizer — Working Memory
+# KTV Routing — Working Memory
 
-> Đọc file này trước khi tiếp tục project. Chỉ cập nhật khi có dữ liệu, giả
-> định, quyết định kiến trúc hoặc kết quả kiểm chứng mới; giữ file ngắn.
-> Khi build thêm tính năng, cập nhật tính năng/kết quả mới vào đầu file này.
+> Đọc file này trước khi tiếp tục project. Giữ file ngắn. Cập nhật khi có dữ
+> liệu, giả định, quyết định hoặc kết quả kiểm chứng mới, đồng thời xóa phần đã
+> lỗi thời.
 
-## Update gần nhất
+## Phạm vi (chốt 2026-09-11)
 
-User demo map đổi tile nền từ `tile.openstreetmap.org` sang
-`a.tile.openstreetmap.fr/hot` vì DNS WSL ánh xạ domain cũ về localhost; Leaflet,
-marker nhiều màu và OSRM routing giữ nguyên. Tile thay thế đã kiểm tra HTTP 200.
+Team chỉ làm phần routing ở giữa: nhận job đã gán sẵn cho KTV, trả về thứ tự
+làm cùng ETA. Frontend, database và hệ thống checklist (gán việc, vòng đời
+status, SLA) thuộc các team khác. Không xây lại phần của họ. Thứ gì chỉ cần để
+chạy thử thì để trong `simulator/`, và lõi không được import nó.
 
-Outcome cuối ngày V1 đã triển khai: operational event giữ thêm `FINISH_DATE` và
-`FLAG_ON_TIME` xuyên mapper/checkpoint/completed output; snapshot actual SLA ưu
-tiên YES/NO. `application.evaluate_day` gom mọi run SUCCESS theo ngày, dedupe
-terminal checklist, tách COMPLETED/CANCELLED, enrich maintenance/INFO/GPS/roster
-và xuất `daily_summary.json`, `checklist_outcomes.csv`, `travel_legs.csv`,
-`technician_outcomes.csv` + latest pointer. GPS actual chỉ là estimate segment
-5–120 km/h/gap≤15m trong checkout→next-checkin và luôn báo coverage. Source
-outcome lệch ngày bị từ chối + đếm mismatch. Synthetic proof PASS: 2 job, SLA
-50%, service40m, GPS3,892km/30m, wait10m, in-shift2/2, AI≤5s 2/2. CLI trên
-5 real-ID snapshots PASS: completion3, SLA66,67%, AI≤5s 5/5; source lịch sử
-lệch ngày3 được phát hiện, GPS đúng ngày không cover nên travel=null. Artifact:
-`artifacts/daily_outcomes/2026-06-30__20260803T091735869510Z/`.
+## Cấu trúc
 
-Re-audit `METADATA_20260730.xlsx`: `FLAG_ON_TIME` là nhãn chính thức
-YES=đúng hẹn, NO=trễ, NA=hủy, INPROCESS=đang xử lý. Sau canonicalize 477.773
-checklist: YES=388.150, NO=45.964, NA=43.611, INPROCESS=48; actual SLA label
-coverage YES/NO=90,86%, rate đúng hẹn lịch sử=89,41%, không có ID xung đột flag.
-GPS sample có 11.322 điểm/10 KTV/10 ngày, median interval 40,8s; bridge được
-`EMPLOYEECODE → INFO.EMP_CODE` và `ACCOUNTEMP → maintenance.EMP_ACCOUNT`.
-Trong cửa sổ sample có 92 khoảng checkout→next-checkin ≤4h; 85 (92,4%) có ≥2
-GPS points. Có thể ước lượng actual travel cho subset này sau lọc gap/jitter/
-speed outlier; không suy rộng toàn đội. Boundary chỉ cho ward/centroid, nên ưu
-tiên INFO LAT_LNG_OUT/IN làm geofence đầu-cuối.
+- `src/ktv_routing/` là phần deploy, chỉ dùng thư viện chuẩn:
+  `contract.py`, `planner.py`, `travel.py` (km/phút: OSRM hoặc chim bay),
+  `service.py`, `__main__.py`.
+- `simulator/ktv_simulator/` đóng vai hệ thống nguồn + team data. Từ 2026-09-12
+  dữ liệu ở dạng luồng sự kiện realtime (người dùng chọn, thay hẳn provider đọc
+  CSV bằng pandas): `events.py` (export → JSONL, pandas, chạy một lần),
+  `provider.py` (`EventWorkloadProvider`, consumer thư viện chuẩn),
+  `geocoding.py`, `convert_xlsx.py`, `fake_boundary.py`, `__main__.py` (`--at`,
+  `--replay`, `--serve`). Web demo `web.py` + `web.html`: form lọc →
+  `POST /api/plan`; nút ▶ Chạy → `POST /api/replay` mỗi giây, ghép tuyến của KTV
+  vừa xếp lại vào bảng; bản đồ Leaflet, danh sách KTV, bảng điểm dừng, cảnh báo,
+  JSON. Chỉ là đồ nghề, không deploy.
+- `research/` là phân tích offline: `time_model.py` (học thời gian → JSON cho
+  routing), `backtest_routing.py` (planner so với KTV thật), cùng bộ cũ
+  `qos_data.py`, `features.py`, `baselines.py`, `build_dataset.py`,
+  `evaluate_baselines.py`, `analyze_emp_coordinate.py`, `data_visualize.ipynb`.
+  Research import `ktv_routing` và `ktv_simulator`, không chiều ngược lại.
+- Chạy test: `.venv/bin/python -m unittest discover -s tests -v`. Test không cần
+  mạng: OSRM được giả lập bằng HTTP server local trong `tests/test_routing.py`.
+  `tests/test_research.py` cần pandas.
+  Research đã chạy thử trên dữ liệu tổng hợp: build dataset → evaluate đều PASS.
 
-Real-checklist metric audit `utils/test_real_metrics_scenarios.py` PASS: tái dùng
-canonical extract HNI_04, 9 checklist ID/branch/address/source KTV thật + 3 KTV
-roster proxy; chỉ mô phỏng status, create/deadline và event order. 5 snapshot có
-initial mixed, system override, start, urgent, route-stop #3 completion, manual
-completion, late urgent completion, pause và add. Independent CSV recalculation
-khớp 90/90 metric. Planned SLA 100→71,43→66,67→50→50%; actual completion SLA
-S3=100%, S4=100%, S5=0%; distance 42,624→15,194 km; revisit xuất hiện đúng
-S2/S3; mọi planning <0,001s. Artifact mới nhất:
-`artifacts/real_metrics_test/real_metrics_20260803T082501376649/`.
+## Quyết định
 
-`summary.json.evaluation_metrics` đã có metric V1: planned/actual SLA,
-distance, travel time, global/technician cluster visits, same-area revisit,
-completed-in-shift, idle wait và AI planning time với target ≤5s. Planned SLA
-tính toàn bộ active job có due; unassigned không được che khỏi denominator.
-Capacity smoke S003 ra 15/16 = 93,75%, distance/travel/wait=0 do cùng location,
-1 global cluster/3 KTV-cluster visits, revisit=0, actual completed=0 và planning
-~0,001s. Artifact mới nhất:
-`artifacts/capacity_overflow_test/capacity_20260803T081140342440/`.
+**Hợp đồng**
 
-Capacity-overflow smoke test `utils/test_capacity_overflow_e2e.py` PASS: 3 KTV,
-ca 300 phút, maintenance 60 phút/job; event batch 6→6→4 tạo active
-6→12→16. Assignment cân bằng 2/2/2 → 4/4/4 → 5/5/5; `CAP-J16` unassigned
-đúng reason `SHIFT_CAPACITY_EXCEEDED`, mỗi KTV 300/300 phút và checkpoint chain
-S001→S002→S003 hợp lệ; assignment cũ không bị đổi.
+- Luồng: `WorkloadQuery(planned_at, filter)` → team data → `RouteRequest` →
+  `plan_routes` → `RouteResponse`.
+- `JobFilter` gồm `case_types`, `branch_names`, `emp_accounts`.
+  - Danh sách rỗng nghĩa là không lọc.
+  - Các tiêu chí khác nhau kết hợp bằng AND; các giá trị trong một danh sách
+    kết hợp bằng OR.
+  - Team data phải trả lại đúng filter đã nhận; `RoutingService` kiểm tra điều
+    này và báo lỗi nếu lệch.
+- Job gửi sang chỉ có 2 state: `PENDING` và `IN_PROGRESS`. Việc map 8 status
+  của công ty sang 2 state này là việc của team data; simulator đang giữ bản
+  giả định.
+- JSON có field lạ thì bị từ chối. Mọi datetime phải cùng kiểu (có hoặc không
+  có múi giờ) với `planned_at`.
+- `due_at` và `priority` do team checklist cung cấp. `service_minutes` do
+  routing tự ước lượng: mặc định bảng V0 theo `CASE_TYPE`; có `--time-model`
+  thì median riêng KTV và bảng khoảng chuyển job học từ lịch sử (2026-09-13).
 
-Operational checklist event/upsert V1 đã hoàn tất: job vắng trong batch mới giữ
-previous active state; active event add/update, chỉ `Đóng checklist`/`Đã xử lý`
-mới `COMPLETED` và release job/KTV. Terminal event lặp được bỏ qua. Mỗi run ghi
-`completed_jobs.csv` (có completion event time) và thống kê
-incoming/ADDED/UPDATED/COMPLETED trong
-`summary.json` + metadata. Compile + multi-snapshot + multi-job event delta +
-operational/demo + V0 + manifest replay đều PASS; regression có case cố ý không
-gửi lại job cũ.
+**Lưu trạng thái**
 
-Synthetic operational queue test `utils/test_multi_job_queue_e2e.py` PASS:
-2 KTV, 12h capacity, job 60 phút. S001 gửi 5 event → KTV-A=3/KTV-B=2;
-S002 chỉ gửi 5 event mới nhưng active merge thành 10 → A=5/B=5, unassigned=0,
-diff đúng 5 ADDED, checkpoint S002 nối S001 và giữ assignment 5 job cũ; mỗi KTV
-state RESERVED, queue count=5. Artifact mẫu:
-`artifacts/multi_job_queue_test/queue_20260802T061051129678/`.
+- Routing không lưu trạng thái. Bản SQLite cũ (event, checklist, báo cáo cuối
+  ngày) đã gỡ, sao lưu tại `.temp/backup_before_routing_core_2026-09-11.tar.gz`.
+- Bản gán việc và web demo nằm trong commit `45535cc`.
 
-Multi-job/KTV đã hoàn tất/pass: work status chỉ mô tả trạng thái hiện tại;
-IDLE/RESERVED/BUSY nhận thêm theo solver/capacity, chỉ loại
-UNAVAILABLE/OFF_SHIFT. `optimizer_state.csv` persist từng job/order;
-`technician_state.csv` thêm `QUEUED_JOB_COUNT` (đọc ngược schema cũ), mỗi run có
-`technician_job_queue.csv` với IN_PROGRESS/NEXT/QUEUED/PAUSED/QUEUED_REVIEW.
-Bỏ limit 1 job và conflict giả khi BUSY nhận job chờ; chỉ nhiều BUSY mới conflict.
-V0, multi-snapshot, operational demo và real-data 7-snapshot smoke đều PASS.
+**Thuật toán (QHĐ theo rule nghiệp vụ, 2026-09-14; thay cách chọn tham lam)**
 
-Docs review pipeline đã hoàn tất tại `docs/PIPELINE_DATA_FLOW_REVIEW.md`: mô tả
-operational data flow từng stage, previous↔current reducer, input/output và
-function contracts, optimizer/routing, user demo/offline flow. Audit P0 cần chốt:
-full-snapshot scope, completion semantics, optimizer assignment ack/timeout,
-roster/live GPS thật, customer GPS/road ETA và appointment/SLA/shift feasibility.
+- Điểm và giờ xuất phát, theo thứ tự ưu tiên:
+  1. Job `IN_PROGRESS`, xuất phát lúc `started_at + service`.
+  2. `last_location`; nếu cũ hơn 240 phút vẫn dùng nhưng kèm issue.
+  3. `UNKNOWN`: tuyến không có ETA.
+- Giờ xuất phát không sớm hơn `shift_start`.
+- Nghiệp vụ lấy từ `data/Mô tả loại tác vụ- ưu tiên để Gợi ý công việc (1).xlsx`
+  (bảng 12 loại tác vụ: mốc hẹn A→B, yêu cầu đúng hẹn, ưu tiên 1–4; mục tiêu;
+  4 rule; thời điểm chạy; đầu ra; tiêu chí; kiến trúc). Toàn bộ nghiệp vụ, kể cả
+  xử lý dữ liệu, ghi ở `docs/BUSINESS_RULES.md` kèm Q1–Q26 chờ người dùng xác nhận.
+- Người dùng sửa: **trễ hẹn = check-in sau hạn**, không phải làm xong sau hạn.
+  Hạn hoàn tất (`complete_by`) mới so với giờ xong.
+- Rule ở `src/ktv_routing/rules.py`, tầng mặc định [giả định]: (1) LATE_CHECKIN
+  có trọng số ưu tiên P1..P4 = 4,3,2,1 → (2) LATE_COMPLETION + AFTER_SHIFT → (3)
+  KM 1, LATE_MINUTES 0,1, TRAVEL_MINUTES 0,05, AREA_REENTRY 2, PRIORITY_DELAY 0,5,
+  FINISH 0,01. Sửa bằng `--print-rules` / `--rules`.
+- QHĐ: trạng thái (mask job đã làm, job cuối); nhãn (giờ xong, tổng chi phí từng
+  tầng, FINISH lấy từ giờ xong); bỏ nhãn thua ở mọi mặt (an toàn cả khi có chờ
+  mốc hẹn). ≤ 9 job chính xác, > 9 tham lam theo khóa + 2-opt; ≤ 32 nhãn/trạng
+  thái (vượt thì APPROXIMATE). Rule 4: `previous_sequence` → giữ thứ tự cũ, chèn
+  job mới; `IF_BETTER` đổi khi tốt hơn ở tầng trên hoặc tầng cuối giảm ≥ 1,0.
+- Đo (24 CPU, chim bay, 1 tiến trình): 1 KTV 5 job 0,33 ms; chi nhánh 100×4
+  10,8 ms; toàn quốc 3.400×3 167 ms; một KTV 9 job p50 66 ms, 12 job chính xác
+  2,6 s (nên để heuristic). HNI_04 thật 09:00: 103/105 KTV OPTIMAL, 2 KTV 12 job
+  HEURISTIC, 289 ms gồm OSRM 84 ms.
+- Km/phút lấy từ `TravelModel`, một lần cho mọi KTV:
+  - `OsrmTravel` (mặc định ở CLI và web demo, chốt 2026-09-11): gọi OSRM
+    `/table`, response có `leg_km`, `leg_minutes` mỗi điểm dừng và
+    `travel_source` mỗi tuyến; ETA = xong điểm trước + `leg_minutes`.
+  - `HaversineTravel`: chim bay 30 km/h; mặc định của `plan_routes` trong code
+    và là dự phòng khi OSRM lỗi (issue `ROAD_DISTANCE_FALLBACK`).
+- OSRM public `router.project-osrm.org` (đo 2026-09-11): từ chối từ 101 tọa độ
+  mỗi request (`TooBig`), khoảng 0,6–1,7 giây mỗi request, chính sách khoảng
+  1 request/giây, không cần proxy từ server. `OsrmTravel` loại tọa độ trùng.
+  Với server public (`parallel_requests=1`): gom nhiều KTV vào một request
+  ≤ 100 điểm và chờ 1 giây giữa các request. Với OSRM tự host (chốt 2026-09-12,
+  vì routing là realtime nên ưu tiên thời gian một request): mỗi KTV một request,
+  16 luồng song song, KTV lỗi thì chỉ KTV đó fallback.
 
-Completion GPS semantics đã hoàn tất/pass: khi hệ thống báo checklist xong,
-current GPS KTV chuyển đúng tọa độ job; active route re-optimize từ điểm mới và
-marker KTV di chuyển. Progress event lưu before/after GPS; snapshot kế tiếp kế
-thừa location này, còn chọn lại ca/task mới reset về GPS đầu ca.
+**Mô hình thời gian (2026-09-13, người dùng duyệt làm bước 1–2; bước chọn thuật
+toán tối ưu phải bàn với người dùng trước)**
 
-Completion action user web đã hoàn tất/pass: mỗi stop có nút Hoàn thành; backend
-loại job khỏi active route, re-optimize, map/list/metrics biến mất đồng bộ, kể cả
-0 job. Event lưu `progress/USER-S00x-R00y.json`; `latest.json` trỏ active plan,
-không tạo thêm full snapshot ngoài S001/S002.
+- File JSON `ktv-time-model/1` do `research/time_model.py` sinh, lõi đọc bằng
+  `load_time_model` (thư viện chuẩn). Thời gian làm: median lượt đầu theo KTV
+  (≥ 10 lượt) → theo CASE_TYPE → chung. Khoảng chuyển job = check-in job sau −
+  checkout job trước, cùng KTV cùng ngày; median theo 7 bucket km chim bay
+  (≤0,05/0,5/1/2/4/8) × giờ rời điểm (ô ≥ 30 cặp). Bỏ cặp chồng lượt (gap < 0).
+- `leg_minutes` khi có mô hình = khoảng chuyển job (gồm chờ, nghỉ trưa); km vẫn
+  từ TravelModel. Bucket tra theo km chim bay, không theo OSRM.
+- Train 01–15/06, test 16–30/06: thời gian làm MAE 59,4 → 36,9, trong ±10 phút
+  5% → 49%; khoảng chuyển MAE 93,8 → 70,6, lệch TB −94 → −35. Median làm 13
+  phút; 0,5–1 km chuyển 44 phút; checkout 11–12h chuyển 130–170 phút.
+- Dữ liệu: tâm phường giả lệch tọa độ check-in thật median 1,6 km (chặng thật
+  median 1,1 km), nên backtest dùng tọa độ check-in thật. 98,6% lượt check-in
+  đúng KTV được gán. 11% lượt làm < 2 phút.
 
-User-facing web V1 đã hoàn tất/pass: 1 KTV, chọn triển khai/bảo trì/thu hồi/random
-thì optimizer thật tạo USER-S001 với 5 job/3 cụm; add checklist tạo USER-S002 với
-6 job, node MỚI và re-route. Leaflet + OSM street tiles; OSRM road geometry đã
-smoke `Ok`, fallback Haversine nếu mất mạng. Màu route theo cụm Q7/Q4/Nhà Bè.
-Session ghi `artifacts/user_demo/<id>/{snapshots,plans,latest.json}`; tách khỏi lab.
+**Backtest 16–30/06 cả nước (2026-09-13, `artifacts/backtest/2026-06-16_30.json`)**
 
-Real-data Snapshot Lab đã hoàn tất: `real_data_demo_server.py` dùng trực tiếp
-engine `real_data_e2e.py`; Prepare tạo workspace riêng, mỗi click chỉ chạy đúng
-1/7 full snapshot và nối checkpoint previous→current. UI hiện source/prepare,
-pipeline stage, diff/assignment/conflict, route mẫu và mọi file input/output.
-HTTP smoke S001→S002, direct stateful S001→S007 và 3 regression suite đều PASS.
+- A. 60.465 lần chọn job kế (≥ 2 job, TB 4,2; ≥ 10 job chỉ 5%): đoán đúng job
+  KTV làm tiếp — planner (hạn sớm nhất) 27,2%, gần nhất 44,8%, mới nhất 34,5%,
+  ngẫu nhiên 31,2%. 19.250 cặp KTV đi thẳng tới job tạo sau lúc checkout.
+- B. 25.296 KTV-ngày: km chim bay thực tế 188,5 nghìn, planner 216,1 nghìn
+  (+15%), gần nhất 142,8 nghìn (−24%). Job trễ mô phỏng gần như không đổi theo
+  thứ tự (~36,7–37,4 nghìn), thực tế 25,7 nghìn.
+- C. ETA theo thứ tự thật: MAE 149,8 → 128,0 phút, lệch TB −78 → −1 khi dùng mô
+  hình; sai ≤ 30 phút chỉ 21,6% → 24,1%.
+- Bước 3 đã làm sau khi bàn với người dùng: QHĐ theo rule (2026-09-14,
+  `artifacts/backtest/2026-06-16_30_dp.json`, hạn check-in tạo + 24 giờ, trễ theo
+  check-in, tọa độ check-in thật). A: đoán đúng job kế 36,6% (tham lam 27,2%).
+  B, planner xếp và chấm bằng mô hình học: km thực tế 188.468 → QHĐ 153.126
+  (−19%), gần nhất 142.770; job check-in trễ thực tế 8.396 → QHĐ 6.229 (−26%),
+  gần nhất 9.229. Cấu hình mặc định: km 148.360, trễ 6.895 → 5.261. Trễ thật
+  6.956. Lưu ý: backtest phải cho planner xếp bằng đúng cấu hình đang chấm (QHĐ
+  phụ thuộc giờ; lần đầu xếp bằng cấu hình mặc định rồi chấm bằng mô hình học
+  cho kết quả sai lệch).
 
-Cleanup 2026-08-01: đã dừng web demo và xóa toàn bộ output sinh lại được
-(`artifacts/demo_e2e`, `artifacts/temp_demo_pipeline`, `data/temp_demo_snapshots`,
-`data/temp_real_replay`, `__pycache__`) cùng generator demo nhỏ cũ. Giữ nguyên
-mọi CSV/XLSX/GeoJSON nguồn, fixtures/test và code web; `artifacts/` để trống.
+**Simulator (luồng sự kiện, 2026-09-12)**
 
-Real-data large replay đã implement/pass bằng `utils/real_data_e2e.py`
-(`branches/prepare/run/inspect`). HNI_04: 17.873 row/17.145 checklist, roster
-proxy 188 KTV, geocode 99,8075%; stress 3.000 + 600 job/7 snapshot PASS trong
-9,388s, peak run ~303 MB. Output test cũ đã dọn; command tạo workspace mới trong
-`data/temp_real_replay/`. Roster/GPS chỉ là proxy lịch sử. Boundary/process cache
-index và runtime dùng centroid GeoJSON nhẹ sinh từ boundary thật.
+- Sự kiện JOB_CREATED, CHECKIN, CHECKOUT, JOB_CLOSED, GPS; dòng đầu là header
+  `format = ktv-events/1`. Trạng thái tại T chỉ dựng từ sự kiện `at ≤ T`.
+- Job mở từ tạo tới đóng, bất kể status cuối (qua phone, Đóng checklist có
+  FINISH vẫn được xếp trước lúc đóng). Status cuối đã đóng mà FINISH trống: đóng
+  lúc visit cuối, không có thì lúc tạo (`at_inferred`).
+- `IN_PROGRESS` từ CHECKIN tới CHECKOUT. Check-in job khác hoặc job đóng thì lượt
+  thiếu checkout kết thúc.
+- Vị trí KTV: tọa độ mới nhất từ GPS/CHECKIN/CHECKOUT (sự kiện thiếu tọa độ thì
+  dùng tọa độ job).
+- Hạn theo bảng loại tác vụ trong file nghiệp vụ (`TASK_TYPES`, `job_deadlines`).
+  Export không có giờ khách hẹn: mốc A = CREATE_DATE [giả định]. MAINTENANCE (loại
+  duy nhất trong export): ưu tiên 2, hạn check-in = tạo + 24 giờ, vì luật này khớp
+  `FLAG_ON_TIME` 90% (10 giờ chỉ 61%). "Ngưng kết nối 4H", "Mạng chập chờn" nay
+  vẫn xếp tuyến (trước coi là xử lý từ xa). Sự kiện JOB_CREATED có `area` = tên
+  phường geocode.
+- METADATA: `APPOINTTIMES_ASSIGNED` = số lần đổi KTV (2,6% ≥ 2), `NUM_APPOINTMENT` =
+  số lần hẹn; không có cột giờ hẹn.
+- Provider lưu snapshot đầu mỗi ngày (file offset + trạng thái) để tua lùi.
+- Realtime: mỗi nhịp chỉ xếp lại KTV có thay đổi job khớp bộ lọc; GPS không kích
+  hoạt. Phải báo cả `VISIT_ENDED` (check-in job ngoài bộ lọc làm kết thúc lượt
+  của job trong bộ lọc). Thiếu nó thì bảng ghép lệch với build đầy đủ; đã gặp
+  thật với TIN0302.DATBT ngày 15/06.
 
-Snapshot editor demo đã hoàn tất và E2E pass: UI chọn Checklist/KTV; checklist hỗ
-trợ add/assign/start/pause/follow-up/complete/reopen, KTV mới được append vào
-`inputs/roster.csv`. Mỗi event sinh full snapshot, chạy operational pipeline và
-atomic checkpoint; test đủ vòng đời S001→S011, HTTP smoke pass rồi reset sạch.
+## Dữ liệu (`data/`, gitignore)
 
-Map demo V3 đã polish và smoke-test: map offline/synthetic có nền khu vực, sông,
-đường chính/phụ, nhãn phường, route casing/màu, marker start/job đánh số, legend
-theo KTV và nhãn tự né mép. Không dùng map tile/API; vẫn là sơ đồ Haversine.
+- `QOS_MAINTENANCE.xlsx` được upload lại ngày 2026-09-11 và convert thành
+  `QOS_MAINTENANCE_utf8.csv`.
+  - Workbook lưu text dạng shared strings; `convert_xlsx.py` đã được sửa để đọc
+    được. Bản convert cũ ra số thứ tự thay cho chữ.
+  - 502.210 dòng, 477.773 checklist; 24.240 ID bị lặp và chỉ khác nhau ở
+    `SERVICES_LIST`.
+  - `CREATE_DATE` nằm trong khoảng 2026-06-01 → 06-30. Ngày có dạng
+    `6/29/2026 2:44 PM`. `OBJ_LOCATION` không dấu.
+- `QOS_MAINT_CHECKIN_INFO_utf8.csv`: 521.003 dòng.
+  - Quan hệ checklist 1→N visit (39.087 ID lặp).
+  - `EMP_CODE` khác `EMP_ACCOUNT`.
+- Boundary thật `boundary_2026-07-31.geojson` chưa có.
+  - Đang dùng file giả `boundary_fake_from_checkins.geojson`, sinh bằng
+    `simulator/ktv_simulator/fake_boundary.py`.
+  - Mỗi phường/xã là trung vị `LAT_LNG_IN` của các checklist ghi phường đó;
+    5.565 phường tìm thấy, giữ 3.497 phường có ≥ 3 check-in.
+  - Job trong cùng một phường trùng tọa độ, nên leg bằng 0 km.
+- Chạy thật HNI_04 + MAINTENANCE ngày 2026-06-15 lúc 09:00, 13:00, 16:00:
+  - Bản provider CSV cũ: 330–345 job, 101–106 KTV. Geocode 344/345. Planning
+    khoảng 1,3 ms; toàn lệnh (nạp CSV) khoảng 20 giây. Vị trí KTV đều lấy từ
+    `LAST_FINISHED_JOB`, vì GPS sample không có KTV HNI_04.
+  - Bản luồng sự kiện (2026-09-12, OSRM tự host): 09:00 có 348 job khớp lọc, 105
+    KTV, 311 điểm, 244 trễ, 456 km; 13:00 có 336 job, 101 KTV, 302 điểm, 165 trễ,
+    534 km (bản cũ: 345/105/321/254/465 và 333/101/297/163/488). Khác vì job
+    cuối cùng xử lý qua phone hoặc đóng vẫn mở tới lúc đóng, và vị trí KTV lấy
+    từ check-in/checkout. Toàn lệnh ~3 giây.
+  - Luồng sự kiện: 1.723.413 sự kiện 01/06–29/07; 43.469 JOB_CLOSED suy ra giờ;
+    33% lượt check-in không có checkout.
+  - Lúc 09:00 có 254 điểm trễ, nhưng 241 điểm đã quá hạn trước cả giờ lập tuyến.
+    Giả định SLA "10 giờ từ CREATE_DATE" mâu thuẫn với dữ liệu thực tế
+    (89% đúng hẹn), nên cần hỏi team checklist.
+  - Có KTV còn 13 job "mở": `FINISH_DATE` của "Đã xử lý" có thể chậm hơn lúc
+    làm xong thật; nên cân nhắc dùng CHECKOUT làm mốc hoàn thành.
+  - So OSRM public với chim bay (09:00 và 13:00): tổng km tăng khoảng 1,6 lần
+    (279,9 → 452,5 km lúc 09:00); mỗi đoạn đường bộ dài hơn chim bay median
+    1,6 lần (p10 1,3, p90 2,7); tốc độ OSRM median 32 km/h. Giờ xong tuyến trễ
+    thêm median khoảng 1 phút, tối đa 19 phút. Không tuyến nào đổi thứ tự (vì
+    ưu tiên SLA trước), số điểm trễ gần như không đổi. Tra km 1,2–2,0 giây mỗi
+    mốc giờ, không có fallback.
+- `sample_emp_coordinate.csv`: 11.322 điểm GPS của 10 KTV trong 10 ngày, dạng
+  `COORDINATE="lat,lng"`.
+- `CASE_TYPE` chỉ có MAINTENANCE, nên mọi job cùng SLA và priority; thứ tự tuyến
+  gần như theo giờ tạo.
+- `FLAG_ON_TIME`:
+  - YES = đúng hẹn, NO = trễ, NA = hủy, INPROCESS = đang xử lý.
+  - Cả 43.611 checklist `Đóng checklist` đều mang NA, và chỉ 252 trong số đó có
+    checkout. Không coi `Đóng checklist` là KTV đã làm xong.
+- `-1` trong cột ngày nghĩa là trống.
+- 100% checklist có `EMP_ACCOUNT`, nhưng export chỉ lưu giá trị cuối, không có
+  lịch sử gán.
 
-UI demo E2E V3 đã hoàn tất theo reference app nhưng ở dạng website: header/tabs,
-summary 4 chỉ số + CTA xanh, map là trọng tâm, quick-add/KTV bên phải, route cards
-phía dưới và tab danh sách việc. Prose bị cắt tối đa; help nằm trong nút `?`, audit
-ẩn mặc định. Layout dùng `minmax(0, ...)`, breakpoint 920/620px; JS syntax, HTTP
-serve và toàn bộ regression pass. Backend/pipeline giữ nguyên.
+## Hiệu năng (stress test 2026-09-12, `tests/stress_routing.py`)
 
-Demo E2E nhiều snapshot đã implement và verify: bootstrap S001 qua operational
-pipeline; add/complete/replan tạo full snapshot CSV kế tiếp, chạy
-diff/conflict/availability/optimizer, atomic checkpoint + metadata. UI hiển thị
-plan/route trước-sau, KTV status, backlog/reason, diff, assignment delta,
-conflict và checkpoint history. Nhóm job mới và compatibility mode là hai
-control riêng; random sinh event mới, không lọc mất job active. Session synthetic
-được lưu ở `artifacts/demo_e2e/<SESSION_ID>/`, không còn chỉ giữ trong RAM.
+- Server 24 CPU, Python 3.12. Chim bay, p50 một request / throughput 1 → 16
+  tiến trình: 1 KTV×5 job 0,03 ms / 35,5k → 476k req/s; chi nhánh 100×4
+  1,8 ms / 550 → 7,2k req/s; toàn quốc 3.400×3 49 ms / 21 → 241 req/s.
+- OSRM giả trễ 5 ms: chi nhánh 59 ms, 17 → 51 req/s (OSRM giả Python là chỗ
+  nghẽn). OSRM public thật: ~1,2 s cho HNI_04, tối đa ~1 req/s theo chính sách.
+- Web demo `/api/plan` HNI_04 chim bay: bản pandas cũ p50 67 ms, ~15 req/s
+  (pandas lọc ~54 ms). Bản luồng sự kiện: p50 10,7 ms, ~80 req/s ở 1 hoặc 4 luồng
+  (tuần tự trong lock); request đầu tới 15/06 09:00 mất 2,9 s để đọc sự kiện.
+- Luồng sự kiện 300 MB: đọc từ đầu tới 15/06 09:00 mất 3,1 s, tới hết 29/07 thêm
+  4,1 s; tua lùi nhờ snapshot 0,06–0,4 s (59 snapshot).
+- Tua realtime, OSRM tự host: HNI_04 08:00–18:00 nhịp 5 phút có 1.854 sự kiện
+  job, 1.187 lượt xếp lại KTV, mỗi nhịp p50 17 ms, p95 26 ms, max 116 ms. Toàn
+  quốc 09:00–10:00 nhịp 1 phút: ~150 sự kiện job, ~105 KTV xếp lại mỗi phút, mỗi
+  nhịp p50 77 ms, p95 191 ms.
+- Kiểm chứng ghép tuyến (node chạy đúng code của web.html): sau 96 nhịp HNI_04 và
+  24 nhịp toàn quốc, job + trạng thái từng KTV trên bảng ghép trùng build đầy đủ;
+  tổng quan tính bằng JS trùng `RouteSummary`.
+- Không stress test OSRM public; script chặn URL đó.
+- OSRM tự host (Docker `ktv-osrm`, CH, `127.0.0.1:5000`, dữ liệu `data/osrm/`,
+  dựng 2026-09-12): extract 1m20s / 13,1 GB RAM, contract 3m17s / 4,5 GB, 4,4 GB
+  đĩa; chạy 2,6 GB RAM. Kết quả trùng server public. `/table` 6/100/500/1000
+  điểm: 7 / 54 / 379 / 1000 ms (tăng gần theo bình phương).
+- Stress với OSRM tự host, cách cũ (gom ≤ 100 điểm, tuần tự), p50 và 1 → 16
+  tiến trình: 1 KTV 3,7 ms / 210 → 3.370 req/s; chi nhánh 284 ms / 3,6 → 53
+  req/s; toàn quốc 7,6 s / 0,2 → 3,2 req/s. Tăng `max_locations` lên 1000 chậm
+  hơn (chi nhánh 353 ms).
+- Cách mới (mỗi KTV một request, 16 luồng, mặc định khi tự host): 1 KTV 3,6 ms /
+  235 → 3.350 req/s; chi nhánh 71 ms / 14 req/s, 4 tiến trình 57 req/s, 16 tiến
+  trình 48 req/s với p50 337 ms (OSRM hết CPU, đây là trần); toàn quốc 1,9 s /
+  0,6 → 3,2 req/s. Tuyến giống hệt cách cũ.
+- HNI_04 dữ liệu thật: tra km ~42–46 ms cả hai cách (88 tọa độ khác nhau vì tâm
+  phường giả; gom = 1 request, song song = 75 request). Tổng km 465,2 (public
+  452,5, lệch ~3% do phiên bản bản đồ khác nhau).
+- urllib mở TCP mới mỗi request (~3 ms overhead); keep-alive là cải tiến có thể
+  làm tiếp, chưa làm.
 
-Operational CSV V1 đã implement và verify: `application/process_snapshot.py`
-xử lý đúng một full snapshot; `pipeline/` ghi state vào checkpoint versioned rồi
-mới atomically switch `latest.json`. Mỗi run có `run_metadata.json` gồm
-stage/status/timing/config/input SHA-256/counts/checkpoint chain/error traceback.
-Demo localhost `application/demo_server.py` cho chọn bảo trì/triển khai/thu hồi/
-random + 3 mode cluster. Test `utils/test_operational_pipeline.py` pass cả
-checkpoint lỗi không đổi latest, failed metadata, S001→S004 add→backlog→complete
-→reassign. Route vẫn là Haversine + nearest-neighbour V0, chưa phải đường bộ.
+## Câu hỏi mở với team khác
 
-Audit workbook mô tả tác vụ bản đầy đủ: có 17 loại tác vụ; rule cao nhất là
-SLA/KPI + khung hẹn A–B, sau đó cluster/road route và event replan. Core hiện
-mới partial. P0 còn thiếu: taxonomy→policy thật (CASE_TYPE hiện chỉ
-MAINTENANCE), appointment window, roster/GPS thật, travel-time đường bộ và
-kiểm tra route/SLA/shift feasibility; chưa có replan gain gate hay KPI predicted
-SLA. Offline duration/lateness baseline chưa nối vào optimizer.
-
-Kiểm chứng theo 477.773 `CHECKLIST_ID`: chỉ 252/43.611 (0,578%) checklist
-`Đóng checklist` có `CHECKOUT_DATE` hợp lệ. 302.682/302.947 checklist có
-checkout mang status `Đã xử lý`. Vì vậy không đồng nhất `Đóng checklist` với
-KTV checkout/hoàn thành thực địa.
-
-Availability V1 giữ toàn bộ KTV đi ca trong roster và checkpoint
-`IDLE/RESERVED/BUSY/UNAVAILABLE/OFF_SHIFT`. Multi-job queue thay rule 1 job/KTV:
-IDLE/RESERVED/BUSY có thể nhận thêm theo solver/capacity; chỉ
-UNAVAILABLE/OFF_SHIFT bị loại. System-fixed cho KTV BUSY là queue hợp lệ, không
-còn conflict giả; nhiều BUSY đồng thời mới conflict. Không xóa KTV bận khỏi roster.
-
-## Mục tiêu
-
-Gợi ý/gán checklist cho KTV đi ca và tạo thứ tự tuyến. Ưu tiên: đúng SLA/hẹn →
-gom khu vực → giảm di chuyển → cân bằng tải. README là context dài hạn, không
-phải pipeline đã implement đầy đủ.
-
-## Data đang có
-
-- `QOS_MAINTENANCE_utf8.csv`: 502.210 dòng, 477.773 checklist.
-- `QOS_MAINT_CHECKIN_INFO_utf8.csv`: 521.003 dòng, 477.773 checklist.
-- `boundary_2026-07-31.geojson`: 3.321 polygon phường/xã, dùng centroid.
-- `sample_emp_coordinate.csv`: 11.322 GPS của 10 KTV; `CREATEBY == ACCOUNTEMP`
-  100%.
-- Workbook mô tả tác vụ chỉ là tài liệu; runtime dùng CSV/GeoJSON.
-- Venv: `/home/nguyenquocphu/.venv`.
-
-## Phát hiện bắt buộc nhớ
-
-- Maintenance có 24.240 ID lặp (24.437 dòng dư), chỉ khác `SERVICES_LIST`;
-  canonicalize trước khi join.
-- INFO là quan hệ `Checklist 1 → N Visit`: 39.087 ID lặp, tối đa 10 dòng.
-  Không tự động coi mỗi dòng lặp là một visit thật; nhiều dòng là ping/check-in
-  lặp. Ưu tiên record có checkout khi cùng `CHECKLIST_ID + EMP_CODE +
-  CHECKIN_DATE`.
-- `-1` trong date = missing/`NaT`.
-- Không dùng riêng `FINISH_DATE is NaT` để xác định active: phần lớn là
-  `Đóng checklist`.
-- CSV maintenance là snapshot cuối, không có assignment/status event history.
-  Không được giả định `EMP_ACCOUNT` đã tồn tại tại `CREATE_DATE`.
-- Quan hệ Job–KTV khi tạo là optional; lịch sử có thể 0..N KTV.
-- `CASE_TYPE` hiện chỉ có `MAINTENANCE`; task-mode chưa phân biệt loại việc.
-- GPS check-in chỉ có sau khi KTV đến, không dùng cho assignment của chính job
-  đó. Boundary centroid chỉ là GPS đại diện phường/xã, không phải nhà khách.
-
-## Optimization V0 đã implement
-
-```text
-Chưa phân công → compatibility graph → weighted greedy assign → routing
-Đã phân công   → giữ EMP_ACCOUNT → routing
-```
-
-Modes:
-
-- `task_location`: branch + CASE_TYPE + bán kính; cluster task+phường/xã.
-- `task`: branch + CASE_TYPE; cho phép thiếu GPS với penalty.
-- `location`: branch + bán kính; cluster phường/xã.
-
-Cost V0 = distance + workload + same-cluster bonus. Routing V0 =
-nearest-neighbour, SLA-first, khoảng cách chim bay, tốc độ mặc định 30 km/h.
-Chưa có road ETA/traffic/appointment, CP-SAT, insertion, ALNS.
-
-Multi-snapshot V1 đã triển khai tuần tự cho checklist event batch, không dùng
-SQLite/API/concurrency. `CsvStateStore` checkpoint active job + system/planned
-assignment; `SnapshotReducer` upsert/complete, tạo diff/conflict, dùng
-incumbent/cluster bonus, optimize rồi ghi state mới. CLI manifest:
-`application/run_snapshot_replay.py`; test/fixture ở
-`utils/test_multi_snapshot_pipeline.py`, `utils/fixtures/snapshots_v1/`.
-Chưa có incremental insertion, frozen route hay race handling.
-
-Roster thật chưa có. Contract tối thiểu: `EMP_ACCOUNT`, `BRANCH_NAME`; nên có
-GPS, shift start/end, supported case types, existing workload. Runtime columns
-tùy chọn: `WORK_STATUS`, `CURRENT_JOB_ID`, `AVAILABLE_AT`. Fixture:
-`utils/fixtures/shift_roster_v0.csv`.
-
-## Code quan trọng
-
-- `src/ktv_optimizer/data/sources/administrative_boundaries/`: address → ward GPS.
-- `src/ktv_optimizer/data/mappers/optimization_mapper.py`: CSV → optimizer input.
-- `src/ktv_optimizer/optimization/`: cluster, graph, cost, assign, route.
-- `src/ktv_optimizer/state/`: snapshot, diff/conflict, CSV checkpoint, reducer.
-- `src/ktv_optimizer/application/run_v0_optimization.py`: CLI → 5 CSV.
-- `application/run_snapshot_replay.py`: manifest snapshots → state + outputs.
-- `utils/test_v0_optimizer.py`, `utils/test_multi_snapshot_pipeline.py`: tests.
-
-V0 đã verify: 11 jobs, 8 demo KTV, 64 edges, 10 assignments, 1 job thiếu
-location, 8 routes; compile/assertions pass.
-
-## Nguyên tắc tiếp tục
-
-- Tách hard compatibility khỏi learned/soft weights.
-- Log cost components và reject reason; không chỉ log total.
-- Chống future leakage bằng point-in-time data.
-- Thuật toán mới phải thay được module V0, không đổi input/output contract.
-- Khi có key mới, cập nhật file này và xóa chi tiết đã lỗi thời.
+1. Job gửi sang đã có tọa độ chưa? Câu trả lời quyết định geocoding thuộc về ai.
+2. Ai tính `due_at`? Có khung giờ hẹn với khách không?
+3. Hai bên gọi nhau kiểu gì: API đồng bộ hay hàng đợi/bảng?
+4. Khi nào tính lại tuyến: mỗi khi có thay đổi hay theo chu kỳ? Có cần giữ
+   nguyên điểm mà KTV đang trên đường tới không?
+5. Vị trí KTV có do team GPS gửi kèm không?
+6. Ai lưu tuyến đã phát cho KTV?
+7. "Đã xử lý và đang theo dõi" có cần tới hiện trường không? (hiện đang coi là không)
