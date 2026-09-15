@@ -394,14 +394,31 @@ class FakeBoundaryTest(unittest.TestCase):
 
 class WebDemoTest(unittest.TestCase):
     def test_page_options_plan_and_replay_api(self):
+        import socket
+        import uvicorn
+        from ktv_simulator.web import make_app
+
         with TemporaryDirectory() as tmp, EventWorkloadProvider(write_event_stream(Path(tmp))) as provider:
-            server = make_server(provider, RoutingConfig(), port=0)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            base = f"http://127.0.0.1:{server.server_address[1]}"
-            opener = build_opener(ProxyHandler({}))  # Không đi qua proxy của môi trường.
+            app = make_app(provider, RoutingConfig())
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            sock.close()
+            uvi_config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+            server = uvicorn.Server(uvi_config)
+            thread = threading.Thread(target=server.run, daemon=True)
+            thread.start()
+            import time as _time
+            for _ in range(50):
+                if server.started:
+                    break
+                _time.sleep(0.1)
+            base = f"http://127.0.0.1:{port}"
+            opener = build_opener(ProxyHandler({}))
 
             def post(path: str, body: object) -> dict:
-                return json.load(opener.open(Request(base + path, data=json.dumps(body).encode("utf-8"))))
+                req = Request(base + path, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"})
+                return json.load(opener.open(req))
 
             try:
                 page = opener.open(base + "/").read().decode("utf-8")
@@ -436,11 +453,11 @@ class WebDemoTest(unittest.TestCase):
                 ):
                     with self.subTest(path), self.assertRaises(HTTPError) as caught:
                         post(path, body)
-                    self.assertEqual(caught.exception.code, 400)
+                    self.assertIn(caught.exception.code, (400, 422))
                     caught.exception.close()
             finally:
-                server.shutdown()
-                server.server_close()
+                server.should_exit = True
+                thread.join(timeout=5)
 
 
 class SimulatorCliTest(unittest.TestCase):
