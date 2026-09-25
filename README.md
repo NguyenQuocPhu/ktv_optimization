@@ -39,15 +39,17 @@ simulator/ktv_simulator/    ĐỒ NGHỀ, không deploy — tạm đóng vai h�
   convert_xlsx.py           workbook QOS → CSV UTF-8
   fake_boundary.py          TẠM: boundary phường/xã giả từ tọa độ check-in
   sample_data.py            TẠM: cắt export QOS theo chi nhánh → data/sample/
+  fake_worklist.py          TẠM: message input giả đúng file API + FAKE_DATA_REVIEW.xlsx để review
+                            (PYTHONPATH=src:simulator .venv/bin/python -m ktv_simulator.fake_worklist)
   web.py, web.html          web demo đóng vai frontend (--serve PORT), có tua realtime
   __main__.py               CLI: nhiều mốc giờ (--at) hoặc tua realtime (--replay)
 
 research/                   offline, không deploy
   time_model.py             học thời gian làm + thời gian chuyển job từ check-in → JSON cho routing
   backtest_routing.py       so planner với cách KTV thật làm, đo sai số ETA
-  qos_data.py, features.py, baselines.py, build_dataset.py, evaluate_baselines.py   dataset + baseline cũ
 tests/                      test_routing.py, test_simulator.py, test_research.py
 docs/CONTRACT.md            hợp đồng với các team khác
+core/                       C++ — lõi chạy thật, chia module, làm dần (xem core/README.md)
 data/sample/                dữ liệu mẫu HNI_04 tháng 6 (16 MB), commit sẵn để chạy ngay
 MEMORY.md                   ghi chú dữ liệu, quyết định, câu hỏi mở
 ```
@@ -114,10 +116,6 @@ PYTHONPATH=src:simulator .venv/bin/python research/backtest_routing.py \
   --data-dir data/sample --events data/sample/events_2026-06_HNI_04.jsonl \
   --time-model artifacts/models/time_model.json --from 2026-06-16 --to 2026-07-01 \
   --out artifacts/backtest/2026-06-16_30.json
-
-# Research cũ: dataset + baseline
-.venv/bin/python research/build_dataset.py --data-dir data/sample --limit 10000
-.venv/bin/python research/evaluate_baselines.py
 
 # ---- Chỉ khi có export đầy đủ (không có trong repo) ----
 # Đổi data/QOS_*.xlsx sang CSV UTF-8

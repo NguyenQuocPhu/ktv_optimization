@@ -26,9 +26,8 @@ chạy thử thì để trong `simulator/`, và lõi không được import nó.
   vừa xếp lại vào bảng; bản đồ Leaflet, danh sách KTV, bảng điểm dừng, cảnh báo,
   JSON. Chỉ là đồ nghề, không deploy.
 - `research/` là phân tích offline: `time_model.py` (học thời gian → JSON cho
-  routing), `backtest_routing.py` (planner so với KTV thật), cùng bộ cũ
-  `qos_data.py`, `features.py`, `baselines.py`, `build_dataset.py`,
-  `evaluate_baselines.py`, `analyze_emp_coordinate.py`, `data_visualize.ipynb`.
+  routing), `backtest_routing.py` (planner so với KTV thật), `data_visualize.ipynb`
+  (phân tích dữ liệu ban đầu). Bộ dataset + baseline cũ đã xóa (còn trong commit `1f6cdbf`).
   Research import `ktv_routing` và `ktv_simulator`, không chiều ngược lại.
 - Chạy test: `.venv/bin/python -m unittest discover -s tests -v`. Test không cần
   mạng: OSRM được giả lập bằng HTTP server local trong `tests/test_routing.py`.

@@ -72,3 +72,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# Tài liệu nội bộ (spec API, SDD của team khác) — không đưa lên repo public
+API-Goi-y-cong-viec*.xlsx
+SDD*.xlsx
