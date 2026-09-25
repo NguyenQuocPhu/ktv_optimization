@@ -8,7 +8,12 @@ version = "0.2.0"
 description = "Xếp thứ tự làm việc cho job đã gán sẵn của từng KTV."
 requires-python = ">=3.12"
 # Lõi routing chỉ dùng thư viện chuẩn.
-dependencies = []
+dependencies = [
+    "fastapi>=0.141.1",
+    "numpy>=2.0",
+    "pandas>=2.2",
+    "uvicorn>=0.53.0",
+]
 
 [project.optional-dependencies]
 # simulator/ và research/ chạy từ source, không nằm trong gói deploy.
@@ -18,3 +23,8 @@ research = ["numpy>=2.0", "pandas>=2.2"]
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["ktv_routing*"]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.13.0",
+]

@@ -4,20 +4,21 @@ Chạy qua CLI simulator với ``--serve PORT``. API:
 
     GET  /              trang web.html
     GET  /api/options   danh mục chi nhánh, loại việc, khoảng thời gian luồng sự kiện
-    POST /api/plan      body = WorkloadQuery JSON → {query, stats, request, response}
-    POST /api/replay    body = {query: WorkloadQuery tại giờ đang xem, to: giờ mới}
-                        → sự kiện trong khoảng, KTV bị ảnh hưởng và tuyến mới của riêng họ
+    POST /api/plan      body = PlanRequest JSON → PlanResponse
+    POST /api/replay    body = ReplayRequest JSON → ReplayResponse
 """
 
 from __future__ import annotations
 
-import json
 import threading
+from contextlib import asynccontextmanager
 from datetime import datetime
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from time import perf_counter
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from ktv_routing import (
     HaversineTravel,
@@ -27,17 +28,95 @@ from ktv_routing import (
     TravelModel,
     WorkloadQuery,
     plan_routes,
-    query_from_dict,
     to_json_dict,
 )
 
 from .provider import EventWorkloadProvider, filter_changes
 
 PAGE_PATH = Path(__file__).with_name("web.html")
-MAX_CHANGES = 200  # Số sự kiện tối đa trả về mỗi nhịp để hiển thị.
+MAX_CHANGES = 200
 
 
-def catalog(provider: EventWorkloadProvider, config: RoutingConfig, travel: TravelModel) -> dict:
+# ---------------------------------------------------------------- Pydantic models
+
+
+class FilterModel(BaseModel):
+    case_types: list[str] = []
+    branch_names: list[str] = []
+    emp_accounts: list[str] = []
+
+
+class PlanRequest(BaseModel):
+    planned_at: datetime
+    filter: FilterModel = FilterModel()
+
+
+class ReplayRequest(BaseModel):
+    query: PlanRequest
+    to: datetime
+
+
+class BranchInfo(BaseModel):
+    name: str
+    jobs: int
+
+
+class OptionsResponse(BaseModel):
+    travel: str
+    time_model: str
+    rules: dict
+    branches: list[BranchInfo]
+    case_types: list[str]
+    created_from: str
+    created_to: str
+    events_to: str
+    events: dict[str, int]
+    shift: list[str] | None
+
+
+class PlanResponse(BaseModel):
+    query: dict
+    stats: dict
+    request: dict
+    response: dict
+
+
+class ReplayResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    from_: str = Field(alias="from", serialization_alias="from")
+    to: str
+    events: int
+    changes: list[dict]
+    affected: list[str]
+    stats: dict
+    query: dict | None
+    request: dict | None
+    response: dict | None
+    data_ms: float
+
+
+# ---------------------------------------------------------------- helpers
+
+
+def _to_filter(model: FilterModel) -> JobFilter:
+    return JobFilter(
+        case_types=tuple(model.case_types),
+        branch_names=tuple(model.branch_names),
+        emp_accounts=tuple(model.emp_accounts),
+    )
+
+
+def _to_query(model: PlanRequest) -> WorkloadQuery:
+    planned_at = model.planned_at
+    if planned_at.tzinfo is not None:
+        raise ValueError("planned_at phải naive (không có múi giờ)")
+    return WorkloadQuery(
+        planned_at=planned_at,
+        filter=_to_filter(model.filter),
+    )
+
+
+def _catalog(provider: EventWorkloadProvider, config: RoutingConfig, travel: TravelModel) -> dict:
     info = provider.info
     return {
         "travel": (
@@ -65,26 +144,20 @@ def catalog(provider: EventWorkloadProvider, config: RoutingConfig, travel: Trav
     }
 
 
-def replay_step(
+def _replay_step(
     provider: EventWorkloadProvider,
     config: RoutingConfig,
     travel: TravelModel,
     query: WorkloadQuery,
     to: datetime,
 ) -> dict:
-    """Một nhịp realtime trong khoảng ``(query.planned_at, to]``.
-
-    Team data áp sự kiện mới; frontend lấy các KTV có sự kiện job khớp bộ lọc và chỉ
-    gửi routing request của những KTV đó. GPS chỉ cập nhật vị trí, không kích hoạt xếp lại.
-    """
-
     if to <= query.planned_at:
         raise ValueError("to phải sau planned_at")
     clock = perf_counter()
     provider.advance_to(query.planned_at)
     changes = filter_changes(provider.advance_to(to, collect=True), query.filter)
     affected = tuple(sorted({change.emp_account for change in changes if change.emp_account}))
-    _, stats = provider.build(WorkloadQuery(to, query.filter))  # Số liệu tổng cho thẻ tổng quan.
+    _, stats = provider.build(WorkloadQuery(to, query.filter))
     sub_query = request = response = None
     if affected:
         sub_query = WorkloadQuery(
@@ -113,72 +186,86 @@ def replay_step(
     }
 
 
+# Keep for CLI replay (no FastAPI involved).
+replay_step = _replay_step
+
+
+# ---------------------------------------------------------------- app factory
+
+
+def make_app(
+    provider: EventWorkloadProvider,
+    config: RoutingConfig,
+    travel: TravelModel | None = None,
+) -> FastAPI:
+    travel = travel or HaversineTravel(config.average_speed_kmh)
+    page = PAGE_PATH.read_bytes()
+    options = _catalog(provider, config, travel)
+    lock = threading.Lock()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+
+    app = FastAPI(lifespan=lifespan)
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index():
+        return HTMLResponse(page, media_type="text/html; charset=utf-8")
+
+    @app.get("/api/options", response_model=OptionsResponse)
+    async def get_options():
+        return options
+
+    @app.post("/api/plan", response_model=PlanResponse)
+    async def post_plan(body: PlanRequest):
+        try:
+            query = _to_query(body)
+            with lock:
+                request, stats = provider.build(query)
+                response = plan_routes(request, config, travel)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        return {
+            "query": to_json_dict(query),
+            "stats": to_json_dict(stats),
+            "request": to_json_dict(request),
+            "response": to_json_dict(response),
+        }
+
+    @app.post("/api/replay", response_model=ReplayResponse, response_model_by_alias=True)
+    async def post_replay(body: ReplayRequest):
+        try:
+            query = _to_query(body.query)
+            to = body.to
+            with lock:
+                payload = _replay_step(provider, config, travel, query, to)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        return payload
+
+    return app
+
+
+# ---------------------------------------------------------------- convenience for stdlib ThreadingHTTPServer (test compat)
+
+
 def make_server(
     provider: EventWorkloadProvider,
     config: RoutingConfig,
     travel: TravelModel | None = None,
     host: str = "127.0.0.1",
     port: int = 8765,
-) -> ThreadingHTTPServer:
-    travel = travel or HaversineTravel(config.average_speed_kmh)
-    page = PAGE_PATH.read_bytes()
-    options = catalog(provider, config, travel)
-    lock = threading.Lock()  # Provider có một con trỏ đọc luồng sự kiện dùng chung.
+):
+    """Return a ``uvicorn.Server`` bound to *host*:*port* (use port=0 for random)."""
+    import uvicorn
 
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, format: str, *args: object) -> None:
-            pass  # Giữ terminal gọn.
+    app = make_app(provider, config, travel)
+    uvi_config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    return uvicorn.Server(uvi_config)
 
-        def _send(self, status: HTTPStatus, body: bytes, content_type: str) -> None:
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
 
-        def _json(self, status: HTTPStatus, payload: object) -> None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self._send(status, body, "application/json; charset=utf-8")
-
-        def do_GET(self) -> None:
-            if self.path in ("/", "/index.html"):
-                self._send(HTTPStatus.OK, page, "text/html; charset=utf-8")
-            elif self.path == "/api/options":
-                self._json(HTTPStatus.OK, options)
-            else:
-                self._json(HTTPStatus.NOT_FOUND, {"error": "không có đường dẫn này"})
-
-        def do_POST(self) -> None:
-            if self.path not in ("/api/plan", "/api/replay"):
-                self._json(HTTPStatus.NOT_FOUND, {"error": "không có API này"})
-                return
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-                body = json.loads(self.rfile.read(length) or b"null")
-                if self.path == "/api/plan":
-                    query = query_from_dict(body)
-                    with lock:
-                        request, stats = provider.build(query)
-                        response = plan_routes(request, config, travel)
-                    payload = {
-                        "query": to_json_dict(query),
-                        "stats": to_json_dict(stats),
-                        "request": to_json_dict(request),
-                        "response": to_json_dict(response),
-                    }
-                else:
-                    if not isinstance(body, dict):
-                        raise ValueError("body phải là {query, to}")
-                    query = query_from_dict(body.get("query"))
-                    to = datetime.fromisoformat(str(body.get("to")))
-                    with lock:
-                        payload = replay_step(provider, config, travel, query, to)
-            except ValueError as error:  # JSON hỏng, sai hợp đồng, giờ có múi giờ, to không hợp lệ.
-                self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-                return
-            self._json(HTTPStatus.OK, payload)
-
-    return ThreadingHTTPServer((host, port), Handler)
+# ---------------------------------------------------------------- CLI entry
 
 
 def serve(
@@ -189,14 +276,8 @@ def serve(
     host: str,
     port: int,
 ) -> None:
-    try:
-        server = make_server(provider, config, travel, host, port)
-    except OSError as error:
-        raise SystemExit(f"Không mở được {host}:{port} ({error.strerror}). Thử cổng khác với --serve.") from None
-    print(f"Web demo: http://{host}:{server.server_address[1]}  (Ctrl+C để dừng)", flush=True)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    import uvicorn
+
+    app = make_app(provider, config, travel)
+    print(f"Web demo: http://{host}:{port}  (Ctrl+C để dừng)", flush=True)
+    uvicorn.run(app, host=host, port=port, log_level="info")
