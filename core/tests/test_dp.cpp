@@ -50,7 +50,7 @@ int main() {
     Rules rules = default_rules();
     rules.max_labels = 100000;  // Không cắt nhãn → phải khớp tuyệt đối với vét cạn.
     int checked = 0;
-    for (int round = 0; round < 300; ++round) {
+    for (int round = 0; round < 600; ++round) {
         int n = 1 + round % 7;
         Problem p = random_problem(rng, n);
         if (round % 2) {  // Nửa số bài có nghỉ trưa: khung [open, open + 90], nghỉ 45 phút.
@@ -109,6 +109,40 @@ int main() {
     v = solve(one, rules).steps.at(0);
     CHECK(v.cost[LATE_CHECKIN] == 4 && std::abs(v.cost[LATE_MINUTES] - (v.checkin + 10)) < 1e-9);
     CHECK(solve(big, rules).steps.size() == 15);  // 14 việc + 1 lần nghỉ trưa.
+
+    {  // Bài rỗng: không việc thì không bước, vẫn là Optimal.
+        Problem empty;
+        empty.travel = haversine_matrix({{21.0, 105.8}}, 30);
+        Solution s = solve(empty, default_rules());
+        CHECK(s.order.empty() && s.steps.empty() && s.source == Source::Optimal);
+    }
+    {  // Một việc, không hạn/không ca: tới = thời gian đi, xong = tới + thời gian làm.
+        Problem one;
+        one.travel = haversine_matrix({{21.0, 105.8}, {21.03, 105.81}}, 30);
+        one.service = {30};
+        one.opens = {kNone};
+        one.due = {kNone};
+        one.complete_by = {kNone};
+        one.weight = {4};
+        one.same_area = {0};
+        one.shift_end = kNone;
+        Solution s = solve(one, default_rules());
+        CHECK(s.steps.size() == 1);
+        CHECK(std::abs(s.steps[0].checkin - s.steps[0].travel) < 1e-9);
+        CHECK(std::abs(s.steps[0].done - (s.steps[0].checkin + 30)) < 1e-9);
+    }
+    {  // Heuristic với số việc lớn vẫn là hoán vị đủ.
+        for (int n : {20, 40}) {
+            Problem big = random_problem(rng, n);
+            Solution s = solve(big, default_rules());
+            CHECK(s.source == Source::Heuristic);
+            std::vector<int> sorted = s.order;
+            std::sort(sorted.begin(), sorted.end());
+            std::vector<int> all(n);
+            std::iota(all.begin(), all.end(), 0);
+            CHECK(sorted == all);
+        }
+    }
 
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_dp: OK (" << checked << " bài so với vét cạn)\n";

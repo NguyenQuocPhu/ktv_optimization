@@ -18,8 +18,18 @@ add_executable(ktv_core src/main.cpp)
 target_link_libraries(ktv_core ktv)
 
 enable_testing()
-foreach(name api dp plan travel normalization sla cluster adapter)
+foreach(name api dp plan travel normalization sla cluster adapter pipeline)
   add_executable(test_${name} tests/test_${name}.cpp)
   target_link_libraries(test_${name} ktv)
   add_test(NAME ${name} COMMAND test_${name})
 endforeach()
+
+# CLI end-to-end cần đường dẫn binary ktv_core.
+add_executable(test_cli tests/test_cli.cpp)
+target_link_libraries(test_cli ktv)
+add_test(NAME cli COMMAND test_cli $<TARGET_FILE:ktv_core>)
+
+# Bất biến trên diện rộng; tùy chọn chạy thêm benchmark thật.
+add_executable(test_invariants tests/test_invariants.cpp)
+target_link_libraries(test_invariants ktv)
+add_test(NAME invariants COMMAND test_invariants ${CMAKE_CURRENT_SOURCE_DIR}/../artifacts/fake/messages.jsonl)

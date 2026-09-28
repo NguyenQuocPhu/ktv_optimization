@@ -28,10 +28,19 @@ int main() {
         std::vector<json> records = read_records(in);
         CHECK(records.size() == 2 && records[0]["a"] == 1 && records[1]["b"] == 2);
     }
-    {  // JSON hỏng trên một dòng → record discarded để main báo 400.
+    {  // JSON hỏng trên một dòng → record discarded để main báo 400, dòng còn lại vẫn đọc.
         std::istringstream in("{bad}\n{\"a\":1}\n");
         std::vector<json> records = read_records(in);
         CHECK(records.size() == 2 && records[0].is_discarded() && records[1]["a"] == 1);
+    }
+    {  // Object pretty nhiều dòng bị hỏng → đúng MỘT input lỗi, không phải một lỗi mỗi dòng.
+        std::istringstream in("{\n  \"staff\": {},\n  \"tasks\": {\n");
+        std::vector<json> records = read_records(in);
+        CHECK(records.size() == 1 && records[0].is_discarded());
+    }
+    {  // File rỗng/whitespace → không có input.
+        std::istringstream in(" \n\t\n");
+        CHECK(read_records(in).empty());
     }
     {  // Envelope: thiếu metadata thì sinh; có thì dùng lại.
         json bare = json::object();

@@ -114,6 +114,83 @@ int main() {
         CHECK((paths == std::set<std::string>{"staff.staff_id", "tasks.trien_khai[0].latlng",
                                               "tasks.trien_khai[0].sla.priority_in_day", "tasks.trien_khai[0].sla", "tasks"}));
     }
+    {
+        // Lỗi dữ liệu lõi: trùng task_id, sai định dạng hẹn, field lạ trong task.
+        json data = sample();
+        json dup = data["tasks"]["hoa_don"][0];
+        data["tasks"]["hoa_don"].push_back(dup);
+        data["tasks"]["trien_khai"][0]["appointment"] = "not-a-date";
+        data["tasks"]["trien_khai"][0]["foo"] = 1;
+        std::vector<ktv::Error> errors;
+        ktv::parse_message(data, errors);
+        std::set<std::string> paths;
+        for (const auto& e : errors) paths.insert(e.path);
+        CHECK(paths.count("tasks.hoa_don[1].task_id") == 1);
+        CHECK(paths.count("tasks.trien_khai[0].appointment") == 1);
+        CHECK(paths.count("tasks.trien_khai[0].foo") == 1);
+    }
+    {
+        // Task đặt sai nhóm so với khóa tasks.
+        json data = sample();
+        data["tasks"]["trien_khai"][0]["task_group_name"] = "bao_tri";
+        data["tasks"]["trien_khai"][0]["task_group_id"] = 2;
+        std::vector<ktv::Error> errors;
+        ktv::parse_message(data, errors);
+        bool group_failed = false;
+        for (const auto& e : errors) group_failed |= e.path == "tasks.trien_khai[0]";
+        CHECK(group_failed);
+    }
+
+    {  // Nhiều biến thể dữ liệu sai: mỗi cái phải báo đúng đường dẫn field.
+        auto bad = [](json data, const std::string& path) {
+            std::vector<ktv::Error> errors;
+            ktv::parse_message(data, errors);
+            bool found = false;
+            for (const auto& e : errors) found |= e.path == path;
+            CHECK(found);
+        };
+        { json d = sample(); d["staff"].erase("plots"); bad(d, "staff.plots"); }
+        { json d = sample(); d["staff"]["plots"] = json::array(); bad(d, "staff.plots"); }
+        { json d = sample(); d["staff"]["plots"][0]["role"] = 2; bad(d, "staff.plots"); }
+        { json d = sample(); d["staff"]["latlng"] = "40.0,105.0"; bad(d, "staff.latlng"); }
+        { json d = sample(); d["staff"]["available"] = "17:30-08:00"; bad(d, "staff.available"); }
+        { json d = sample(); d["staff"]["status"] = 0; bad(d, "staff.status"); }
+        { json d = sample(); d["staff"].erase("current_task"); bad(d, "staff.current_task"); }
+        { json d = sample(); d["staff"]["foo"] = 1; bad(d, "staff.foo"); }
+        { json d = sample(); d["tasks"].erase("onsite"); bad(d, "tasks"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["sla"]["sla_minutes"] = 0; bad(d, "tasks.trien_khai[0].sla.sla_minutes"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["sla"]["priority_in_day"] = 0; bad(d, "tasks.trien_khai[0].sla.priority_in_day"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["handle_minutes"] = -1; bad(d, "tasks.trien_khai[0].handle_minutes"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["contract_id"] = "x"; bad(d, "tasks.trien_khai[0].contract_id"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["create_date"] = "bad"; bad(d, "tasks.trien_khai[0].create_date"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["complete_date"] = "bad"; bad(d, "tasks.trien_khai[0].complete_date"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["task_type_name"] = "khong_ton_tai"; bad(d, "tasks.trien_khai[0].task_type_name"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["task_type_id"] = 99; bad(d, "tasks.trien_khai[0].task_type_id"); }
+        { json d = sample(); d["tasks"]["trien_khai"][0]["latlng"] = "21.03;105.80"; bad(d, "tasks.trien_khai[0].latlng"); }
+    }
+    {  // staff_role 3 và contract dùng được.
+        json data = sample();
+        data["tasks"]["trien_khai"][0]["staff_role"] = 3;
+        data["tasks"]["trien_khai"][0]["contract_id"] = 5;
+        data["tasks"]["trien_khai"][0]["contract_no"] = "S1";
+        std::vector<ktv::Error> errors;
+        ktv::parse_message(data, errors);
+        for (const auto& e : errors) std::cerr << "  lỗi không mong đợi: " << e.path << " " << e.problem << "\n";
+        CHECK(errors.empty());
+    }
+    {  // Mẫu workbook mới: trien_khai_box + subtype gsafe.
+        json data = sample();
+        json& t = data["tasks"]["trien_khai"][0];
+        t["task_type_id"] = 4;
+        t["task_type_name"] = "trien_khai_box";
+        t["task_sub_id"] = 12;
+        t["task_sub_name"] = "gsafe";
+        std::vector<ktv::Error> errors;
+        ktv::parse_message(data, errors);
+        for (const auto& e : errors) std::cerr << "  lỗi không mong đợi: " << e.path << " " << e.problem << "\n";
+        CHECK(errors.empty());
+    }
+
     CHECK(!ktv::parse_datetime("2026-02-29 08:00:00"));
     CHECK(ktv::parse_datetime("2028-02-29 08:00:00"));
     CHECK(ktv::format_datetime(*ktv::parse_datetime("1969-12-31 23:59:00")) == "1969-12-31 23:59:00");

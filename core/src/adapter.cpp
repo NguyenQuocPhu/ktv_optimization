@@ -7,18 +7,28 @@
 namespace ktv {
 
 std::vector<json> read_records(std::istream& in) {
-    const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (content.find_first_not_of(" \t\r\n") == std::string::npos) return {};  // file rỗng: không có input
+
+    // Ưu tiên một object (có thể pretty nhiều dòng). Hợp lệ → đúng một record.
+    json whole = json::parse(content, nullptr, false);
+    if (!whole.is_discarded()) return {std::move(whole)};
+
+    // Không phải một JSON hợp lệ: thử đọc như JSONL. Chỉ coi là JSONL khi có ít nhất một dòng tự parse được;
+    // dòng hỏng vẫn giữ dạng discarded để main trả 400 cho đúng dòng đó.
     std::vector<json> records;
-    if (json whole = json::parse(content, nullptr, false); !whole.is_discarded()) {
-        records.push_back(std::move(whole));
-        return records;
-    }
     std::istringstream stream(content);
     std::string line;
+    bool any_valid = false;
     while (std::getline(stream, line)) {
-        if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;  // bỏ dòng trắng
-        records.push_back(json::parse(line, nullptr, false));  // discarded = JSON hỏng, để main báo lỗi
+        if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
+        json value = json::parse(line, nullptr, false);
+        any_valid |= !value.is_discarded();
+        records.push_back(std::move(value));
     }
+    // Không dòng nào parse được: cả nội dung là MỘT input lỗi (thường là object pretty bị hỏng),
+    // phải cho đúng một error response thay vì một lỗi mỗi dòng.
+    if (!any_valid) return {std::move(whole)};
     return records;
 }
 

@@ -45,6 +45,16 @@ int main() {
         auto two = ktv::split_clusters({1.0, 2.5, 0.5}, ktv::kClusterSplitKm);
         CHECK(two.size() == 2 && two[0].count == 1 && two[1].first == 1 && two[1].count == 2);
         CHECK(ktv::split_clusters({}, 2.0).empty());
+        CHECK(ktv::split_clusters({1.0}, ktv::kClusterSplitKm).size() == 1);
+    }
+
+    {  // Biên ngưỡng: đúng 2.0 km không cắt, hơn 2.0 km thì cắt; toàn 0 gom một cụm.
+        CHECK(ktv::split_clusters({1.0, 2.0}, ktv::kClusterSplitKm).size() == 1);
+        CHECK(ktv::split_clusters({1.0, 2.0001}, ktv::kClusterSplitKm).size() == 2);
+        CHECK(ktv::split_clusters({0.0, 0.0, 0.0}, ktv::kClusterSplitKm).size() == 1);
+        auto mixed = ktv::split_clusters({0.0, 0.5, 3.0, 0.2}, ktv::kClusterSplitKm);
+        CHECK(mixed.size() == 2 && mixed[0].first == 0 && mixed[0].count == 2 && mixed[1].first == 2 && mixed[1].count == 2);
+        CHECK(ktv::split_clusters({9.0, 9.0, 9.0}, ktv::kClusterSplitKm).size() == 3);
     }
 
     const ktv::Minutes server_now = *ktv::parse_datetime("2026-09-10 09:00:05");

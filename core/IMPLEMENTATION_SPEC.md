@@ -231,6 +231,24 @@ Future Kafka worker adapter ───┴─> parse_message (api)
 
 ## 8. Test specification
 
+### Bộ test hiện tại (chạy `ctest` trong `core/build`)
+
+| Test | Nội dung | Quy mô |
+|---|---|---|
+| `api` | parser contract: field mới, biến thể sai, mutation table | ~60 kiểm |
+| `dp` | QHĐ so vét cạn + heuristic + biên | 600 bài đối chiếu vét cạn, 0,7 s |
+| `plan` | một message end-to-end, nghỉ trưa, 422 | nhỏ |
+| `travel` | OSRM local, ô null, fallback 424 | nhỏ |
+| `normalization` | status/current/complete/location, ma trận status | nhỏ |
+| `sla` | deadline matrix, projected_sla biên | ~40 kiểm |
+| `cluster` | chia cụm, biên ngưỡng 2 km, nhiều cụm | nhỏ |
+| `adapter` | object/JSONL/envelope, JSON hỏng | nhỏ |
+| `pipeline` | ETA/SLA labels, ca làm, current, create_date, heuristic, 422, tất định | ~30 kịch bản |
+| `cli` | binary thật: object/JSONL/`--at`/lỗi | end-to-end |
+| `invariants` | 3.000 message sinh ngẫu nhiên (seeded) + benchmark 5.332 message, kiểm bất biến và tất định | ~380.000 kiểm, 2,8 s |
+
+`invariants` chốt các bất biến: `tasks_total` = số TASK, task_id không lặp, `seq` liên tục theo cụm, thời gian không lùi, `cluster_seg` liên tục, `success/data/422` nhất quán, `routed` khớp normalization, cùng input cho cùng output.
+
 ### Test giữ nguyên
 
 - `test_dp`: toàn bộ 300 bài random so QHĐ với exhaustive permutations; nghỉ trưa ở các bài hiện có; heuristics tạo hoán vị hợp lệ.

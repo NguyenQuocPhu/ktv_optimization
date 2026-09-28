@@ -112,6 +112,43 @@ int main() {
         CHECK(!w.staff_off && w.candidates.size() == 1);
     }
 
+    {  // Ma trận status × tọa độ × complete_date; kiểm thứ tự ưu tiên loại.
+        struct Case {
+            int status;
+            bool location;
+            bool complete;
+            size_t routable;
+            int status_excluded;
+            int complete_excluded;
+            int location_excluded;
+        };
+        const Case cases[] = {
+            {6, true, false, 1, 0, 0, 0},    // hợp lệ
+            {6, false, false, 0, 0, 0, 1},   // thiếu tọa độ
+            {6, true, true, 0, 0, 1, 0},     // hoàn tất
+            {6, false, true, 0, 0, 1, 0},    // hoàn tất xét trước tọa độ
+            {10, true, false, 0, 1, 0, 0},   // 10 không trùng current → loại theo status
+            {0, true, false, 0, 1, 0, 0},
+            {97, true, false, 0, 1, 0, 0},
+            {999, true, false, 0, 1, 0, 0},
+        };
+        for (const Case& c : cases) {
+            const json tasks = json::array(
+                {make_task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, c.status, c.location ? "21.03,105.81" : "",
+                           c.complete ? "2026-09-01 10:00:00" : "")});
+            std::vector<ktv::Error> errors;
+            ktv::Message message =
+                ktv::parse_message(make_message(nullptr, json(nullptr), empty, tasks, empty, empty, empty), errors);
+            CHECK(errors.empty());
+            if (!errors.empty()) continue;
+            ktv::NormalizedWorklist w = ktv::normalize_worklist(message);
+            CHECK(w.candidates.size() == c.routable);
+            CHECK(w.stats.excluded_status == c.status_excluded);
+            CHECK(w.stats.excluded_completed == c.complete_excluded);
+            CHECK(w.stats.excluded_missing_location == c.location_excluded);
+        }
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_normalization: OK\n";
     return failures != 0;

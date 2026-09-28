@@ -60,9 +60,16 @@ int main(int argc, char** argv) {
     }
     const std::vector<ktv::json> records = ktv::read_records(in);
 
-    // --at giúp test xác định giờ; không có thì lấy giờ máy.
-    const ktv::Minutes server_now =
-        at.empty() ? vietnam_now() : ktv::parse_datetime(at).value_or(vietnam_now());
+    // --at giúp test xác định giờ. Sai format phải báo lỗi, không âm thầm dùng giờ máy.
+    ktv::Minutes server_now = vietnam_now();
+    if (!at.empty()) {
+        if (auto parsed = ktv::parse_datetime(at)) {
+            server_now = *parsed;
+        } else {
+            std::cerr << "--at cần \"YYYY-MM-DD HH:mm:ss\": " << at << "\n";
+            return 2;
+        }
+    }
 
     std::ofstream file;
     if (!out_path.empty()) file.open(out_path);
