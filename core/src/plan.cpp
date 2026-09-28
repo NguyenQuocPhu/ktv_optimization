@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cmath>
 
+#include "ktv/normalization.hpp"
+
 namespace ktv {
 
 namespace {
@@ -76,18 +78,20 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     const Staff& staff = message.staff;
     const Minutes now = message.planned_at.value_or(server_now);
     const Minutes day = start_of_day(now);
+    const NormalizedWorklist worklist = normalize_worklist(message);
+    if (worklist.staff_off) {  // KTV off: không sinh tuyến.
+        result.response = error_response("422", "KTV đang off, không sinh tuyến", message.message_id, server_now);
+        return result;
+    }
+    const std::vector<const Task*>& tasks = worklist.candidates;
+    result.routed = static_cast<int>(tasks.size());
+    result.excluded = worklist.stats.excluded_missing_location;
+
     const Minutes shift_start = day + staff.available.front().first;
     const Minutes shift_end = day + staff.available.back().second;  // Nhiều khung giờ: xử lý ở bước sau.
     Minutes start = std::max(now, shift_start);
-    if (staff.current_task) start = std::max(start, now + static_cast<Minutes>(rules.current_task_minutes));
+    if (worklist.current_task) start = std::max(start, now + static_cast<Minutes>(rules.current_task_minutes));
 
-    // Việc xếp được: có tọa độ. Việc đang làm không nằm trong tasks (api đã kiểm tra).
-    std::vector<const Task*> tasks;
-    for (const Task& task : message.tasks) {
-        if (task.latlng) tasks.push_back(&task);
-        else ++result.excluded;
-    }
-    result.routed = static_cast<int>(tasks.size());
     if (tasks.empty() || tasks.size() > 64) {
         result.response = error_response("422", tasks.empty() ? "Không có công việc để dựng tuyến" : "Quá 64 việc cho một KTV",
                                          message.message_id, server_now);
