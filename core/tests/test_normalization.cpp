@@ -78,8 +78,10 @@ int main() {
         ktv::PlanResult r = ktv::plan(message, ktv::default_rules(), *ktv::parse_datetime("2026-09-10 09:00:05"));
         CHECK(r.response["success"] == true && r.response["statuscode"] == "200");
         CHECK(r.routed == 1);
-        for (const auto& row : r.response["data"]["clusters"][0]["schedule"])
+        for (const auto& row : r.response["data"]["clusters"][0]["schedule"]) {
             CHECK(row["type"] != "TASK" || row["task_id"] == 101);
+            if (row["task_id"] == 101) CHECK(row["handle_minutes"] == 120);  // "" → định mức trien_khai_net
+        }
     }
 
     {  // current_task không có row khớp: dựng bản tối thiểu, ứng viên vẫn giữ.

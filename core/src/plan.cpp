@@ -5,22 +5,13 @@
 #include <cmath>
 
 #include "ktv/normalization.hpp"
+#include "ktv/sla.hpp"
 
 namespace ktv {
 
 namespace {
 
 using ojson = nlohmann::ordered_json;
-
-Minutes start_of_day(Minutes t) { return t - ((t % 1440) + 1440) % 1440; }
-
-Minutes end_of_month(Minutes t) {
-    std::string text = format_datetime(t);  // "YYYY-MM-DD ..."
-    int year = std::stoi(text.substr(0, 4)), month = std::stoi(text.substr(5, 2));
-    char next[32];
-    std::snprintf(next, sizeof next, "%04d-%02d-01 00:00:00", month == 12 ? year + 1 : year, month % 12 + 1);
-    return *parse_datetime(next) - 1;
-}
 
 std::string hhmm(Minutes t) { return format_datetime(t).substr(11, 5); }
 std::string latlng(Point p) {
@@ -31,38 +22,6 @@ std::string latlng(Point p) {
 double round_to(double value, int digits) {
     double scale = std::pow(10, digits);
     return std::round(value * scale) / scale;
-}
-
-// Hạn của một việc theo loại việc (sheet 05) và giờ hẹn. Mốc trả về là phút tuyệt đối.
-struct Deadlines {
-    std::optional<Minutes> opens, due, complete_by;
-};
-Deadlines deadlines(const Task& task, const TaskKind& kind, Minutes now) {
-    Deadlines d;
-    if (task.appointment) {
-        d.opens = task.appointment;
-        if (task.sla_minutes) d.due = *task.appointment + *task.sla_minutes;  // Check-in ≤ B = A + SLA.
-        else d.complete_by = start_of_day(*task.appointment) + 1439;          // Xong trong ngày hẹn.
-        return d;
-    }
-    // Không hẹn: "trong ngày tạo phiếu" lấy hôm nay (API chưa có ngày tạo phiếu). [GIẢ ĐỊNH]
-    if (kind.on_time == OnTime::DoneSameCreatedDay || kind.on_time == OnTime::DoneSameAppointmentDay)
-        d.complete_by = start_of_day(now) + 1439;
-    else if (kind.on_time == OnTime::DoneWithinMonth)
-        d.complete_by = end_of_month(now);
-    return d;  // Loại "check-in trước B" mà không hẹn: chưa có B, không tính trễ.
-}
-
-// ON_TIME / AT_RISK / WILL_BREACH / ALREADY_BREACHED (sheet 05) theo hạn check-in, nếu không thì hạn làm xong.
-const char* projected_sla(const Visit& v, double due, double complete_by, double service, double now, const Rules& r) {
-    double deadline = !std::isnan(due) ? due : complete_by;
-    if (std::isnan(deadline)) return "ON_TIME";
-    double at = !std::isnan(due) ? v.checkin : v.done;
-    if (deadline < now) return "ALREADY_BREACHED";
-    if (at > deadline) return "WILL_BREACH";
-    double spare = deadline - at;
-    if (spare < r.at_risk_minutes || spare < r.at_risk_ratio * service) return "AT_RISK";
-    return "ON_TIME";
 }
 
 }  // namespace
@@ -104,7 +63,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     auto relative = [&](std::optional<Minutes> t) { return t ? static_cast<double>(*t - start) : kNone; };
     for (const Task* task : tasks) {
         const TaskKind& kind = *find_kind(task->task_group_name, task->task_type_name);
-        Deadlines d = deadlines(*task, kind, now);
+        Deadlines d = resolve_deadlines(*task, kind, now);
         points.push_back(*task->latlng);
 
         p.service.push_back(task->handle_minutes.value_or(kind.handle_minutes));
@@ -170,7 +129,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
             continue;
         }
         const Task& task = *tasks[v.task];
-        const char* sla = projected_sla(v, p.due[v.task], p.complete_by[v.task], p.service[v.task], now_rel, rules);
+        const char* sla = projected_sla(v.checkin, v.done, p.due[v.task], p.complete_by[v.task], p.service[v.task], now_rel, rules);
         at_risk += std::string(sla) == "AT_RISK";
         breach += std::string(sla) == "WILL_BREACH" || std::string(sla) == "ALREADY_BREACHED";
         completed += at(v.done) <= shift_end;
