@@ -5,16 +5,21 @@ Nhận message input của API Gợi ý công việc (một KTV), trả response
 ## Luồng một lần gọi
 
 ```text
-message JSON
-   │  api      đọc + kiểm tra theo file API ─────────────► lỗi → 400
+record JSON (object hoặc JSONL)
+   │  adapter  đọc record + envelope, gói output OUT prototype
    ▼
-plan       chọn việc có tọa độ, tính hạn từng việc (A, B, hạn hoàn tất) ──► không còn việc → 422
+api        đọc + kiểm tra theo file API ─────────────────────► lỗi → 400
+   ▼
+normalize  lọc status 6/10/khác, complete_date, thiếu tọa độ ─► không còn việc → 422
+   │  sla      hạn A/B/hoàn tất theo loại việc + hẹn + create_date
    │  travel   ma trận km / phút: OSRM đường bộ (--osrm URL); lỗi → chim bay × 1,3, mã 424
    │  rules    tầng rule + trọng số (mặc định trong code, đè bằng --rules file.json)
    ▼
 dp         quy hoạch động → thứ tự tốt nhất (≤ 12 việc) · tham lam + 2-opt (nhiều hơn); có nghỉ trưa
    ▼
 plan       đi lại theo thứ tự → dòng TASK / IDLE / BREAK, projected_sla, cụm, metrics ──► response 200
+   ▼
+cluster    cắt cụm theo chặng > 2 km + tóm tắt (tâm, bán kính, km vào/trong, tên lô)
 ```
 
 ## Module
@@ -22,17 +27,21 @@ plan       đi lại theo thứ tự → dòng TASK / IDLE / BREAK, projected_sl
 | Module | File | Làm gì |
 |---|---|---|
 | api | `include/ktv/api.hpp`, `src/api.cpp` | Struct của message, đọc JSON, kiểm tra từng field, bảng loại việc (sheet 05), đổi ngày giờ |
+| normalization | `include/ktv/normalization.hpp`, `src/normalization.cpp` | Lọc việc được xếp: status 6, bỏ hoàn tất, bỏ thiếu tọa độ, tách current task |
+| sla | `include/ktv/sla.hpp`, `src/sla.cpp` | Hạn check-in/hoàn tất theo loại việc, hẹn, create_date; nhãn projected_sla |
 | rules | `include/ktv/rules.hpp`, `src/rules.cpp` | Danh sách rule mềm, tầng, trọng số, các ngưỡng. **Đọc file này để biết routing ưu tiên gì** |
 | travel | `include/ktv/travel.hpp`, `src/travel.cpp` | Ma trận km/phút: OSRM (một lần gọi `/table` mỗi KTV) hoặc chim bay |
 | dp | `include/ktv/dp.hpp`, `src/dp.cpp` | `solve()`: bài toán số → thứ tự + giờ/km từng bước |
-| plan | `include/ktv/plan.hpp`, `src/plan.cpp` | Nối các module: message → bài toán số → thứ tự → response |
+| cluster | `include/ktv/cluster.hpp`, `src/cluster.cpp` | Cắt thứ tự TASK thành cụm (chặng > 2 km) và tóm tắt cụm |
+| plan | `include/ktv/plan.hpp`, `src/plan.cpp` | Nối các module: message → bài toán số → thứ tự → cụm → response |
+| adapter | `include/ktv/adapter.hpp`, `src/adapter.cpp` | Vỏ truyền tải local: đọc object/JSONL, envelope, gói output |
 | (CLI) | `src/main.cpp` | `plan`, `validate`, `print-rules` |
 
 ## Chạy
 
 ```bash
 cmake -S core -B core/build && cmake --build core/build -j
-(cd core/build && ctest --output-on-failure)            # test_api, test_dp (so với vét cạn), test_plan, test_travel
+(cd core/build && ctest --output-on-failure)            # api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants
 
 core/build/ktv_core plan artifacts/fake/messages.jsonl --osrm http://127.0.0.1:5000 --out artifacts/fake/responses.jsonl
 # bỏ --osrm để dùng chim bay (không cần OSRM)
@@ -47,13 +56,15 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 
 | Bước | Module | Nội dung |
 |---|---|---|
-| ✅ 1 | api, rules, travel, dp, plan | Port QHĐ đã duyệt; output 1 cụm |
-| 2 | cluster | Tách cụm theo chặng > 2 km, tên cụm theo lô, revisit_count |
+| ✅ 1 | api, rules, travel, dp, plan | Port QHĐ đã duyệt |
+| ✅ 2 | cluster | Tách cụm theo chặng > 2 km, tên cụm theo lô, `revisit_count` |
 | ✅ 3a | dp | Nghỉ trưa = việc ảo + 1 bit "đã nghỉ" trong QHĐ (bắt buộc, khung 11:30–13:30, 45 phút) |
 | 3b | dp | Nhiều khung giờ làm (OT) |
-| 4 | dp | Rule 4: giữ tuyến cũ nếu tuyến mới không tốt hơn rõ |
+| 4 | dp | Rule 4: giữ tuyến cũ nếu tuyến mới không tốt hơn rõ (Phase 6 reoptimize) |
 | ✅ 5 | travel | OSRM tự host (một lần gọi `/table` mỗi KTV), lỗi thì chim bay × 1,3 |
-| 6 | service | Vòng Kafka: đọc topic vào → xếp → ghi topic ra |
+| ✅ 5.1 | adapter, main | Hardening CLI local: `--at` sai báo lỗi, JSON hỏng một output |
+| ✅ 5.2 | cluster | Tách `summarize_clusters`; plan chỉ còn điều phối |
+| 6 | service | Kafka worker: đọc topic vào → xếp → ghi topic ra (chờ broker) |
 | 7 | binding | pybind11 cho backtest/mô phỏng Python; khớp rồi xóa planner Python |
 
 Giả định đang dùng (chờ xác nhận): nghỉ trưa bắt buộc, phải bắt đầu trong 11:30–12:45, nghỉ 45 phút (`lunch_break`, `lunch_break_minutes` trong rules); việc đang làm còn 30 phút nữa xong; việc "trong ngày tạo phiếu" không hẹn tính hạn là hết hôm nay (API chưa có ngày tạo phiếu); định mức thời gian xử lý theo loại ở `src/api.cpp`.

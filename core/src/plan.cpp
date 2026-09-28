@@ -16,13 +16,6 @@ using ojson = nlohmann::ordered_json;
 
 std::string hhmm(Minutes t) { return format_datetime(t).substr(11, 5); }
 
-// Nhãn khu vực của một việc: tên lô nếu KTV có, ngược lại "Lô <id>"; lô 0 = chưa xác định.
-std::string plot_label(const Staff& staff, int plot_id) {
-    if (plot_id == 0) return "Khu vực chưa xác định";
-    for (const Plot& own : staff.plots)
-        if (own.id == plot_id && !own.name.empty()) return own.name;
-    return "Lô " + std::to_string(plot_id);
-}
 std::string latlng(Point p) {
     char text[40];
     std::snprintf(text, sizeof text, "%.4f,%.4f", p.lat, p.lng);
@@ -122,8 +115,9 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         if (v.task != kBreak) visits.push_back(&v);
     const int total = static_cast<int>(visits.size());
 
-    std::vector<ojson> rows;      // IDLE / BREAK / TASK theo đúng thứ tự thời gian.
-    std::vector<int> row_task;    // Với mỗi row: TASK gần nhất tại/trước nó (-1 nếu trước TASK đầu).
+    std::vector<ojson> rows;       // IDLE / BREAK / TASK theo đúng thứ tự thời gian.
+    std::vector<int> row_task;     // Với mỗi row: TASK gần nhất tại/trước nó (-1 nếu trước TASK đầu).
+    std::vector<TaskStop> stops;   // Chỉ TASK, cho summarize_clusters.
     int task_ordinal = -1;
     for (const Visit& v : steps) {
         if (at(v.checkin) > at(v.arrive)) {  // Tới sớm hơn mốc hẹn / giờ nghỉ: chờ.
@@ -152,6 +146,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         travel += v.travel;
         handle += p.service[v.task];
         ++task_ordinal;
+        stops.push_back({&task, v.km, p.service[v.task]});
         rows.push_back({{"entry_type", "TASK"}, {"at", hhmm(at(v.checkin))},
                         {"start_at", format_datetime(at(v.checkin))}, {"end_at", format_datetime(at(v.done))},
                         {"task_id", task.task_id}, {"task_group_id", task.task_group_id},
@@ -163,55 +158,32 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         row_task.push_back(task_ordinal);
     }
 
-    // ---- Cụm: cắt thứ tự TASK đã xếp thành các cụm liên tiếp; KHÔNG đổi thứ tự.
-    std::vector<double> legs_km;
-    for (const Visit* v : visits) legs_km.push_back(v->km);
-    const std::vector<ClusterSpan> spans = split_clusters(legs_km, kClusterSplitKm);
-    std::vector<int> cluster_of_task(visits.size());
-    for (int c = 0; c < static_cast<int>(spans.size()); ++c)
-        for (int k = spans[c].first; k < spans[c].first + spans[c].count; ++k) cluster_of_task[k] = c;
+    // ---- Cụm: tóm tắt theo TASK, rồi gắn dòng timeline vào cụm (không đổi thứ tự).
+    const std::vector<ClusterSummary> summaries = summarize_clusters(stops, staff.plots);
+    std::vector<int> cluster_of_task(stops.size());
+    for (int c = 0; c < static_cast<int>(summaries.size()); ++c)
+        for (int k = summaries[c].first_task; k < summaries[c].first_task + summaries[c].task_count; ++k)
+            cluster_of_task[k] = c;
 
-    std::vector<ojson> cluster_schedule(spans.size(), ojson::array());
-    std::vector<int> cluster_seq(spans.size(), 0);
+    std::vector<ojson> cluster_schedule(summaries.size(), ojson::array());
+    std::vector<int> cluster_seq(summaries.size(), 0);
     for (size_t i = 0; i < rows.size(); ++i) {
         const int c = row_task[i] < 0 ? 0 : cluster_of_task[row_task[i]];
         ojson ordered = ojson::object();
-        ordered["seq"] = ++cluster_seq[c]; //seq là 
+        ordered["seq"] = ++cluster_seq[c];
         for (auto it = rows[i].begin(); it != rows[i].end(); ++it) ordered[it.key()] = it.value();
         cluster_schedule[c].push_back(std::move(ordered));
     }
 
-    std::vector<int> c_count(spans.size(), 0);
-    std::vector<double> c_lat(spans.size(), 0), c_lng(spans.size(), 0), c_inbound(spans.size(), 0), c_internal(spans.size(), 0), c_handle(spans.size(), 0);
-    std::vector<std::vector<std::string>> c_names(spans.size());
-    for (int k = 0; k < total; ++k) {
-        const Visit* v = visits[k];
-        const Task& task = *tasks[v->task];
-        const int c = cluster_of_task[k];
-        ++c_count[c];
-        c_lat[c] += task.latlng->lat;
-        c_lng[c] += task.latlng->lng;
-        if (k == spans[c].first) c_inbound[c] = v->km;
-        else c_internal[c] += v->km;
-        c_handle[c] += p.service[v->task];
-        const std::string plot = plot_label(staff, task.task_plots_id);
-        if (std::find(c_names[c].begin(), c_names[c].end(), plot) == c_names[c].end()) c_names[c].push_back(plot);
-    }
-
     ojson clusters = ojson::array();
-    for (int c = 0; c < static_cast<int>(spans.size()); ++c) {
-        const Point center{c_lat[c] / c_count[c], c_lng[c] / c_count[c]};
-        double radius_km = 0;
-        for (int k = spans[c].first; k < spans[c].first + spans[c].count; ++k)
-            radius_km = std::max(radius_km, distance_km(center, *tasks[visits[k]->task]->latlng));
-        std::string name = "Cluster " + std::to_string(c + 1) + " — ";
-        for (size_t i = 0; i < c_names[c].size(); ++i) name += (i ? " · " : "") + c_names[c][i];
-        clusters.push_back({{"cluster_seg", c + 1}, {"cluster_code", "CL-" + std::to_string(c + 1)}, {"name", name},
-                            {"center", latlng(center)}, {"radius_m", std::llround(radius_km * 1000)},
-                            {"task_count", c_count[c]},
-                            {"travel_km_inbound", round_to(c_inbound[c], 1)},
-                            {"travel_km_internal", round_to(c_internal[c], 1)},
-                            {"handle_minutes", std::llround(c_handle[c])},
+    for (int c = 0; c < static_cast<int>(summaries.size()); ++c) {
+        const ClusterSummary& summary = summaries[c];
+        clusters.push_back({{"cluster_seg", summary.seg}, {"cluster_code", summary.code}, {"name", summary.name},
+                            {"center", latlng(summary.center)}, {"radius_m", std::llround(summary.radius_km * 1000)},
+                            {"task_count", summary.task_count},
+                            {"travel_km_inbound", round_to(summary.travel_km_inbound, 1)},
+                            {"travel_km_internal", round_to(summary.travel_km_internal, 1)},
+                            {"handle_minutes", std::llround(summary.handle_minutes)},
                             {"schedule", cluster_schedule[c]}});
     }
 
@@ -225,7 +197,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         {"on_time_rate_forecast", round_to(100.0 * (total - breach) / total, 1)},
         {"at_risk_count", at_risk},
         {"breach_forecast_count", breach},
-        {"cluster_count", static_cast<int>(spans.size())},
+        {"cluster_count", static_cast<int>(summaries.size())},
         {"revisit_count", revisits},
         {"idle_minutes", std::llround(idle)},
         {"break_minutes", std::llround(rest)},

@@ -1,4 +1,5 @@
-// Cluster: cắt thứ tự TASK theo chặng > 2 km; output dùng entry_type; seq đánh lại theo cụm.
+// Cluster: cắt thứ tự TASK theo chặng > 2 km; tóm tắt cụm; output dùng entry_type; seq theo cụm.
+#include <cmath>
 #include <iostream>
 #include <string>
 
@@ -97,6 +98,69 @@ int main() {
         CHECK(clusters.size() == 1);
         CHECK(clusters[0]["name"].get<std::string>().find("Khu vực chưa xác định") != std::string::npos);
         CHECK(r.response["data"]["metrics"]["revisit_count"] == 0);
+    }
+
+    {  // summarize_clusters: biên, tóm tắt hình học, tên theo lô, first_task.
+        auto mk = [](long long id, double lat, double lng, int plot) {
+            ktv::Task t;
+            t.task_id = id;
+            t.latlng = ktv::Point{lat, lng};
+            t.task_plots_id = plot;
+            return t;
+        };
+        std::vector<ktv::Task> tasks = {mk(1, 21.0000, 105.8000, 7), mk(2, 21.1000, 105.8000, 7), mk(3, 21.1005, 105.8000, 9)};
+        const std::vector<ktv::TaskStop> stops = {{&tasks[0], 0.7, 30}, {&tasks[1], 11.0, 40}, {&tasks[2], 0.05, 50}};
+        const std::vector<ktv::Plot> plots = {{7, "Lô A", 1, 1}, {9, "Lô B", 2, 1}};
+        std::vector<ktv::ClusterSummary> cs = ktv::summarize_clusters(stops, plots);
+        CHECK(cs.size() == 2);
+        if (cs.size() == 2) {
+            CHECK(cs[0].seg == 1 && cs[0].code == "CL-1" && cs[0].first_task == 0 && cs[0].task_count == 1);
+            CHECK(std::abs(cs[0].travel_km_inbound - 0.7) < 1e-9 && cs[0].travel_km_internal == 0.0);
+            CHECK(std::abs(cs[0].handle_minutes - 30) < 1e-9);
+            CHECK(cs[0].name == "Cluster 1 — Lô A");
+            CHECK(cs[1].seg == 2 && cs[1].first_task == 1 && cs[1].task_count == 2);
+            CHECK(std::abs(cs[1].travel_km_inbound - 11.0) < 1e-9);
+            CHECK(std::abs(cs[1].travel_km_internal - 0.05) < 1e-9);
+            CHECK(std::abs(cs[1].handle_minutes - 90) < 1e-9);
+            CHECK(cs[1].name.find("Lô A") != std::string::npos && cs[1].name.find("Lô B") != std::string::npos);
+            CHECK(std::abs(cs[1].center.lat - (21.1000 + 21.1005) / 2) < 1e-6);
+            CHECK(std::abs(cs[1].center.lng - 105.8) < 1e-6);
+            CHECK(cs[1].radius_km > 0);
+        }
+    }
+    {  // Ngưỡng đúng 2.0 km không cắt; hơn 2.0 km thì cắt.
+        auto mk = [](long long id, double lat) {
+            ktv::Task t;
+            t.task_id = id;
+            t.latlng = ktv::Point{lat, 105.8};
+            t.task_plots_id = 1;
+            return t;
+        };
+        std::vector<ktv::Task> tasks = {mk(1, 21.0), mk(2, 21.01)};
+        const std::vector<ktv::Plot> no_plots;
+        auto with_leg = [&](double leg) {
+            return std::vector<ktv::TaskStop>{{&tasks[0], 0.5, 10}, {&tasks[1], leg, 20}};
+        };
+        CHECK(ktv::summarize_clusters(with_leg(2.0), no_plots).size() == 1);
+        CHECK(ktv::summarize_clusters(with_leg(2.0001), no_plots).size() == 2);
+    }
+    {  // Lô 0 và lô lạ: nhãn "Khu vực chưa xác định" / "Lô <id>", không dùng tên bịa.
+        auto mk = [](long long id, double lat, int plot) {
+            ktv::Task t;
+            t.task_id = id;
+            t.latlng = ktv::Point{lat, 105.8};
+            t.task_plots_id = plot;
+            return t;
+        };
+        std::vector<ktv::Task> tasks = {mk(1, 21.0, 0), mk(2, 21.0001, 0), mk(3, 21.0002, 5)};
+        const std::vector<ktv::TaskStop> stops = {{&tasks[0], 0.1, 10}, {&tasks[1], 0.1, 10}, {&tasks[2], 0.1, 10}};
+        std::vector<ktv::ClusterSummary> cs = ktv::summarize_clusters(stops, {});
+        CHECK(cs.size() == 1);
+        if (cs.size() == 1) {
+            CHECK(cs[0].name.find("Khu vực chưa xác định") != std::string::npos);
+            CHECK(cs[0].name.find("Lô 5") != std::string::npos);
+            CHECK(cs[0].task_count == 3);
+        }
     }
 
     if (failures) std::cerr << failures << " lỗi\n";

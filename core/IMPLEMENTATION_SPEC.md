@@ -399,16 +399,120 @@ Thêm CTest gọi CLI với: object hợp lệ + envelope; object staging không
 
 **Kết quả:** `ctest` 9/9 pass (thêm test_cli). Kiểm chứng: pretty object hỏng → 1 output `400` (trước là 3); `--at` sai → thoát mã 2, không fallback; benchmark 5.332 record giữ nguyên (5202/130); JSON mẫu mới vẫn `200`.
 
-### Phase 5.2 — Pipeline readability (khuyến nghị trước Kafka)
+### Phase 5.2 — Pipeline readability  ✅ đã thực thi
 
-Hiện `cluster.cpp` chỉ chia `ClusterSpan`; `plan.cpp` vẫn tạo schedule JSON, tính center/radius, ghép tên plot, phân TASK vào cluster và gom metrics. Điều này chạy đúng nhưng ranh giới module chưa rõ như plan ban đầu.
+**Mục tiêu:** `plan()` đọc như một chuỗi điều phối; việc gom cụm + hình học + tổng hợp số liệu nằm trong module `cluster`. `cluster.cpp` hiện chỉ có `split_clusters`; phần còn lại (phân TASK vào cụm, center/radius, tên theo plot, inbound/internal/handle, dựng schedule) còn nằm rải trong `plan.cpp`.
 
-- Tách một helper thuần nhận ordered stop data + plot metadata và trả cluster outputs/aggregates.
-- `plan()` giữ phần điều phối: normalize → SLA/Problem → travel → `dp::solve()` → cluster/output → metrics/envelope.
-- Không đổi `dp::solve`, thứ tự, ETA, score hay ngưỡng cluster; dùng golden test hiện có và test nhiều cụm để chứng minh parity.
-- Chỉ tạo struct dữ liệu trung gian nhỏ nếu cần; không tạo service class/interface/factory riêng cho một implementation.
+**Không làm:** đổi thứ tự TASK, ETA, ngưỡng cắt 2 km, công thức `same_area`/revisit, hay bất kỳ field output nào. Không tạo class/service/interface mới ngoài struct dữ liệu.
 
-**Lợi:** luồng xử lý dễ đọc, cluster có thể test độc lập. **Hại:** phải di chuyển một khối response lớn, có nguy cơ lệch field/metrics. Khuyến nghị làm thành diff riêng sau hardening CLI, trước Kafka; nếu diff phình hoặc khó giữ output parity thì để lại và chỉ cải thiện tên helper.
+#### Vai trò IDLE/BREAK (và vì sao hợp đồng cụm chỉ có TASK)
+
+`IDLE` (chờ tới khung hẹn) và `BREAK` (nghỉ trưa) **không quyết định biên cụm**. Biên cụm chỉ do `leg_km` giữa hai TASK liên tiếp. IDLE/BREAK chỉ là dòng timeline hiển thị và cộng vào `idle_minutes`/`break_minutes` (tính trong `plan.cpp`). Vì vậy module `cluster` **không nhận** IDLE/BREAK: nếu đưa chúng vào hợp đồng, module vừa chia cụm vừa dựng timeline — trộn hai trách nhiệm.
+
+Hệ quả: việc gán IDLE/BREAK vào cụm nào là chuyện serialize của `plan.cpp`. Quy tắc giữ nguyên như hiện tại: dòng non-TASK thuộc cụm của TASK liền trước; nếu đứng trước TASK đầu thì thuộc cụm 1.
+
+#### Contract module `cluster` (TASK-only)
+
+```cpp
+// Một TASK đã xếp kèm dữ liệu để tóm tắt cụm. Không giờ, không IDLE/BREAK.
+struct TaskStop {
+    const Task* task = nullptr;
+    double leg_km = 0;          // chặng tới TASK này
+    double service_minutes = 0;
+};
+
+struct ClusterSummary {
+    int seg = 0;                // 1-based
+    int first_task = 0;         // chỉ số TASK đầu trong dãy (để map timeline)
+    int task_count = 0;
+    std::string code;           // "CL-<seg>"
+    std::string name;
+    Point center;
+    double radius_km = 0;
+    double travel_km_inbound = 0, travel_km_internal = 0, handle_minutes = 0;
+};
+
+std::vector<ClusterSummary> summarize_clusters(const std::vector<TaskStop>& stops,
+                                               const std::vector<Plot>& staff_plots,
+                                               double split_km = kClusterSplitKm);
+
+std::vector<ClusterSpan> split_clusters(const std::vector<double>& legs_km, double threshold_km);  // giữ nguyên
+```
+
+`summarize_clusters` thuần, không JSON; dùng `split_clusters` nội bộ cho biên và `distance_km` cho radius. Trách nhiệm:
+- TASK đầu mở cụm; TASK sau mở cụm mới khi `leg_km > split_km`.
+- `center` = trung bình lat/lng các TASK; `radius_km` = max `distance_km(center, task)`.
+- `travel_km_inbound` = leg TASK đầu cụm; `travel_km_internal` = tổng leg các TASK còn lại (số chưa làm tròn; làm tròn khi serialize).
+- `handle_minutes` = tổng service các TASK; `task_count` = số TASK.
+- `first_task` cho phép `plan.cpp` map mỗi dòng timeline về cụm.
+- `name` = "Cluster N — " + nhãn plot duy nhất theo thứ tự xuất hiện; plot 0 → "Khu vực chưa xác định"; có tên lô của KTV thì dùng tên, ngược lại "Lô <id>".
+- `code` = "CL-N", `seg` = N.
+
+#### `plan.cpp` sau refactor
+
+Giữ: normalize → staff off → candidates → shift/start → dựng `Problem` → travel matrix → `dp::solve`.
+
+Vòng lặp sau `solve` vẫn dựng timeline (`rows` ojson + `row_task` ordinal) và cộng `idle`/`rest` như hiện tại, nhưng tách thêm một mảng `std::vector<TaskStop> stops` (chỉ TASK). Sau đó:
+1. `auto summaries = summarize_clusters(stops, staff.plots);`
+2. Dựng `cluster_of_task` từ `summaries` (theo `seg`/`first_task`/`task_count`), rồi gán `rows` vào cụm theo quy tắc "TASK liền trước", đánh `seq` lại theo cụm (giống code hiện tại).
+3. Serialize `clusters` từ summaries + schedule; `cluster_count = summaries.size()`.
+
+Gói bước 2–3 vào một helper nội bộ `assemble_clusters(rows, row_task, summaries, staff)` để `plan()` ngắn. Helper `plot_label` chuyển vào `cluster.cpp`; `hhmm`, `latlng`, `round_to` ở lại `plan.cpp`.
+
+#### Các bước thực hiện
+
+1. Thêm `TaskStop`, `ClusterSummary`, `summarize_clusters` vào `cluster.*` (thuần, chưa nối).
+2. Trong `plan.cpp` dựng `stops` bên cạnh vòng lặp timeline; gọi `summarize_clusters`.
+3. Thay đoạn dựng clusters bằng helper `assemble_clusters`; giữ nguyên thứ tự field JSON.
+4. Build + chạy toàn bộ `ctest`; sửa lệch parity.
+5. Thêm unit test `summarize_clusters` + test gán timeline ở mức JSON.
+6. Cập nhật `core/README.md`.
+
+#### Chiến lược parity
+
+- Dùng lưới test hiện có: `plan`, `cluster`, `pipeline`, `invariants` (380k kiểm) assert giá trị cụm/metrics.
+- `test_invariants` phải giữ `5202/130` và mọi bất biến (tasks_total, seq theo cụm, thời gian, task_id không lặp).
+- Soát output `api_sample` trước/sau: `cluster_count`, `task_count`, `travel_km_inbound/internal`, `center`, `radius_m`, tên cụm, `seq`.
+
+#### Test chi tiết
+
+`summarize_clusters` (unit, không JSON):
+
+| # | Kịch bản | Kỳ vọng |
+|---|---|---|
+| 1 | 1 TASK | 1 cụm, inbound = leg, internal = 0 |
+| 2 | 2 TASK, leg 2 = 2.0 | 1 cụm |
+| 3 | 2 TASK, leg 2 = 2.0001 | 2 cụm |
+| 4 | 3 TASK gần–xa–sát | spans [0,1) và [1,3); task_count 1/2; internal cụm 2 = leg TASK 3 |
+| 5 | center/radius | center = trung bình tọa độ; radius = max khoảng cách tới center |
+| 6 | tên 2 plot | nhãn theo lần xuất hiện, nối " · " |
+| 7 | `task_plots_id=0` | "Khu vực chưa xác định" |
+| 8 | plot trùng `staff_plots` | dùng tên lô; không tên → "Lô <id>" |
+| 9 | `first_task` | offset đúng để map timeline |
+
+Gán timeline + serialize (mức `plan` JSON, giữ trong `test_cluster`/`test_pipeline`):
+
+| # | Kịch bản | Kỳ vọng |
+|---|---|---|
+| 10 | IDLE trước TASK đầu | IDLE thuộc cụm 1, `task_count` = 1 |
+| 11 | BREAK giữa TASK cụm cũ và TASK mở cụm mới | BREAK thuộc cụm cũ (TASK liền trước) |
+| 12 | IDLE/BREAK | không tăng `task_count`/`cluster_count`; `idle_minutes`/`break_minutes` khớp |
+| 13 | `seq` theo cụm | mỗi cụm bắt đầu 1, liên tục; thứ tự TASK không đổi |
+
+#### Exit gate
+
+- `ctest` 11/11 pass, gồm unit test `summarize_clusters` mới.
+- `test_invariants` ~380k kiểm pass, benchmark giữ `5202/130`.
+- Output `api_sample` và fixture `plan`/`pipeline` không đổi giá trị.
+- Không sửa `dp.cpp`, `rules.cpp`, `travel.cpp`; `split_clusters` giữ hành vi.
+
+#### Rủi ro và rollback
+
+- Lệch làm tròn inbound/internal hoặc thứ tự field JSON → test exact bắt được.
+- Gán timeline sai cụm → test #10–#13 và `test_cluster` JSON bắt được.
+- Nếu diff phình: giữ `summarize_clusters` làm helper nội bộ `plan.cpp` thay vì tách file. Rollback = revert `cluster.*` + `plan.cpp`.
+
+**Kết quả:** `cluster.hpp/.cpp` có `TaskStop`, `ClusterSummary`, `summarize_clusters`; `plan.cpp` bỏ `plot_label`, dựng `stops` TASK và gọi `summarize_clusters`, gắn timeline + serialize như cũ. `ctest` 11/11 pass; `invariants` ~380k kiểm giữ `5202/130`; output `api_sample` giữ nguyên hình dạng cụm. Không sửa `dp.cpp`/`rules.cpp`/`travel.cpp`.
 
 ### Phase 6 — Reoptimize do KTV yêu cầu (design gate trước khi code)
 
