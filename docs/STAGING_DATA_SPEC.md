@@ -31,7 +31,7 @@
 | `location` | – | string tự do (địa chỉ staging khá bẩn) | Cho qua, chỉ hiển thị |
 | `latlng` | ✔ | `"lat,lng"` VN hoặc `""` (= thiếu tọa độ → loại khỏi tuyến, Rule cứng 4) | 400 nếu format sai; `""` thì loại + vẫn đếm SLA |
 | `handle_minutes` | – | số nguyên dương, `0` hoặc `null` | `0` / `null` nghĩa là dùng định mức theo task type. Giá trị âm hoặc sai kiểu là dữ liệu lỗi |
-| `task_plots_id, staff_plots_id, staff_role, block_id` | ✔ | số nguyên; `0` được chấp nhận như staging. Tạm map `staff_role`: 1 chính / 2 kiêm nhiệm / 3 hỗ trợ | `staff_plots_id=0` cùng `staff_role=0` nghĩa là KTV không thuộc lô nào cho task này. Không loại task đã giao; vẫn route theo SLA/toạ độ, không áp điểm ưu tiên theo lô. Nếu `task_plots_id=0`, coi plot của task là chưa xác định; không gộp các task plot 0 thành một lô |
+| `task_plots_id, staff_plots_id, staff_role, block_id` | ✔ | số nguyên; `staff_role`: 1 chính / 2 kiêm nhiệm / 3 hỗ trợ | Data giải thích `staff_plots_id=0 && staff_role=0` là KTV không thuộc lô cho task đó. Implementation hiện deferred case này và từ chối role 0; role 1/2/3 đi theo rule hiện tại. `task_plots_id=0` không tạo same-area/revisit group |
 | `contract_id` | không ghi rõ là bắt buộc | số nguyên — ID hợp đồng (ObjID) | Giữ trong task model để truy vết; không dùng để chấm điểm/xếp tuyến |
 | `contract_no` | không ghi rõ là bắt buộc | chuỗi — số hợp đồng | Giữ trong task model để hiển thị/truy vết; không dùng để chấm điểm/xếp tuyến |
 | `location_id` | – | Có trong mẫu/API cũ | Giữ nếu được gửi; chưa dùng trong thuật toán |
@@ -97,22 +97,41 @@ Quy ước retry/DLQ và format lỗi cuối cùng sẽ chốt cùng Infra. Hai 
 ## 5. Giả định prototype (không chặn refactor)
 
 1. Domain chỉ cần ba nhóm status cho prototype: `ROUTABLE` (mã `6`, task được xếp), `CURRENT` (mã `10` khớp `staff.current_task`, dùng làm điểm/giờ xuất phát, không xếp thành stop thứ hai), `EXCLUDED` (mọi mã khác `6/10`, coi như không cần xếp). Nếu task status `10` không khớp `staff.current_task`, không route task đó và ghi cảnh báo.
-2. `staff_plots_id=0` + `staff_role=0` nghĩa là KTV không thuộc lô nào cho task đó; vẫn xếp task đã được giao, nhưng không áp rule ưu tiên theo lô. `task_plots_id=0` nghĩa là chưa xác định lô của task; dùng tọa độ thay cho grouping theo lô.
+2. Data xác nhận `staff_plots_id=0` + `staff_role=0` nghĩa là KTV không thuộc lô nào cho task đó. Xử lý trường hợp này đang deferred; parser hiện không nhận role 0. `task_plots_id=0` không được xem là cùng lô với task 0 khác.
 3. `staff.status=3` là off nên không sinh tuyến; `1` và `2` vẫn xử lý.
 4. `complete_date` khác rỗng là task hoàn tất và bị loại khỏi candidates; `handle_minutes=0/null` dùng định mức.
 5. Row task có cùng ID với `current_task` bổ sung dữ liệu cho việc đang làm. Nếu không có row khớp, dùng thông tin tối thiểu trong `current_task` và vị trí hiện tại của staff; không tạo stop trùng.
 6. `contract_id` / `contract_no` được hiểu theo mô tả mới: ObjID và số hợp đồng; giữ trong task model nhưng không dùng trong scoring.
 7. Envelope và key Kafka trong tài liệu là quy ước local prototype; khi có broker chỉ cập nhật adapter/config nếu contract nguồn khác.
 
-## 6. Plan refactor code (chưa triển khai)
+## 6. Tiến độ implementation và plan tiếp theo
 
-1. Tách contract/JSON parsing khỏi domain model; hỗ trợ `handle_minutes` null/0 và thêm `Task.contract_id` (ObjID số nguyên) cùng `Task.contract_no` (chuỗi).
-2. Thêm normalization theo quy tắc prototype: chỉ status `6` là `ROUTABLE`, status `10` khớp `current_task` là `CURRENT`, các status khác `EXCLUDED`; lọc task hoàn tất, ghép `current_task`, xử lý task không có quan hệ KTV-lô mà không loại task đã giao.
-3. Tách `plan.cpp` thành các bước nội bộ: normalize → KPI/SLA rules & priority → clustering → route optimizer (giữ QHĐ hiện tại) → output mapping. Clustering/re-entry dùng plot ID khi khác 0; task không có plot/quan hệ staff-plot vẫn được định tuyến theo toạ độ, không bị gộp với task plot 0 và không nhận điểm role. Clustering hiện tại gộp cả tuyến thành một cụm; thay đổi thành clusterer thật là phần cần triển khai riêng.
-4. Thêm application use case cho `ProcessWorklist`, batch đầu ngày (nhiều worklist KTV dùng chung pipeline), và `Reoptimize` (cùng pipeline, cần input mới nhất khi tích hợp nguồn thật).
-5. Làm file adapter local để đọc payload staging + envelope prototype, ghi response OUT prototype; kiểm thử trên `Data staging.txt` và bộ JSONL hiện có.
-6. Khi có broker, thêm Kafka consumer/producer adapter. Domain/application không phụ thuộc Kafka; flow worker là consume IN → process → produce OUT → commit input.
-7. API Mobix nằm ở Bot Gateway theo sơ đồ hiện tại; chưa tạo sáu API cho các bước pipeline.
+### Đã hoàn tất: Phase 1–5
+
+1. **Contract/parser:** parse status/dates/contracts; `handle_minutes=0/null/""` dùng định mức; `staff_role` 1/2/3; row `current_task` trùng được chấp nhận. Catalog subtype/bảng số đầy đủ còn chờ chốt.
+2. **Normalization:** status 6 vào tuyến; status 10 là current khi khớp `staff.current_task`; status khác bị loại; complete-date và tọa độ được lọc.
+3. **SLA prep:** dùng `create_date` cho hạn theo ngày tạo/tháng khi có; fallback `planned_at`.
+4. **Cluster/output:** QHĐ trước, chia cụm theo `leg_km > 2`, output `entry_type`, seq theo cluster; không sửa QHĐ.
+5. **Local adapter:** đọc staging object/JSONL, sinh envelope prototype và ghi response OUT.
+
+### Tiếp theo trước khi có broker
+
+6. **Phase 5.1 — harden CLI (đã xong):** `--at` sai báo lỗi và thoát; pretty JSON hỏng tạo đúng một error response; thêm CTest chạy end-to-end CLI. `ctest` 9/9 pass; benchmark 5.332 record không đổi.
+7. **Phase 5.2 — dễ đọc pipeline (chưa làm):** tách phần dựng cluster/schedule/aggregate còn nằm trong `plan.cpp` thành helper/module rõ trách nhiệm. Giữ nguyên TASK order/ETA/metrics; có golden test trước và sau.
+
+### Chờ dependency ngoài repo
+
+8. **Phase 6 — Reoptimize do KTV yêu cầu:** phase riêng. Đã chốt KTV chọn mode và route mới hợp lệ thay route đang xem dù metrics không tốt hơn. Chưa chốt ai cung cấp/lấy snapshot mới nhất và route baseline; không mặc định Gateway/OA/Core. Không đồng nhất với replan tự động sau khi task thay đổi.
+9. **Phase 7 — Kafka worker:** chỉ làm khi có broker/auth/client library, group/partition/key, envelope contract, retry/DLQ. Flow: consume IN → dispatch replan hoặc reoptimize → produce OUT → commit offset.
+10. **Phase 8 — Gateway/API Mobix:** Bot Gateway sở hữu HTTP; không tạo API riêng cho từng stage của Core AI.
+11. **Phase 9 — feedback/AI learning:** sau khi OA/Gateway chốt nguồn kết quả thật, version rule/model và guardrail backtest.
+
+### Các mục được cố ý hoãn
+
+- `staff_plots_id=0 && staff_role=0`: ý nghĩa data đã rõ nhưng implementation chưa hỗ trợ; parser hiện từ chối role 0.
+- Đồng bộ đầy đủ task type/subtype: workbook mới thiếu/chưa nhất quán bảng số; không đoán thêm ID.
+- Output `priority`, `task_role=INSERTED`, `insert_reason`: chưa có formula/insertion behavior đủ rõ.
+- Tách DTO/domain thành hai bộ struct và tạo service class riêng cho batch: chưa có lợi ích đủ lớn khi mới có một nguồn và một pipeline `plan()`. Reoptimize vẫn có application use case riêng, nhưng có thể là function thay vì microservice/class.
 
 ### Sơ đồ module đích
 
