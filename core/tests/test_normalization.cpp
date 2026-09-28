@@ -79,7 +79,7 @@ int main() {
         CHECK(r.response["success"] == true && r.response["statuscode"] == "200");
         CHECK(r.routed == 1);
         for (const auto& row : r.response["data"]["clusters"][0]["schedule"]) {
-            CHECK(row["type"] != "TASK" || row["task_id"] == 101);
+            CHECK(row["entry_type"] != "TASK" || row["task_id"] == 101);
             if (row["task_id"] == 101) CHECK(row["handle_minutes"] == 120);  // "" → định mức trien_khai_net
         }
     }

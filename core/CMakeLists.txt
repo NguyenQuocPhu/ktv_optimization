@@ -10,7 +10,7 @@ add_compile_options(-Wall -Wextra)
 find_package(Threads REQUIRED)  # cpp-httplib (gọi OSRM) cần pthread.
 
 # Mỗi module một cặp include/ktv/<module>.hpp + src/<module>.cpp.
-add_library(ktv STATIC src/api.cpp src/normalization.cpp src/sla.cpp src/rules.cpp src/travel.cpp src/dp.cpp src/plan.cpp)
+add_library(ktv STATIC src/api.cpp src/normalization.cpp src/sla.cpp src/cluster.cpp src/rules.cpp src/travel.cpp src/dp.cpp src/plan.cpp)
 target_include_directories(ktv PUBLIC include third_party)
 target_link_libraries(ktv PUBLIC Threads::Threads)
 
@@ -18,7 +18,7 @@ add_executable(ktv_core src/main.cpp)
 target_link_libraries(ktv_core ktv)
 
 enable_testing()
-foreach(name api dp plan travel normalization sla)
+foreach(name api dp plan travel normalization sla cluster)
   add_executable(test_${name} tests/test_${name}.cpp)
   target_link_libraries(test_${name} ktv)
   add_test(NAME ${name} COMMAND test_${name})
