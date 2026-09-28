@@ -52,19 +52,31 @@ int main() {
     CHECK(result.routed == 2 && result.excluded == 1 && result.source == ktv::Source::Optimal);
 
     const auto& schedule = r["data"]["clusters"][0]["schedule"];
-    // Hóa đơn làm trước (không hẹn), rồi chờ tới 14:00 cho việc triển khai.
-    CHECK(schedule.size() == 3);
+    // Hóa đơn làm trước (không hẹn) → chờ tới 11:30 nghỉ trưa 45 phút → sang việc triển khai, chờ tới hẹn 14:00.
+    CHECK(schedule.size() == 5);
     CHECK(schedule[0]["type"] == "TASK" && schedule[0]["task_id"] == 5454544);
-    CHECK(schedule[1]["type"] == "IDLE" && schedule[1]["end_at"] == "2026-09-10 14:00:00");
-    CHECK(schedule[2]["task_id"] == 5454541 && schedule[2]["start_at"] == "2026-09-10 14:00:00");
-    CHECK(schedule[2]["end_at"] == "2026-09-10 15:30:00" && schedule[2]["projected_sla"] == "ON_TIME");
-    for (int i = 0; i < 3; ++i) CHECK(schedule[i]["seq"] == i + 1);
+    CHECK(schedule[1]["type"] == "IDLE" && schedule[1]["end_at"] == "2026-09-10 11:30:00");
+    CHECK(schedule[2]["type"] == "BREAK" && schedule[2]["start_at"] == "2026-09-10 11:30:00" &&
+          schedule[2]["end_at"] == "2026-09-10 12:15:00" && schedule[2]["label"] == "Nghỉ trưa");
+    CHECK(schedule[3]["type"] == "IDLE" && schedule[3]["end_at"] == "2026-09-10 14:00:00");
+    CHECK(schedule[4]["task_id"] == 5454541 && schedule[4]["start_at"] == "2026-09-10 14:00:00");
+    CHECK(schedule[4]["end_at"] == "2026-09-10 15:30:00" && schedule[4]["projected_sla"] == "ON_TIME");
+    for (int i = 0; i < 5; ++i) CHECK(schedule[i]["seq"] == i + 1);
+    CHECK(r["data"]["clusters"][0]["task_count"] == 2);
 
     const auto& m = r["data"]["metrics"];
     CHECK(m["tasks_total"] == 2 && m["tasks_forecast_completed"] == 2 && m["overload_minutes"] == 0);
     CHECK(m["on_time_rate_forecast"] == 100.0 && m["breach_forecast_count"] == 0);
     CHECK(m["start_at"] == "2026-09-10 09:20:00" && m["finish_at"] == "2026-09-10 15:30:00");
-    CHECK(m["shift_end_at"] == "2026-09-10 17:30:00");
+    CHECK(m["shift_end_at"] == "2026-09-10 17:30:00" && m["break_minutes"] == 45);
+
+    // Tính lại lúc 14:10 (đã qua giờ chốt nghỉ 12:45): không còn dòng nghỉ.
+    json late = message();
+    late["planned_at"] = "2026-09-10 14:10:00";
+    errors.clear();
+    ktv::PlanResult after = ktv::plan(ktv::parse_message(late, errors), ktv::default_rules(), server_now);
+    CHECK(after.response["data"]["metrics"]["break_minutes"] == 0);
+    for (const auto& row : after.response["data"]["clusters"][0]["schedule"]) CHECK(row["type"] != "BREAK");
 
     // Chỉ còn việc thiếu tọa độ → 422.
     json empty = message();

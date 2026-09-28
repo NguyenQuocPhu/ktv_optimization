@@ -5,8 +5,8 @@
 //   Người "điều phối" của lõi. Không tự tính thứ tự, chỉ gọi đúng module theo đúng thứ tự:
 //
 //     Message ─► bỏ việc thiếu tọa độ, tính hạn từng việc (A, B, hạn hoàn tất)
-//             ─► travel: bảng km/phút ─► dp: Problem → solve() → walk()
-//             ─► dòng lịch TASK / IDLE, projected_sla, cụm, metrics ─► response JSON
+//             ─► travel: bảng km/phút ─► dp: Problem → solve() (thứ tự + từng bước, có nghỉ trưa)
+//             ─► dòng lịch TASK / IDLE / BREAK, projected_sla, cụm, metrics ─► response JSON
 //
 //   Giống quản đốc: nhận phiếu (api), hỏi đường (travel), nhờ người xếp lịch (dp),
 //   rồi viết lại thành bảng lịch cho KTV (response đúng sheet 03, 04 file API).

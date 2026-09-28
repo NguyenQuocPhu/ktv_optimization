@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
+#include <optional>
 
 namespace ktv {
 
@@ -10,20 +12,24 @@ namespace {
 // Bước chuyển của QHĐ: dp[mask ∪ {j}][j] ← dp[mask][i] + visit(mask, i, j, giờ xong của nhãn).
 // Giống cost(i, j) của TSP, nhưng thêm `clock` (giờ rời i: quyết định chờ hẹn, trễ hay không)
 // và `done_mask` (việc đã làm: quyết định có "quay lại lô đã rời" không).
-// i = -1: đang ở chỗ xuất phát.
+// i = -1: đang ở chỗ xuất phát. j = kBreak: đi nghỉ trưa, KTV đứng yên ở i.
 Visit visit(const Problem& p, uint64_t done_mask, int i, int j, double clock) {
-    Visit v{j, 0, 0, 0, 0, 0, {}};
+    Visit v{j, 0, 0, clock, clock, clock, {}};
+    if (j == kBreak) {  // Nghỉ: 0 km, không phạt; chưa tới giờ nghỉ thì chờ.
+        v.checkin = std::max(clock, p.break_open);
+        v.done = v.checkin + p.break_minutes;
+        return v;
+    }
     int origin = i < 0 ? 0 : i + 1;  // Điểm trong bảng travel: 0 = xuất phát, việc k = k + 1.
     v.km = p.travel.km[origin][j + 1];
-    v.travel = p.travel.minutes[origin][j + 1]; // thời gian đi lấy từ matrix orsm (update có kẹt xe các thứ sau), orsm profile oto
+    v.travel = p.travel.minutes[origin][j + 1];
     v.arrive = clock + v.travel;
     v.checkin = !std::isnan(p.opens[j]) && v.arrive < p.opens[j] ? p.opens[j] : v.arrive;
-    v.done = v.checkin + p.service[j]; 
+    v.done = v.checkin + p.service[j];
     if (v.checkin > p.due[j]) {  // So sánh với NaN luôn sai: không có hạn thì không trễ.
         v.cost[LATE_CHECKIN] = p.weight[j];
         v.cost[LATE_MINUTES] = v.checkin - p.due[j];
     }
-    // complete_by là hạn của những task có sla_minutes = NaN
     if (v.done > p.complete_by[j]) v.cost[LATE_COMPLETION] = 1;
     if (v.done > p.shift_end) v.cost[AFTER_SHIFT] = 1;
     v.cost[KM] = v.km;
@@ -35,6 +41,17 @@ Visit visit(const Problem& p, uint64_t done_mask, int i, int j, double clock) {
     return v;
 }
 
+// Bit "đã nghỉ trưa" nằm ngay sau bit các việc: bit n.
+uint64_t rest_bit(const Problem& p) { return uint64_t{1} << p.size(); }
+uint64_t bit_of(const Problem& p, int j) { return j == kBreak ? rest_bit(p) : uint64_t{1} << j; }
+
+// Luật chặn nghỉ trưa. Trả false nếu bước này làm tuyến không hợp lệ.
+bool allowed(const Problem& p, uint64_t mask, const Visit& v) {
+    const bool rested = mask & rest_bit(p);
+    if (v.task == kBreak) return p.needs_break() && !rested;        // Chỉ nghỉ một lần, khi tuyến cần nghỉ.
+    return rested || !p.needs_break() || v.done <= p.break_latest;  // Chưa nghỉ: phải xong trước giờ chốt.
+}
+
 std::vector<Visit> walk(const Problem& p, const std::vector<int>& order) {
     std::vector<Visit> steps;
     uint64_t mask = 0;
@@ -42,21 +59,21 @@ std::vector<Visit> walk(const Problem& p, const std::vector<int>& order) {
     double clock = 0;
     for (int j : order) {
         steps.push_back(visit(p, mask, i, j, clock));
-        mask |= uint64_t{1} << j;
-        i = j;
+        mask |= bit_of(p, j);
+        if (j != kBreak) i = j;  // Nghỉ không di chuyển.
         clock = steps.back().done;
     }
     return steps;
 }
 
-
 using Key = std::array<double, kMaxTiers>;  // Tầng không dùng để 0.
+constexpr Key kInfeasible = {std::numeric_limits<double>::infinity()};
 
 struct Label {
     double finish;
     Key costs;
-    int parent;  // Chỉ số trong pool; -1 = gốc.
-    int task;
+    int parent;  // Nhãn trước, chỉ số trong pool. Riêng pool[0] (gốc: chưa làm gì, giờ 0) có parent = -1.
+    int task;    // Việc vừa thêm, hoặc kBreak.
 };
 
 // Gom những gì QHĐ và heuristic dùng chung: rule theo tầng + kho nhãn.
@@ -74,9 +91,11 @@ struct Search {
                 if (rule == FINISH && weight) finish_tier = t, finish_weight = weight;
     }
 
-    Label extend(int parent, uint64_t mask, int i, int j) const {
+    // Từ nhãn `parent` (đang ở i, đã làm `mask`) đi tới j. Vi phạm luật nghỉ trưa → không có.
+    std::optional<Label> extend(int parent, uint64_t mask, int i, int j) const {
         const Label& from = pool[parent];
         Visit v = visit(p, mask, i, j, from.finish);
+        if (!allowed(p, mask, v)) return std::nullopt;
         Label label{v.done, from.costs, parent, j};
         for (int t = 0; t < tiers; ++t)
             for (auto [rule, weight] : rules.tiers[t])
@@ -101,7 +120,7 @@ struct Search {
         for (int old : cell)
             if (no_worse(pool[old], label)) return false;
         cell.erase(std::remove_if(cell.begin(), cell.end(), [&](int old) { return no_worse(label, pool[old]); }),
-                     cell.end());
+                   cell.end());
         pool.push_back(label);
         cell.push_back(static_cast<int>(pool.size()) - 1);
         if (static_cast<int>(cell.size()) <= rules.max_labels) return false;
@@ -117,76 +136,102 @@ struct Search {
         return order;
     }
 
+    // Chấm một thứ tự có sẵn (có thể chứa kBreak). Vi phạm luật nghỉ, thiếu/thừa việc → kInfeasible.
     Key evaluate(const std::vector<int>& order) {
         pool.resize(1);
-        int label = 0;
+        int label = 0, i = -1;
         uint64_t mask = 0;
-        int i = -1;
         for (int j : order) {
-            pool.push_back(extend(label, mask, i, j));
+            if (j != kBreak && (j < 0 || j >= p.size() || (mask >> j & 1))) return kInfeasible;
+            auto next = extend(label, mask, i, j);
+            if (!next) return kInfeasible;
+            pool.push_back(*next);
             label = static_cast<int>(pool.size()) - 1;
-            mask |= uint64_t{1} << j;
-            i = j;
+            mask |= bit_of(p, j);
+            if (j != kBreak) i = j;
         }
+        if ((mask & (rest_bit(p) - 1)) != rest_bit(p) - 1) return kInfeasible;  // Chưa đủ mọi việc.
         return key(pool[label]);
     }
 };
 
 Solution exact(Search& s) {
-    const int n = s.p.size();
-    const uint64_t full = (uint64_t{1} << n) - 1;
-    // Bảng QHĐ: dp(mask, last) = các nhãn (tuyến dở dang) đã làm đúng tập `mask`, việc cuối là `last`.
-    // Trải phẳng 2 chiều thành 1 chiều: ô [mask][last] nằm ở vị trí mask * n + last.
-    std::vector<std::vector<int>> table(static_cast<size_t>(full + 1) * n);
-    auto dp = [&](uint64_t mask, int last) -> std::vector<int>& { return table[mask * n + last]; };
+    const Problem& p = s.p;
+    const int n = p.size();
+    const uint64_t rest = rest_bit(p), all_tasks = rest - 1;
+    const uint64_t top = p.needs_break() ? (all_tasks | rest) : all_tasks;
+    // Bảng QHĐ: dp(mask, last) = các nhãn (tuyến dở dang) đã làm đúng tập `mask` (kể cả bit nghỉ),
+    // việc thật làm cuối là `last` (-1 = chưa làm việc nào, vẫn ở chỗ xuất phát).
+    // Trải phẳng 2 chiều thành 1 chiều: ô [mask][last] nằm ở vị trí mask * (n + 1) + (last + 1).
+    std::vector<std::vector<int>> table(static_cast<size_t>(top + 1) * (n + 1));
+    auto dp = [&](uint64_t mask, int last) -> std::vector<int>& { return table[mask * (n + 1) + (last + 1)]; };
+
     bool capped = false;
-    for (int j = 0; j < n; ++j) capped |= s.keep(dp(uint64_t{1} << j, j), s.extend(0, 0, -1, j));
-    for (uint64_t mask = 1; mask < full; ++mask)
-        for (int i = 0; i < n; ++i) {
-            if (!(mask >> i & 1)) continue;
-            std::vector<int> labels = dp(mask, i);  // Bản sao: pool có thể đổi địa chỉ khi thêm nhãn.
-            for (int label : labels)
+    auto step = [&](int label, uint64_t mask, int i, int j) {  // dp[mask ∪ {j}][j] ← nhãn + visit(i → j). Nghỉ: vẫn đứng ở i.
+        if (auto next = s.extend(label, mask, i, j))
+            capped |= s.keep(dp(mask | bit_of(p, j), j == kBreak ? i : j), *next);
+    };
+    for (int j = 0; j < n; ++j) step(0, 0, -1, j);
+    step(0, 0, -1, kBreak);  // Nghỉ ngay từ đầu (chỉ được khi tuyến cần nghỉ).
+    for (uint64_t mask = 1; mask < top; ++mask)
+        for (int i = -1; i < n; ++i) {
+            if (i < 0 ? (mask & all_tasks) != 0 : !(mask >> i & 1)) continue;  // Ô không thể có.
+            for (int label : dp(mask, i)) {  // Nhãn mới luôn vào ô có mask lớn hơn, nên duyệt thẳng được.
                 for (int j = 0; j < n; ++j)
-                    if (!(mask >> j & 1))
-                        capped |= s.keep(dp(mask | uint64_t{1} << j, j), s.extend(label, mask, i, j));
+                    if (!(mask >> j & 1)) step(label, mask, i, j);
+                if (!(mask & rest)) step(label, mask, i, kBreak);
+            }
         }
+
+    // Kết thúc hợp lệ: đã làm hết việc, có nghỉ hoặc không (không nghỉ thì luật chặn đã bảo đảm xong trước giờ chốt).
     int best = -1;
     Key best_key{};
-    for (int last = 0; last < n; ++last)
-        for (int label : dp(full, last))
-            if (Key k = s.key(s.pool[label]); best < 0 || k < best_key) best = label, best_key = k;
+    for (uint64_t mask : {all_tasks, all_tasks | rest}) {
+        if (mask > top) continue;
+        for (int last = 0; last < n; ++last)
+            for (int label : dp(mask, last))
+                if (Key k = s.key(s.pool[label]); best < 0 || k < best_key) best = label, best_key = k;
+    }
     return {s.order_of(best), {}, capped ? Source::Approximate : Source::Optimal};
 }
 
 constexpr int kMaxImproveTasks = 40;  // 2-opt tốn O(n³) mỗi vòng; nhiều việc hơn chỉ dùng tham lam.
 
-// Tham lam: mỗi bước chọn việc làm khóa tăng ít nhất; sau đó 2-opt tối đa 2 vòng.
+// Tham lam: mỗi bước chọn việc (hoặc nghỉ) làm khóa tăng ít nhất; sau đó 2-opt tối đa 2 vòng.
 std::vector<int> heuristic(Search& s) {
-    const int n = s.p.size();
+    const Problem& p = s.p;
+    const int n = p.size();
     std::vector<int> order;
-    int label = 0, i = -1;
+    int label = 0, i = -1, done = 0;
     uint64_t mask = 0;
-    while (static_cast<int>(order.size()) < n) {
-        int best_j = -1;
+    while (done < n) {
+        int best_j = -2;
         Label best{};
         Key best_key{};
-        for (int j = 0; j < n; ++j) {
-            if (mask >> j & 1) continue;
-            Label candidate = s.extend(label, mask, i, j);
-            if (Key k = s.key(candidate); best_j < 0 || k < best_key) best_j = j, best = candidate, best_key = k;
-        }
+        auto consider = [&](int j) {
+            auto candidate = s.extend(label, mask, i, j);
+            if (!candidate) return;
+            if (Key k = s.key(*candidate); best_j == -2 || k < best_key) best_j = j, best = *candidate, best_key = k;
+        };
+        for (int j = 0; j < n; ++j)
+            if (!(mask >> j & 1)) consider(j);
+        // Chỉ xét nghỉ khi đã tới giờ nghỉ, hoặc không còn việc nào làm kịp trước giờ chốt:
+        // tránh tham lam chọn "nghỉ" từ sáng sớm rồi đứng chờ tới trưa.
+        if (best_j == -2 || s.pool[label].finish >= p.break_open) consider(kBreak);
+        // Luôn có ứng viên: chưa nghỉ thì nghỉ được; đã nghỉ (hoặc không cần nghỉ) thì việc nào cũng được.
         s.pool.push_back(best);
         label = static_cast<int>(s.pool.size()) - 1;
         order.push_back(best_j);
-        mask |= uint64_t{1} << best_j;
-        i = best_j;
+        mask |= bit_of(p, best_j);
+        if (best_j != kBreak) i = best_j, ++done;
     }
+    const int m = static_cast<int>(order.size());
     if (n < 3 || n > kMaxImproveTasks) return order;
     Key best_key = s.evaluate(order);
     for (int round = 0; round < 2; ++round) {
         bool improved = false;
-        for (int a = 0; a < n - 1; ++a)  // Đảo đoạn order[a..b].
-            for (int b = a + 1; b < n; ++b) {
+        for (int a = 0; a < m - 1; ++a)  // Đảo đoạn order[a..b]; đảo làm sai luật nghỉ → kInfeasible, tự bị loại.
+            for (int b = a + 1; b < m; ++b) {
                 std::vector<int> candidate = order;
                 std::reverse(candidate.begin() + a, candidate.begin() + b + 1);
                 if (Key k = s.evaluate(candidate); k < best_key) order = candidate, best_key = k, improved = true;

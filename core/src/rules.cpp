@@ -1,9 +1,18 @@
 #include "ktv/rules.hpp"
 
+#include <cstdio>
 #include <fstream>
 #include <stdexcept>
 
 namespace ktv {
+
+namespace {
+std::string hhmm(int minutes) {
+    char text[8];
+    std::snprintf(text, sizeof text, "%02d:%02d", minutes / 60 % 100, minutes % 60);
+    return text;
+}
+}  // namespace
 
 Rules default_rules() {
     Rules rules;
@@ -68,6 +77,17 @@ Rules rules_from_json(const nlohmann::json& data) {
     number("average_speed_kmh", rules.average_speed_kmh, 1);
     number("at_risk_minutes", rules.at_risk_minutes, 0);
     number("at_risk_ratio", rules.at_risk_ratio, 0);
+    number("lunch_break_minutes", rules.break_minutes, 0);
+    if (data.contains("lunch_break")) {  // "11:30-13:30"
+        int h1, m1, h2, m2;
+        const auto& text = data["lunch_break"];
+        if (!text.is_string() || std::sscanf(text.get<std::string>().c_str(), "%d:%d-%d:%d", &h1, &m1, &h2, &m2) != 4)
+            fail("lunch_break cần dạng \"HH:mm-HH:mm\"");
+        rules.break_start = h1 * 60 + m1;
+        rules.break_end = h2 * 60 + m2;
+    }
+    if (rules.break_minutes > 0 && rules.break_end - rules.break_start < rules.break_minutes)
+        fail("khung lunch_break ngắn hơn lunch_break_minutes");
     return rules;
 }
 
@@ -97,6 +117,8 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"average_speed_kmh", rules.average_speed_kmh},
         {"at_risk_minutes", rules.at_risk_minutes},
         {"at_risk_ratio", rules.at_risk_ratio},
+        {"lunch_break", hhmm(rules.break_start) + "-" + hhmm(rules.break_end)},
+        {"lunch_break_minutes", rules.break_minutes},
     };
 }
 

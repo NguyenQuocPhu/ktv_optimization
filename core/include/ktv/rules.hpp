@@ -61,6 +61,10 @@ struct Rules {
     double average_speed_kmh = 30;     // Đổi km chim bay ra phút khi không dùng OSRM.
     double at_risk_minutes = 20;       // projected_sla = AT_RISK khi còn dư dưới ngần này phút...
     double at_risk_ratio = 0.2;        // ...hoặc dưới tỷ lệ này của thời gian xử lý.
+    // Nghỉ trưa (bắt buộc): phải BẮT ĐẦU nghỉ trong [break_start, break_end − break_minutes]. [GIẢ ĐỊNH]
+    int break_start = 11 * 60 + 30;    // 11:30, phút trong ngày.
+    int break_end = 13 * 60 + 30;      // 13:30.
+    double break_minutes = 45;         // 0 = không có nghỉ trưa.
 };
 
 Rules default_rules();                              // Bộ mặc định.

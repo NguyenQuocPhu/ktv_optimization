@@ -17,8 +17,9 @@ static int failures = 0;
 
 using namespace ktv;
 
+static std::uniform_real_distribution<double> unit(0, 1);
+
 static Problem random_problem(std::mt19937& rng, int n) {
-    std::uniform_real_distribution<double> unit(0, 1);
     std::vector<Point> points;
     for (int i = 0; i <= n; ++i) points.push_back({21 + unit(rng) * 0.08, 105.8 + unit(rng) * 0.08});
     Problem p;
@@ -52,14 +53,23 @@ int main() {
     for (int round = 0; round < 300; ++round) {
         int n = 1 + round % 7;
         Problem p = random_problem(rng, n);
+        if (round % 2) {  // Nửa số bài có nghỉ trưa: khung [open, open + 90], nghỉ 45 phút.
+            p.break_open = 60 + unit(rng) * 200;
+            p.break_latest = p.break_open + 45;
+            p.break_minutes = 45;
+        }
         Solution s = solve(p, rules);
         CHECK(s.source == Source::Optimal);
         std::vector<int> order(n);
         std::iota(order.begin(), order.end(), 0);
         std::vector<double> best;
-        do {
-            auto k = objective(p, rules, order);
-            if (best.empty() || k < best) best = k;
+        do {  // Vét cạn: mọi hoán vị × mọi chỗ chèn nghỉ (và không nghỉ). Thứ tự sai luật → vô cực.
+            for (int at = -1; at <= n; ++at) {
+                std::vector<int> candidate = order;
+                if (at >= 0) candidate.insert(candidate.begin() + at, kBreak);
+                auto k = objective(p, rules, candidate);
+                if (best.empty() || k < best) best = k;
+            }
         } while (std::next_permutation(order.begin(), order.end()));
         auto got = objective(p, rules, s.order);
         bool same = got.size() == best.size();
@@ -79,6 +89,14 @@ int main() {
     std::iota(all.begin(), all.end(), 0);
     CHECK(sorted == all);
 
+    // Heuristic có nghỉ trưa: đúng một lần nghỉ, thứ tự hợp lệ (điểm hữu hạn).
+    big.break_open = 150;
+    big.break_latest = 195;
+    big.break_minutes = 45;
+    Solution rested = solve(big, rules);
+    CHECK(std::count(rested.order.begin(), rested.order.end(), kBreak) == 1);
+    CHECK(std::isfinite(objective(big, rules, rested.order)[0]));
+
     // Tới sớm hơn mốc hẹn thì chờ; check-in sau hạn B thì tính trễ theo trọng số ưu tiên.
     Problem one = random_problem(rng, 1);
     one.opens = {500};
@@ -90,7 +108,7 @@ int main() {
     one.due = {-10};  // Hạn đã qua trước lúc xuất phát.
     v = solve(one, rules).steps.at(0);
     CHECK(v.cost[LATE_CHECKIN] == 4 && std::abs(v.cost[LATE_MINUTES] - (v.checkin + 10)) < 1e-9);
-    CHECK(solve(big, rules).steps.size() == 14);
+    CHECK(solve(big, rules).steps.size() == 15);  // 14 việc + 1 lần nghỉ trưa.
 
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_dp: OK (" << checked << " bài so với vét cạn)\n";

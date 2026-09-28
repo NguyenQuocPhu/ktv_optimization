@@ -116,6 +116,13 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         p.same_area.push_back(mask);
     }
     p.shift_end = static_cast<double>(shift_end - start);
+    // Nghỉ trưa: cần khi còn kịp bắt đầu nghỉ (chưa qua giờ chốt) và ca làm phủ khung trưa.
+    const Minutes break_open = day + rules.break_start, break_latest = day + rules.break_end - static_cast<Minutes>(rules.break_minutes);
+    if (rules.break_minutes > 0 && start <= break_latest && shift_start <= break_open && shift_end >= day + rules.break_end) {
+        p.break_open = static_cast<double>(break_open - start);
+        p.break_latest = static_cast<double>(break_latest - start);
+        p.break_minutes = rules.break_minutes;
+    }
     
     std::string travel_error;
     if (osrm_url.empty()) {
@@ -136,20 +143,29 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     auto at = [&](double minutes) { return start + static_cast<Minutes>(std::llround(minutes)); };
     const double now_rel = static_cast<double>(now - start);
     ojson schedule = ojson::array();
-    int seq = 0, at_risk = 0, breach = 0, completed = 0, revisits = 0;
-    double km = 0, travel = 0, handle = 0, idle = 0, internal_km = 0;
+    int seq = 0, at_risk = 0, breach = 0, completed = 0, revisits = 0, total = 0;
+    double km = 0, travel = 0, handle = 0, idle = 0, rest = 0, internal_km = 0;
     std::vector<std::string> plot_names;
     Point center{0, 0};
-    for (size_t i = 0; i < steps.size(); ++i) {
-        const Visit& v = steps[i];
-        const Task& task = *tasks[v.task];
-        if (at(v.checkin) > at(v.arrive)) {  // Tới sớm hơn mốc hẹn: chờ.
+    std::vector<const Visit*> visits;  // Chỉ các bước tới việc thật (bỏ nghỉ trưa).
+    for (const Visit& v : steps)
+        if (v.task != kBreak) visits.push_back(&v);
+    for (const Visit& v : steps) {
+        if (at(v.checkin) > at(v.arrive)) {  // Tới sớm hơn mốc hẹn / giờ nghỉ: chờ.
             idle += v.checkin - v.arrive;
             schedule.push_back({{"seq", ++seq}, {"type", "IDLE"}, {"at", hhmm(at(v.arrive))},
                                 {"start_at", format_datetime(at(v.arrive))}, {"end_at", format_datetime(at(v.checkin))},
                                 {"duration_minutes", at(v.checkin) - at(v.arrive)},
-                                {"label", "Chờ tới khung hẹn " + hhmm(at(v.checkin))}});
+                                {"label", (v.task == kBreak ? "Chờ tới giờ nghỉ trưa " : "Chờ tới khung hẹn ") + hhmm(at(v.checkin))}});
         }
+        if (v.task == kBreak) {
+            rest += v.done - v.checkin;
+            schedule.push_back({{"seq", ++seq}, {"type", "BREAK"}, {"at", hhmm(at(v.checkin))},
+                                {"start_at", format_datetime(at(v.checkin))}, {"end_at", format_datetime(at(v.done))},
+                                {"duration_minutes", at(v.done) - at(v.checkin)}, {"label", "Nghỉ trưa"}});
+            continue;
+        }
+        const Task& task = *tasks[v.task];
         const char* sla = projected_sla(v, p.due[v.task], p.complete_by[v.task], p.service[v.task], now_rel, rules);
         at_risk += std::string(sla) == "AT_RISK";
         breach += std::string(sla) == "WILL_BREACH" || std::string(sla) == "ALREADY_BREACHED";
@@ -158,9 +174,9 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         km += v.km;
         travel += v.travel;
         handle += p.service[v.task];
-        if (i > 0) internal_km += v.km;
-        center.lat += task.latlng->lat / steps.size();
-        center.lng += task.latlng->lng / steps.size();
+        if (total++ > 0) internal_km += v.km;  // Chặng đầu là inbound.
+        center.lat += task.latlng->lat / visits.size();
+        center.lng += task.latlng->lng / visits.size();
         std::string plot = "Lô " + std::to_string(task.task_plots_id);
         for (const Plot& own : staff.plots)
             if (own.id == task.task_plots_id && !own.name.empty()) plot = own.name;
@@ -177,16 +193,15 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
 
     // ---- Cụm: bước này gộp cả tuyến vào một cụm; module cluster tách ở bước sau.
     double radius_km = 0;
-    for (const Visit& v : steps) radius_km = std::max(radius_km, distance_km(center, *tasks[v.task]->latlng));
+    for (const Visit* v : visits) radius_km = std::max(radius_km, distance_km(center, *tasks[v->task]->latlng));
     std::string name = "Cluster 1 — ";
     for (size_t i = 0; i < plot_names.size(); ++i) name += (i ? " · " : "") + plot_names[i];
     ojson cluster = {{"cluster_seg", 1}, {"cluster_code", "CL-1"}, {"name", name}, {"center", latlng(center)},
-                     {"radius_m", std::llround(radius_km * 1000)}, {"task_count", steps.size()},
-                     {"travel_km_inbound", round_to(steps.front().km, 1)}, {"travel_km_internal", round_to(internal_km, 1)},
+                     {"radius_m", std::llround(radius_km * 1000)}, {"task_count", total},
+                     {"travel_km_inbound", round_to(visits.front()->km, 1)}, {"travel_km_internal", round_to(internal_km, 1)},
                      {"handle_minutes", std::llround(handle)}, {"schedule", schedule}};
 
-    const Minutes finish = at(steps.back().done);
-    const int total = static_cast<int>(steps.size());
+    const Minutes finish = at(visits.back()->done);  // Xong việc cuối (nghỉ ở cuối tuyến không tính).
     ojson metrics = {
         {"total_distance_km", round_to(km, 1)},
         {"total_travel_minutes", std::llround(travel)},
@@ -199,7 +214,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         {"cluster_count", 1},
         {"revisit_count", revisits},
         {"idle_minutes", std::llround(idle)},
-        {"break_minutes", 0},
+        {"break_minutes", std::llround(rest)},
         {"tasks_total", total},
         {"tasks_forecast_completed", completed},
         {"shift_end_at", format_datetime(shift_end)},

@@ -6,18 +6,23 @@
 //   Module này KHÔNG biết JSON, tên việc hay giờ thật: chỉ có số, giờ tính bằng phút kể từ
 //   lúc KTV xuất phát (0). plan.cpp lo đổi message ↔ số.
 //
-//   Cách làm: xét dần các tuyến dở dang. Trạng thái = (tập việc đã làm, việc làm cuối).
+//   Cách làm: xét dần các tuyến dở dang. Trạng thái = (tập việc đã làm + bit "đã nghỉ trưa", việc làm cuối).
 //   Mỗi trạng thái giữ vài "nhãn" = tuyến dở dang tốt nhất tới đó (giờ xong + điểm phạt theo tầng).
 //   Nhãn thua nhãn khác ở MỌI mặt thì bỏ. Hết việc thì chọn nhãn nhỏ nhất theo tầng (rules).
 //   ≤ max_exact_tasks việc: ra thứ tự tốt nhất. Nhiều hơn: tham lam + 2-opt (đảo đoạn).
 //
+//   Nghỉ trưa = "việc ảo" kBreak: không di chuyển, bắt đầu = max(giờ xong, break_open), dài break_minutes.
+//   Luật chặn: CHƯA nghỉ thì mọi việc phải xong trước break_latest (giờ muộn nhất bắt đầu nghỉ).
+//   Kết thúc hợp lệ khi đã nghỉ, hoặc chưa nghỉ nhưng mọi việc đã xong trước break_latest.
+//
 // Dùng thế nào:
 //   Problem p = ...;                  // plan.cpp dựng từ message
-//   Solution s = solve(p, rules);     // s.order = {2, 0, 1}: làm việc 2, rồi 0, rồi 1
+//   Solution s = solve(p, rules);     // s.order = {2, kBreak, 0, 1}: làm việc 2, nghỉ trưa, rồi 0, rồi 1
 //                                     // s.steps[k]: giờ tới, check-in, xong, km của việc thứ k
 //
 // Trong file này có:
 //   kNone     – "không có" (không hẹn, không hạn)
+//   kBreak    – ký hiệu "nghỉ trưa" trong thứ tự và trong Visit.task
 //   Problem   – bài toán của 1 KTV đã quy ra số
 //   Visit     – kết quả của MỘT bước đi tới một việc (giờ tới, check-in, xong, km, điểm phạt)
 //   Source, Solution – thứ tự + từng bước + nó do đâu mà ra (tốt nhất / gần đúng / tham lam)
@@ -40,6 +45,7 @@
 namespace ktv {
 
 inline constexpr double kNone = NAN;  // "Không có". So sánh với NaN luôn sai → không hạn thì không bao giờ trễ.
+inline constexpr int kBreak = -1;     // "Nghỉ trưa": dùng thay chỉ số việc trong Solution.order và Visit.task.
 
 // Bài toán của 1 KTV. Việc đánh số 0..n-1; giờ tính bằng phút kể từ lúc xuất phát.
 // VD việc 0: làm 90 phút, hẹn lúc 280 (A), phải check-in trước 400 (B), không hạn hoàn tất.
@@ -52,12 +58,16 @@ struct Problem {
     std::vector<double> weight;       // Trọng số ưu tiên: P1 = 4 … P4 = 1.
     std::vector<uint64_t> same_area;  // same_area[i]: các việc khác cùng lô với việc i (bit j = 1 nếu việc j cùng lô).
     double shift_end = kNone;         // Giờ hết ca.
+    double break_open = kNone;        // Sớm nhất được bắt đầu nghỉ trưa. kNone = tuyến này không cần nghỉ.
+    double break_latest = kNone;      // Muộn nhất phải bắt đầu nghỉ (= hết khung trưa − break_minutes).
+    double break_minutes = 0;         // Thời lượng nghỉ.
+    bool needs_break() const { return !std::isnan(break_latest); }
     int size() const { return static_cast<int>(service.size()); }  // Số việc.
 };
 
-// Một bước: đang ở việc `here` (-1 = nơi xuất phát), rời đi lúc `clock`, tới việc `task`.
+// Một bước: tới việc `task`, hoặc đi nghỉ trưa (task = kBreak: km 0, checkin = giờ bắt đầu nghỉ).
 struct Visit {
-    int task;
+    int task;                // Chỉ số việc, hoặc kBreak.
     double km, travel;       // Chặng vừa đi.
     double arrive;           // Giờ tới nơi.
     double checkin;          // = max(arrive, mốc hẹn A): tới sớm thì chờ.
@@ -74,7 +84,7 @@ enum class Source {
 inline constexpr const char* kSourceNames[] = {"OPTIMAL", "APPROXIMATE", "HEURISTIC"};
 
 struct Solution {
-    std::vector<int> order;    // Chỉ số việc theo thứ tự làm.
+    std::vector<int> order;    // Chỉ số việc theo thứ tự làm; kBreak = chỗ nghỉ trưa.
     std::vector<Visit> steps;  // steps[k]: bước tới việc order[k].
     Source source;
 };

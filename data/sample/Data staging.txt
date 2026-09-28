@@ -1,0 +1,139 @@
+{
+	"staff": {
+		"staff_id": "00201964",
+		"staff_account": "ISC01.LUANPT2",
+		"latlng": "10.7538419,106.7404162",
+		"available": "07:30-18:00",
+		"plots": [
+			{
+				"id": 81,
+				"name": "L02",
+				"role": 1,
+				"block_id": 333916
+			}
+		],
+		"status": 2,
+		"current_task": {
+			"task_id": 1195760056,
+			"task_status_id": 10,
+			"task_type_id": 2
+		}
+	},
+	"tasks": {
+		"trien_khai": [
+			{
+				"task_id": 1080751266,
+				"task_group_id": 1,
+				"task_group_name": "trien_khai",
+				"task_type_id": 3,
+				"task_type_name": "trien_khai_net",
+				"task_sub_id": 0,
+				"task_sub_name": "",
+				"task_status_id": 97,
+				"task_status_name": "",
+				"sla": {
+					"sla_minutes": 120,
+					"priority_in_day": 3
+				},
+				"appointment": "",
+				"location": "1 An Bình, Phường An Đông, Hồ Chí Minh",
+				"contract_id": 1126569863,
+				"contract_no": "SGABP0236",
+				"latlng": "10.9294489,106.5548820",
+				"handle_minutes": 0,
+				"task_plots_id": 81,
+				"staff_plots_id": 81,
+				"staff_role": 1,
+				"block_id": 333916,
+				"create_date": "2026-05-12 19:29:16",
+				"complete_date": ""
+			}
+		],
+		"bao_tri": [
+			{
+				"task_id": 1195761056,
+				"task_group_id": 2,
+				"task_group_name": "bao_tri",
+				"task_type_id": 2,
+				"task_type_name": "bao_tri_logic",
+				"task_sub_id": 0,
+				"task_sub_name": "",
+				"task_status_id": 0,
+				"task_status_name": "",
+				"sla": {
+					"sla_minutes": 60,
+					"priority_in_day": 2
+				},
+				"appointment": "",
+				"location": "11/69 Duong So 11, P.11, Q.Go Vap, HCM",
+				"contract_id": 1033984152,
+				"contract_no": "SGH422669",
+				"latlng": "10.8397067,106.6616543",
+				"handle_minutes": 0,
+				"task_plots_id": 81,
+				"staff_plots_id": 81,
+				"staff_role": 1,
+				"block_id": 333916,
+				"create_date": "2026-08-10 14:06:35",
+				"complete_date": ""
+			},
+			{
+				"task_id": 1195761036,
+				"task_group_id": 2,
+				"task_group_name": "bao_tri",
+				"task_type_id": 2,
+				"task_type_name": "bao_tri_logic",
+				"task_sub_id": 0,
+				"task_sub_name": "",
+				"task_status_id": 0,
+				"task_status_name": "",
+				"sla": {
+					"sla_minutes": 60,
+					"priority_in_day": 2
+				},
+				"appointment": "",
+				"location": "1041/62/144/21 Tran Xuan Soan ((dia Chi Lay Tren Giay Thu Tien Dien),Day Tro Phong Thu Hai Ben Tay Trai), P.Tan Hung, Q7, HCM",
+				"contract_id": 1044241503,
+				"contract_no": "SGH638624",
+				"latlng": "10.7425286,106.6926289",
+				"handle_minutes": 0,
+				"task_plots_id": 0,
+				"staff_plots_id": 0,
+				"staff_role": 0,
+				"block_id": 298716,
+				"create_date": "2026-08-10 14:00:09",
+				"complete_date": ""
+			},
+			{
+				"task_id": 1195760056,
+				"task_group_id": 2,
+				"task_group_name": "bao_tri",
+				"task_type_id": 2,
+				"task_type_name": "bao_tri_logic",
+				"task_sub_id": 0,
+				"task_sub_name": "",
+				"task_status_id": 10,
+				"task_status_name": "",
+				"sla": {
+					"sla_minutes": 60,
+					"priority_in_day": 2
+				},
+				"appointment": "2026-08-19 19:30:00",
+				"location": "56/7Q Ap Chanh 1 (Ap Chanh 1), Xa Tan Xuan, HM, HCM",
+				"contract_id": 1019173722,
+				"contract_no": "SGH024140",
+				"latlng": "10.878497706726193,106.60377284511924",
+				"handle_minutes": 0,
+				"task_plots_id": 0,
+				"staff_plots_id": 0,
+				"staff_role": 0,
+				"block_id": 339526,
+				"create_date": "2026-07-14 15:57:04",
+				"complete_date": ""
+			}
+		],
+		"thu_hoi": [],
+		"hoa_don": [],
+		"onsite": []
+	}
+}

@@ -12,9 +12,9 @@ plan       chọn việc có tọa độ, tính hạn từng việc (A, B, hạn
    │  travel   ma trận km / phút: OSRM đường bộ (--osrm URL); lỗi → chim bay × 1,3, mã 424
    │  rules    tầng rule + trọng số (mặc định trong code, đè bằng --rules file.json)
    ▼
-dp         quy hoạch động → thứ tự tốt nhất (≤ 12 việc) · tham lam + 2-opt (nhiều hơn)
+dp         quy hoạch động → thứ tự tốt nhất (≤ 12 việc) · tham lam + 2-opt (nhiều hơn); có nghỉ trưa
    ▼
-plan       đi lại theo thứ tự → dòng TASK / IDLE, projected_sla, cụm, metrics ──► response 200
+plan       đi lại theo thứ tự → dòng TASK / IDLE / BREAK, projected_sla, cụm, metrics ──► response 200
 ```
 
 ## Module
@@ -49,10 +49,11 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 |---|---|---|
 | ✅ 1 | api, rules, travel, dp, plan | Port QHĐ đã duyệt; output 1 cụm |
 | 2 | cluster | Tách cụm theo chặng > 2 km, tên cụm theo lô, revisit_count |
-| 3 | dp | Nhiều khung giờ làm (OT) + nghỉ trưa là việc ảo trong QHĐ |
+| ✅ 3a | dp | Nghỉ trưa = việc ảo + 1 bit "đã nghỉ" trong QHĐ (bắt buộc, khung 11:30–13:30, 45 phút) |
+| 3b | dp | Nhiều khung giờ làm (OT) |
 | 4 | dp | Rule 4: giữ tuyến cũ nếu tuyến mới không tốt hơn rõ |
 | ✅ 5 | travel | OSRM tự host (một lần gọi `/table` mỗi KTV), lỗi thì chim bay × 1,3 |
 | 6 | service | Vòng Kafka: đọc topic vào → xếp → ghi topic ra |
 | 7 | binding | pybind11 cho backtest/mô phỏng Python; khớp rồi xóa planner Python |
 
-Giả định đang dùng (chờ xác nhận): việc đang làm còn 30 phút nữa xong; việc "trong ngày tạo phiếu" không hẹn tính hạn là hết hôm nay (API chưa có ngày tạo phiếu); định mức thời gian xử lý theo loại ở `src/api.cpp`.
+Giả định đang dùng (chờ xác nhận): nghỉ trưa bắt buộc, phải bắt đầu trong 11:30–12:45, nghỉ 45 phút (`lunch_break`, `lunch_break_minutes` trong rules); việc đang làm còn 30 phút nữa xong; việc "trong ngày tạo phiếu" không hẹn tính hạn là hết hôm nay (API chưa có ngày tạo phiếu); định mức thời gian xử lý theo loại ở `src/api.cpp`.
