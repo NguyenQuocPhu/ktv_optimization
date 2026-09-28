@@ -1,13 +1,17 @@
-// CLI của lõi C++. Mỗi dòng file JSONL là một message API (input của một lần gọi AI cho một KTV).
-//   ktv_core plan <messages.jsonl> [--rules rules.json] [--osrm http://127.0.0.1:5000] [--out responses.jsonl]
-//   ktv_core validate <messages.jsonl>
+// CLI của lõi C++ (adapter local, chưa có Kafka).
+// Input: một object JSON (pretty-printed) hoặc file JSONL, mỗi record là một message API (một KTV).
+//   ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"] [--out responses.jsonl]
+//   ktv_core validate <input>
 //   ktv_core print-rules
+// Output mỗi record là một response OUT prototype (message_id, run_code, trigger, ..., data).
 #include <algorithm>
 #include <ctime>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <vector>
 
+#include "ktv/adapter.hpp"
 #include "ktv/plan.hpp"
 
 namespace {
@@ -15,8 +19,8 @@ namespace {
 ktv::Minutes vietnam_now() { return static_cast<ktv::Minutes>(std::time(nullptr) / 60) + 7 * 60; }
 
 int usage() {
-    std::cerr << "cách dùng:\n  ktv_core plan <messages.jsonl> [--rules rules.json] [--osrm URL] [--out responses.jsonl]\n"
-                 "  ktv_core validate <messages.jsonl>\n  ktv_core print-rules\n";
+    std::cerr << "cách dùng:\n  ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"] [--out responses.jsonl]\n"
+                 "  ktv_core validate <input>\n  ktv_core print-rules\n";
     return 2;
 }
 
@@ -25,12 +29,13 @@ int usage() {
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
     std::string command = argv[1];
-    std::string input, rules_path, out_path, osrm_url;
+    std::string input, rules_path, out_path, osrm_url, at;
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--rules" && i + 1 < argc) rules_path = argv[++i];
         else if (arg == "--out" && i + 1 < argc) out_path = argv[++i];
         else if (arg == "--osrm" && i + 1 < argc) osrm_url = argv[++i];
+        else if (arg == "--at" && i + 1 < argc) at = argv[++i];
         else if (input.empty() && arg[0] != '-') input = arg;
         else return usage();
     }
@@ -53,32 +58,37 @@ int main(int argc, char** argv) {
         std::cerr << "không mở được " << input << "\n";
         return 2;
     }
+    const std::vector<ktv::json> records = ktv::read_records(in);
+
+    // --at giúp test xác định giờ; không có thì lấy giờ máy.
+    const ktv::Minutes server_now =
+        at.empty() ? vietnam_now() : ktv::parse_datetime(at).value_or(vietnam_now());
+
     std::ofstream file;
     if (!out_path.empty()) file.open(out_path);
     std::ostream* out = command == "plan" && !out_path.empty() ? &file : nullptr;
 
     std::map<std::string, int> status, sources, travels;
     std::vector<long long> times;
-    long long count = 0, shown = 0;
-    std::string line;
-    while (std::getline(in, line)) {
-        if (line.empty()) continue;
-        ++count;
-        const ktv::Minutes now = vietnam_now();
+    long long shown = 0;
+    for (size_t i = 0; i < records.size(); ++i) {
+        const ktv::json& record = records[i];
+        const ktv::Envelope envelope = ktv::local_envelope(record, static_cast<long long>(i) + 1, server_now);
         std::vector<ktv::Error> errors;
-        ktv::json data = ktv::json::parse(line, nullptr, false);
         ktv::Message message;
-        if (data.is_discarded()) errors.push_back({"", "JSON hỏng"});
-        else message = ktv::parse_message(data, errors);
+        if (record.is_discarded()) errors.push_back({"", "JSON hỏng"});
+        else message = ktv::parse_message(record, errors);
+        message.message_id = envelope.message_id;      // để trace_id = message_id của envelope
+        message.planned_at = envelope.planned_at;      // lập tuyến theo đúng planned_at của envelope
 
         nlohmann::ordered_json response;
         if (!errors.empty()) {
             std::string text = "Sai định dạng tham số:";
-            for (size_t i = 0; i < errors.size() && i < 3; ++i) text += " " + errors[i].path + " " + errors[i].problem + ";";
-            response = ktv::error_response("400", text, message.message_id, now);
-            if (shown++ < 20) std::cerr << "dòng " << count << ": " << text << "\n";
+            for (size_t k = 0; k < errors.size() && k < 3; ++k) text += " " + errors[k].path + " " + errors[k].problem + ";";
+            response = ktv::error_response("400", text, envelope.message_id, server_now);
+            if (shown++ < 20) std::cerr << "record " << i + 1 << ": " << text << "\n";
         } else if (command == "plan") {
-            ktv::PlanResult result = ktv::plan(message, rules, now, osrm_url);
+            ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url);
             response = std::move(result.response);
             if (response["success"]) {
                 ++sources[ktv::kSourceNames[static_cast<int>(result.source)]];
@@ -88,11 +98,15 @@ int main(int argc, char** argv) {
         } else {
             response = {{"statuscode", "200"}};
         }
+
         ++status[response["statuscode"].get<std::string>()];
-        if (out) *out << response.dump() << "\n";
+        if (out) {
+            if (command == "plan") *out << ktv::wrap_response(envelope, response).dump() << "\n";
+            else *out << response.dump() << "\n";  // validate: giữ output gọn như cũ
+        }
     }
 
-    std::cout << count << " message";
+    std::cout << records.size() << " record";
     for (auto& [code, n] : status) std::cout << " · " << code << ": " << n;
     std::cout << "\n";
     if (!times.empty()) {
