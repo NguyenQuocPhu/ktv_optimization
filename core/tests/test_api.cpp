@@ -52,6 +52,56 @@ int main() {
         CHECK(!message.staff.current_task);
     }
     {
+        // Phase 1: field contract mới (status, create/complete_date, contract, handle 0/null, role 3).
+        json data = sample();
+        data["staff"]["status"] = 2;
+        data["tasks"]["trien_khai"][0]["create_date"] = "2026-05-12 19:29:16";
+        data["tasks"]["trien_khai"][0]["complete_date"] = "";
+        data["tasks"]["trien_khai"][0]["contract_id"] = 1126569863;
+        data["tasks"]["trien_khai"][0]["contract_no"] = "SGABP0236";
+        data["tasks"]["trien_khai"][0]["staff_role"] = 3;
+        data["tasks"]["trien_khai"][0]["handle_minutes"] = 0;
+        std::vector<ktv::Error> errors;
+        auto message = ktv::parse_message(data, errors);
+        for (const auto& e : errors) std::cerr << "  lỗi không mong đợi: " << e.path << " " << e.problem << "\n";
+        CHECK(errors.empty());
+        CHECK(message.staff.status == 2);
+        CHECK(message.tasks[0].create_date && ktv::format_datetime(*message.tasks[0].create_date) == "2026-05-12 19:29:00");
+        CHECK(!message.tasks[0].complete_date);
+        CHECK(message.tasks[0].contract_id && *message.tasks[0].contract_id == 1126569863);
+        CHECK(message.tasks[0].contract_no == "SGABP0236");
+        CHECK(message.tasks[0].staff_role == 3);
+        CHECK(!message.tasks[0].handle_minutes);  // 0 = dùng định mức.
+
+        data["tasks"]["trien_khai"][0]["handle_minutes"] = nullptr;  // null cũng dùng định mức.
+        errors.clear();
+        ktv::parse_message(data, errors);
+        CHECK(errors.empty());
+
+        data["staff"]["status"] = 9;  // Ngoài miền 1–3.
+        errors.clear();
+        ktv::parse_message(data, errors);
+        bool status_failed = false;
+        for (const auto& e : errors) status_failed |= e.path == "staff.status";
+        CHECK(status_failed);
+
+        data = sample();
+        data["tasks"]["trien_khai"][0]["staff_role"] = 0;  // Role 0 chưa hỗ trợ (deferred).
+        errors.clear();
+        ktv::parse_message(data, errors);
+        bool role_failed = false;
+        for (const auto& e : errors) role_failed |= e.path == "tasks.trien_khai[0].staff_role";
+        CHECK(role_failed);
+
+        // current_task trùng row task trong tasks: hợp lệ, chỉ để bổ sung dữ liệu.
+        data = sample();
+        data["staff"]["current_task"] = json{{"task_id", 5454541}, {"task_status_id", 10}, {"task_type_id", 3}};
+        errors.clear();
+        ktv::parse_message(data, errors);
+        for (const auto& e : errors) std::cerr << "  lỗi không mong đợi: " << e.path << " " << e.problem << "\n";
+        CHECK(errors.empty());
+    }
+    {
         json data = sample();
         data["staff"]["staff_id"] = 324668;
         data["tasks"]["trien_khai"][0]["latlng"] = "21.03;105.80";

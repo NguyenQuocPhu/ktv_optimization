@@ -64,6 +64,7 @@ struct Staff {
     std::vector<std::pair<int, int>> available;   // "08:00-17:30,17:30-21:00" → {(480,1050), (1050,1260)}: phút trong ngày.
     std::vector<Plot> plots;
     std::optional<CurrentTask> current_task;      // Không có = null.
+    int status = 0;                               // 1 rảnh, 2 bận, 3 off. 0 = payload không gửi. Chưa dùng để lọc ở phase này.
 };
 
 // Một việc trong tasks.<nhóm>[i].
@@ -74,10 +75,14 @@ struct Task {
     std::optional<int> sla_minutes;      // Hẹn A → hạn check-in B = A + sla_minutes. Không có = hạn không tính theo phút.
     int priority_in_day = 0;             // 1 gấp nhất … 4.
     std::optional<Minutes> appointment;  // Mốc hẹn A. Không có = khách không hẹn.
+    std::optional<Minutes> create_date;  // Ngày phát sinh ca vụ (workbook mới). Không có = chưa gửi.
+    std::optional<Minutes> complete_date;// Ngày hoàn thành. Không có = chưa hoàn thành.
     std::string location;                // Địa chỉ, chỉ để hiển thị.
     std::optional<Point> latlng;         // Không có = thiếu tọa độ → bị loại khỏi tuyến.
-    std::optional<int> handle_minutes;   // Không có = dùng định mức theo loại việc.
+    std::optional<int> handle_minutes;   // Không có / 0 = dùng định mức theo loại việc.
     int task_plots_id = 0, staff_plots_id = 0, staff_role = 0, block_id = 0;
+    std::optional<long long> contract_id;  // ObjID hợp đồng. Chỉ để truy vết.
+    std::string contract_no;               // Số hợp đồng. Chỉ để truy vết.
 };
 
 // Cả message = input của một lần gọi AI cho một KTV.

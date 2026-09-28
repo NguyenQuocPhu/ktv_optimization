@@ -10,9 +10,10 @@ const std::vector<TaskKind>& task_kinds() {
     using O = OnTime;
     static const std::vector<TaskKind> kinds = {
         {"trien_khai", 3, "trien_khai_net", 120, O::CheckinBeforeB, 3, 120},
-        {"trien_khai", 4, "box_cam_only", 120, O::CheckinBeforeB, 3, 60},
-        {"trien_khai", 5, "swap", 60, O::CheckinBeforeB, 3, 45},
-        {"trien_khai", 6, "giao_thiet_bi_cam", 60, O::DoneSameAppointmentDay, 3, 30},
+        {"trien_khai", 4, "trien_khai_box", 120, O::CheckinBeforeB, 3, 60},  // Workbook mới đổi tên box_cam_only; định mức chờ chốt.
+        {"trien_khai", 4, "box_cam_only", 120, O::CheckinBeforeB, 3, 60},    // Tên cũ, giữ để chạy fixture cũ. [CHỜ CHỐT bảng số]
+        {"trien_khai", 5, "swap", 60, O::CheckinBeforeB, 3, 45},             // Workbook mới coi là subtype của trien_khai_box. [CHỜ CHỐT]
+        {"trien_khai", 6, "giao_thiet_bi_cam", 60, O::DoneSameAppointmentDay, 3, 30},  // [CHỜ CHỐT]
         {"bao_tri", 1, "bao_tri_vat_ly", 60, O::CheckinBeforeB, 1, 60},
         {"bao_tri", 2, "bao_tri_logic", 60, O::CheckinBeforeB, 2, 45},
         {"thu_hoi", 1, "thu_hoi_thiet_bi", std::nullopt, O::DoneWithinMonth, 4, 20},
@@ -175,11 +176,16 @@ Message parse_message(const json& data, std::vector<Error>& errors) {
         r.fail("staff", "cần object");
     } else if (staff) {
         const std::string p = "staff";
-        r.only(*staff, p, {"staff_id", "staff_account", "staff_location", "latlng", "available", "plots", "current_task"});
+        r.only(*staff, p, {"staff_id", "staff_account", "staff_location", "latlng", "available", "plots", "current_task", "status"});
         auto& s = message.staff;
         s.staff_id = r.text(*staff, p, "staff_id", true, true);
         s.staff_account = r.text(*staff, p, "staff_account", true, true);
         s.staff_location = r.text(*staff, p, "staff_location", false);
+        if (staff->contains("status")) {  // Không bắt buộc: workbook mới có, JSON mẫu không gửi.
+            const json& value = (*staff)["status"];
+            if (value.is_number_integer() && value.get<int>() >= 1 && value.get<int>() <= 3) s.status = value.get<int>();
+            else r.fail(p + ".status", "cần 1, 2 hoặc 3");
+        }
         if (staff->contains("latlng")) {
             auto point = (*staff)["latlng"].is_string() ? parse_latlng((*staff)["latlng"].get<std::string>()) : std::nullopt;
             if (point) s.latlng = *point;
@@ -261,8 +267,9 @@ Message parse_message(const json& data, std::vector<Error>& errors) {
             }
             r.only(item, path,
                    {"task_id", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
-                    "task_sub_name", "task_status_id", "task_status_name", "sla", "appointment", "location", "latlng",
-                    "handle_minutes", "task_plots_id", "staff_plots_id", "staff_role", "block_id", "location_id"});
+                    "task_sub_name", "task_status_id", "task_status_name", "sla", "appointment", "create_date",
+                    "complete_date", "location", "latlng", "handle_minutes", "task_plots_id", "staff_plots_id",
+                    "staff_role", "block_id", "location_id", "contract_id", "contract_no"});
             Task t;
             t.task_id = r.integer<long long>(item, path, "task_id");
             t.task_group_id = r.integer<int>(item, path, "task_group_id");
@@ -288,6 +295,28 @@ Message parse_message(const json& data, std::vector<Error>& errors) {
                     r.fail(path + ".appointment", "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
                 }
             }
+            const std::pair<const char*, std::optional<Minutes>*> date_fields[] = {
+                {"create_date", &t.create_date}, {"complete_date", &t.complete_date}};
+            for (const auto& field : date_fields) {
+                if (!item.contains(field.first)) continue;
+                const json& value = item[field.first];
+                if (value.is_string() && value.get_ref<const std::string&>().empty()) {
+                } else if (auto when = value.is_string() ? parse_datetime(value.get<std::string>()) : std::nullopt) {
+                    *field.second = when;
+                } else {
+                    r.fail(path + "." + field.first, "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
+                }
+            }
+            if (item.contains("contract_id")) {
+                const json& value = item["contract_id"];
+                if (value.is_null()) {
+                } else if (value.is_number_integer()) {
+                    t.contract_id = value.get<long long>();
+                } else {
+                    r.fail(path + ".contract_id", "cần số nguyên");
+                }
+            }
+            t.contract_no = r.text(item, path, "contract_no", false);
             if (!item.contains("latlng")) {
                 r.fail(path + ".latlng", "thiếu field bắt buộc");
             } else if (const json& value = item["latlng"]; !(value.is_string() && value.get_ref<const std::string&>().empty())) {
@@ -297,14 +326,19 @@ Message parse_message(const json& data, std::vector<Error>& errors) {
             }
             if (item.contains("handle_minutes")) {
                 const json& value = item["handle_minutes"];
-                if (value.is_number_integer() && value.get<int>() > 0) t.handle_minutes = value.get<int>();
-                else if (!(value.is_string() && value.get_ref<const std::string&>().empty()))
-                    r.fail(path + ".handle_minutes", "cần \"\" hoặc số nguyên > 0");
+                if (value.is_null()) {
+                } else if (value.is_number_integer()) {
+                    if (value.get<int>() > 0) t.handle_minutes = value.get<int>();  // 0 = dùng định mức.
+                    else if (value.get<int>() < 0) r.fail(path + ".handle_minutes", "cần số nguyên ≥ 0");
+                } else if (value.is_string() && value.get_ref<const std::string&>().empty()) {
+                } else {
+                    r.fail(path + ".handle_minutes", "cần \"\", null hoặc số nguyên ≥ 0");
+                }
             }
-            if (item.contains("staff_role")) {
+            if (item.contains("staff_role")) {  // 1 chính / 2 kiêm nhiệm / 3 hỗ trợ. Role 0 chưa hỗ trợ.
                 const json& value = item["staff_role"];
-                if (value.is_number_integer() && (value.get<int>() == 1 || value.get<int>() == 2)) t.staff_role = value.get<int>();
-                else r.fail(path + ".staff_role", "cần 1 hoặc 2");
+                if (value.is_number_integer() && value.get<int>() >= 1 && value.get<int>() <= 3) t.staff_role = value.get<int>();
+                else r.fail(path + ".staff_role", "cần 1, 2 hoặc 3");
             } else {
                 r.fail(path + ".staff_role", "thiếu field bắt buộc");
             }
@@ -339,8 +373,8 @@ Message parse_message(const json& data, std::vector<Error>& errors) {
             message.tasks.push_back(std::move(t));
         }
     }
-    if (message.staff.current_task && seen.count(message.staff.current_task->task_id))
-        r.fail("staff.current_task.task_id", "việc đang làm vẫn nằm trong tasks");
+    // Staging có thể gửi kèm row task của việc đang làm để bổ sung dữ liệu; không coi là lỗi.
+    // Việc lọc/tách current khỏi candidate thuộc bước normalization, không phải parser.
     return message;
 }
 
