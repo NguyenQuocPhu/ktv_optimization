@@ -533,7 +533,7 @@ Chia thành 2 phase nhỏ:
 | Phase | Nội dung | Exit gate |
 |---|---|---|
 | 6.1 Dữ liệu vào ✅ | `gateway/store.*`: `RouteStore` (`put/get/get_latest/size`) + `MemoryRouteStore` (map + mutex). `gateway/seed.*`: đọc OUT JSONL → index `(staff_id, date)`, bỏ dòng hỏng | unit test store + seed; chưa HTTP |
-| 6.2 HTTP + binary | `gateway/server.*`: `GET /api/v1/worklist/{staff_id}?date=`, `GET /healthz`, token tĩnh tùy chọn. `gateway/main.cpp`: `ktv_gateway --port --seed --token`. E2E `ktv_core plan → seed → GET` | HTTP test cổng tạm + toàn bộ `ctest` pass; demo chạy |
+| 6.2 HTTP + binary ✅ | `gateway/server.*`: `GET /api/v1/worklist/{staff_id}?date=`, `GET /healthz`, token tĩnh tùy chọn. `gateway/main.cpp`: `ktv_gateway --port --seed --token`. E2E `ktv_core plan → seed → GET` | HTTP test cổng tạm + toàn bộ `ctest` pass; demo chạy |
 
 **Kết quả 6.1:** `core/include/ktv/gateway/store.hpp`, `seed.hpp`; `core/src/gateway/store.cpp`, `seed.cpp`; `tests/test_gateway_store.cpp`, `test_gateway_seed.cpp`; lib `gateway` trong CMake. `ctest` 13/13 pass. Store thread-safe (mutex), `get_latest` theo date tăng dần; seed bỏ dòng hỏng/thiếu `planned_at`/`data.staff_id`/staff rỗng, cùng key thì bản sau thắng. Không sửa core pipeline.
 
@@ -544,6 +544,8 @@ Chia thành 2 phase nhỏ:
 - GET **không** tính, không gọi `plan()`.
 
 **Sau này:** Phase 7 thay `--seed` bằng consumer OUT; HTTP + `RouteStore` giữ nguyên. Redis = thêm `RedisRouteStore` khi cần nhiều replica/persist.
+
+**Kết quả 6.2:** `core/include/ktv/gateway/server.hpp`, `core/src/gateway/server.cpp`, `core/src/gateway/main.cpp` (binary `ktv_gateway`), `tests/test_gateway_server.cpp`. `ctest` 14/14 pass. Demo E2E: sinh 300 message → 294 dòng OUT → seed 120 key `(staff, date)`; `/healthz` 200; thiếu token 401; có token trả đúng route; staff lạ 202 `retry_after`. GET không gọi `plan()`, core pipeline không đổi.
 
 **Ghi chú:** `artifacts/fake/responses.jsonl` là format cũ (`type`, không envelope, không `planned_at`) → seed sẽ bỏ qua mọi dòng; phải sinh lại:
 

@@ -46,6 +46,11 @@ cmake -S core -B core/build && cmake --build core/build -j
 core/build/ktv_core plan artifacts/fake/messages.jsonl --osrm http://127.0.0.1:5000 --out artifacts/fake/responses.jsonl
 # bỏ --osrm để dùng chim bay (không cần OSRM)
 core/build/ktv_core print-rules > rules.json             # sửa trọng số rồi: plan ... --rules rules.json
+
+# Gateway đọc cho Mobix (không tính lại): sinh OUT rồi seed, rồi mở HTTP
+core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/responses_v2.jsonl
+core/build/ktv_gateway --port 8080 --seed artifacts/fake/responses_v2.jsonl --token secret
+# → GET http://127.0.0.1:8080/api/v1/worklist/{staff_id}?date=YYYY-MM-DD  ·  /healthz
 ```
 
 Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
@@ -65,7 +70,7 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 | ✅ 5.1 | adapter, main | Hardening CLI local: `--at` sai báo lỗi, JSON hỏng một output |
 | ✅ 5.2 | cluster | Tách `summarize_clusters`; plan chỉ còn điều phối |
 | ✅ 6.1 | gateway/store, gateway/seed | `RouteStore` + `MemoryRouteStore`, loader OUT JSONL |
-| 6.2 | gateway/server, gateway/main | `ktv_gateway`: `GET /worklist/{staff_id}`, `/healthz` |
+| ✅ 6.2 | gateway/server, gateway/main | `ktv_gateway`: `GET /worklist/{staff_id}`, `/healthz` |
 | 7 | service | Kafka worker: đọc topic vào → xếp → ghi topic ra (chờ broker); gateway đổi feeder sang OUT |
 | 8 | service | Reoptimize do KTV yêu cầu: chốt mode + owner snapshot/baseline rồi làm (sau Kafka) |
 | 9 | binding | pybind11 cho backtest/mô phỏng Python; khớp rồi xóa planner Python |
