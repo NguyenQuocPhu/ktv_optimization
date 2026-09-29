@@ -34,8 +34,10 @@ cluster    cắt cụm theo chặng > 2 km + tóm tắt (tâm, bán kính, km v�
 | dp | `include/ktv/dp.hpp`, `src/dp.cpp` | `solve()`: bài toán số → thứ tự + giờ/km từng bước |
 | cluster | `include/ktv/cluster.hpp`, `src/cluster.cpp` | Cắt thứ tự TASK thành cụm (chặng > 2 km) và tóm tắt cụm |
 | plan | `include/ktv/plan.hpp`, `src/plan.cpp` | Nối các module: message → bài toán số → thứ tự → cụm → response |
-| adapter | `include/ktv/adapter.hpp`, `src/adapter.cpp` | Vỏ truyền tải local: đọc object/JSONL, envelope, gói output |
-| (CLI) | `src/main.cpp` | `plan`, `validate`, `print-rules` |
+| adapter/envelope | `include/ktv/adapter/envelope.hpp`, `src/adapter/envelope.cpp` | `Envelope` + `wrap_response` — dùng chung mọi transport (file, Kafka sau này) |
+| adapter/file | `include/ktv/adapter/file.hpp`, `src/adapter/file.cpp` | Vỏ truyền tải local: đọc object/JSONL, sinh envelope |
+| (CLI) | `src/cli/main.cpp` | `ktv_core`: `plan`, `validate`, `print-rules` |
+| (Gateway) | `src/gateway/main.cpp` | `ktv_gateway`: HTTP đọc + seed + Redis |
 
 ## Chạy
 
@@ -51,6 +53,12 @@ core/build/ktv_core print-rules > rules.json             # sửa trọng số r�
 core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/responses_v2.jsonl
 core/build/ktv_gateway --port 8080 --seed artifacts/fake/responses_v2.jsonl --token secret
 # → GET http://127.0.0.1:8080/api/v1/worklist/{staff_id}?date=YYYY-MM-DD  ·  /healthz
+
+# Gateway + Redis (nhiều replica, sống qua restart). Key: {prefix}route|latest:{...}
+core/build/ktv_gateway --port 8080 --token secret \
+  --redis 127.0.0.1:6379 --redis-prefix ktv: --seed artifacts/fake/responses_v2.jsonl
+redis-cli --scan --pattern 'ktv:*' | head          # xem key
+redis-cli TTL ktv:route:00201964:2026-06-08        # ~604800 giây (7 ngày)
 ```
 
 Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
@@ -71,6 +79,7 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 | ✅ 5.2 | cluster | Tách `summarize_clusters`; plan chỉ còn điều phối |
 | ✅ 6.1 | gateway/store, gateway/seed | `RouteStore` + `MemoryRouteStore`, loader OUT JSONL |
 | ✅ 6.2 | gateway/server, gateway/main | `ktv_gateway`: `GET /worklist/{staff_id}`, `/healthz` |
+| ✅ 6.3 | gateway/redis_store | `RedisRouteStore` (hiredis optional), `--redis HOST:PORT` |
 | 7 | service | Kafka worker: đọc topic vào → xếp → ghi topic ra (chờ broker); gateway đổi feeder sang OUT |
 | 8 | service | Reoptimize do KTV yêu cầu: chốt mode + owner snapshot/baseline rồi làm (sau Kafka) |
 | 9 | binding | pybind11 cho backtest/mô phỏng Python; khớp rồi xóa planner Python |

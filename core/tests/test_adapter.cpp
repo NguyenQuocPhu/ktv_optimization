@@ -2,7 +2,8 @@
 #include <iostream>
 #include <sstream>
 
-#include "ktv/adapter.hpp"
+#include "ktv/adapter/envelope.hpp"
+#include "ktv/adapter/file.hpp"
 
 static int failures = 0;
 #define CHECK(cond)                                                           \

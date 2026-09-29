@@ -121,7 +121,7 @@ Quy ước retry/DLQ và format lỗi cuối cùng sẽ chốt cùng Infra. Hai 
 
 ### Chờ dependency ngoài repo
 
-8. **Phase 6 — Gateway read model (gateway của ta):** binary `ktv_gateway`, thư mục riêng `core/include/ktv/gateway/` + `core/src/gateway/`. **6.1 (đã xong)** `store` + `seed` (RouteStore/MemoryRouteStore, đọc OUT JSONL); **6.2 (đã xong)** `server` + `main` (`GET /api/v1/worklist/{staff_id}`, `/healthz`, `ktv_gateway --port --seed --token`) + E2E (`ctest` 14/14). Feeder tạm là file OUT; khi có Kafka chỉ thay bằng consumer. Cache memory trước, Redis sau.
+8. **Phase 6 — Gateway read model (gateway của ta):** binary `ktv_gateway`, thư mục riêng `core/include/ktv/gateway/` + `core/src/gateway/`. **6.1 (đã xong)** `store` + `seed`; **6.2 (đã xong)** `server` + `main` (`GET /api/v1/worklist/{staff_id}`, `/healthz`); **6.3 (đã xong)** `RedisRouteStore` (hiredis optional, key `{prefix}route|latest:...`, TTL 7 ngày, CLI `--redis`). `ctest` 15/15; demo Redis: restart gateway không seed vẫn đọc được. Feeder tạm là file OUT; khi có Kafka chỉ thay bằng consumer.
 9. **Phase 7 — Kafka worker:** chỉ làm khi có broker/auth/client library, group/partition/key, envelope contract, retry/DLQ. Flow: consume IN → pipeline → produce OUT → commit offset; gateway đổi feeder `--seed` sang consume OUT.
 10. **Phase 8 — Reoptimize do KTV yêu cầu:** bàn sau khi nối Kafka. Đã chốt KTV chọn mode và route mới hợp lệ thay route đang xem dù metrics không tốt hơn. Chưa chốt ai cung cấp/lấy snapshot mới nhất và route baseline; không mặc định Gateway/OA/Core. Không đồng nhất với replan tự động.
 11. **Phase 9 — feedback/AI learning:** sau khi OA/Gateway chốt nguồn kết quả thật, version rule/model và guardrail backtest.
@@ -137,9 +137,13 @@ Quy ước retry/DLQ và format lỗi cuối cùng sẽ chốt cùng Infra. Hai 
 ### Bố cục code hiện tại (flat, cố ý)
 
 ```text
-core/include/ktv/*.hpp   api, normalization, sla, rules, travel, dp, cluster, plan, adapter
-core/src/*.cpp           hiện thực tương ứng
-core/src/main.cpp        adapter file + CLI (một lần plan mỗi record)
+core/include/ktv/*.hpp            api, normalization, sla, rules, travel, dp, cluster, plan
+core/include/ktv/adapter/         envelope (dùng chung), file (đọc object/JSONL)
+core/include/ktv/gateway/         store, seed, redis_store, server
+core/src/*.cpp                    hiện thực tương ứng
+core/src/adapter/                 envelope.cpp, file.cpp
+core/src/cli/main.cpp             binary ktv_core (một lần plan mỗi record)
+core/src/gateway/                 main.cpp + store/seed/redis_store/server (binary ktv_gateway)
 ```
 
 Sơ đồ nested `contract/application/domain/ports/adapters` là định hướng ban đầu; hiện **không tách** vì chỉ có một implementation và một nguồn input. Khi có transport thứ hai thật (Kafka), cân nhắc thêm một hàm application `process_record` dùng chung CLI + worker để tránh lặp parse→plan→wrap; vẫn là function, không phải class/microservice.

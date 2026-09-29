@@ -11,7 +11,7 @@
 #include <map>
 #include <vector>
 
-#include "ktv/adapter.hpp"
+#include "ktv/adapter/file.hpp"
 #include "ktv/plan.hpp"
 
 namespace {

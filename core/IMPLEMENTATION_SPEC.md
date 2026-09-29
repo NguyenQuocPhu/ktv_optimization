@@ -34,7 +34,7 @@
 | `include/ktv/travel.hpp`, `src/travel.cpp` | Haversine/OSRM matrix, fallback đường chim bay × 1.3 | Giữ nguyên |
 | `include/ktv/dp.hpp`, `src/dp.cpp` | QHĐ, nhãn Pareto, heuristic + 2-opt; working tree hiện đã có break như việc ảo | **Không đổi thuật toán**. Chỉ sửa khi có ticket thuật toán riêng |
 | `include/ktv/plan.hpp`, `src/plan.cpp` | Orchestration hiện tại: lọc thiếu tọa độ, deadline, matrix, DP, response; output hiện gộp 1 cluster | Chia trách nhiệm nội bộ; giữ `plan()` làm entrypoint tương thích trong giai đoạn refactor |
-| `src/main.cpp` | CLI đọc JSONL, parse, gọi `plan()`, ghi response JSONL | Dùng làm file adapter prototype; sau này thêm Kafka worker riêng |
+| `src/cli/main.cpp` | CLI đọc JSONL/object, parse, gọi `plan()`, ghi response JSONL | File adapter prototype; transport Kafka sẽ thêm riêng, dùng chung adapter/envelope |
 | `tests/test_api.cpp`, `test_plan.cpp`, `test_dp.cpp`, `test_travel.cpp` | Test parser, pipeline, QHĐ, OSRM local | Giữ các test hiện có; bổ sung test contract, normalization, cluster, Kafka-envelope prototype |
 | `CMakeLists.txt` | Build static library `ktv`, CLI và 4 test | Thêm source/test khi tạo module mới |
 
@@ -134,7 +134,8 @@ Giữ response nghiệp vụ theo sheet 03/04, đổi `schedule[].type` thành `
 | `src/api.cpp` | `parse_message`, internal `Reader`, `task_kinds`, `find_kind` | Parse/validate fields đã biết; chấp nhận task role 1–3, từ chối role 0 trong scope này; handle 0/null/`""`; parse dates/contracts; bỏ lỗi khi `current_task` row trùng ID; giữ strict rejection với field không nằm trong contract. Cập nhật catalog TaskKind/subtype theo workbook mới; không dùng các type ID cũ tự đặt |
 | `include/ktv/plan.hpp` | `PlanResult`, `plan`, `error_response` | Giữ hàm `plan(...)` làm API nội bộ ổn định cho CLI và worker; không cho adapter gọi `dp::solve()` trực tiếp |
 | `src/plan.cpp` | `deadlines`, `projected_sla`, `plan` | Điều phối normalize → deadline/problem construction → travel → `dp::solve` → cluster/output. Dùng `create_date` cho hạn theo ngày tạo; không sửa cách QHĐ chọn thứ tự |
-| `src/main.cpp` | CLI `plan/validate/print-rules` | File adapter prototype: đọc staging JSON một object hoặc JSONL, tạo envelope local nếu chưa có, gọi cùng `plan()`, ghi một response mỗi message. Không đặt nghiệp vụ status trong CLI |
+| `src/cli/main.cpp` | CLI `plan/validate/print-rules` | File adapter prototype: đọc staging JSON một object hoặc JSONL qua `adapter/file`, gói qua `adapter/envelope`, gọi cùng `plan()`, ghi một response mỗi message. Không đặt nghiệp vụ status trong CLI |
+| `include/ktv/adapter/*`, `src/adapter/*` | `Envelope` + `wrap_response` (dùng chung), `read_records` + `local_envelope` (file) | Ranh giới transport. Kafka sau này thêm adapter mới dùng chung `envelope` |
 | `core/CMakeLists.txt` | target `ktv`, tests | Đăng ký source/test mới khi thêm normalization/cluster module |
 
 `rules.hpp/.cpp`, `travel.hpp/.cpp`, `dp.hpp/.cpp` giữ contract và hành vi hiện có, trừ việc đưa thông tin area vào `Problem` chỉ khi interface hiện tại không thể biểu diễn rule plot 0 đúng. Không thay `solve`, `objective`, nhãn, tier order hoặc heuristic.
@@ -317,6 +318,7 @@ Future Kafka worker adapter ───┴─> parse_message (api)
 | 6. Gateway read model | Binary `ktv_gateway`, thư mục `gateway/*`; xem 6.1–6.2 | GET cho Mobix đọc bản mới nhất; không tính lại |
 | 6.1 Dữ liệu vào | `gateway/store.*` + `gateway/seed.*`: `RouteStore`, `MemoryRouteStore`, loader OUT JSONL | unit test store + seed |
 | 6.2 HTTP + binary | `gateway/server.*` + `gateway/main.cpp`: `GET /worklist/{staff_id}`, `/healthz`, `ktv_gateway --port --seed --token` | HTTP test + E2E `ktv_core plan → seed → GET` |
+| 6.3 Redis store | `gateway/redis_store.*`: `RedisRouteStore`, key `{prefix}route|latest:...`, TTL 7 ngày, hiredis optional; CLI `--redis` | test trên Redis thật + demo xem key bằng `redis-cli` |
 | 7. Kafka worker | Chỉ bắt đầu khi có broker/config/topic contract; consume IN → pipeline → produce OUT | Produce OUT thành công trước commit IN; retry/replay không làm sai correlation/run_code |
 | 8. Reoptimize use case | Sau khi Kafka đã nối; chốt request/context và policy riêng cho thao tác KTV | Có input phân biệt với replan thường; kết quả/compare semantics được business duyệt |
 | 9. Feedback/AI learning | Chỉ sau khi chốt nguồn feedback, DB/topic và versioning | Có log gợi ý ↔ kết quả thật; backtest/guardrail trước khi phát hành model/rules |
@@ -522,18 +524,19 @@ Gán timeline + serialize (mức `plan` JSON, giữ trong `test_cluster`/`test_p
 
 **Phạm vi:** thêm binary `ktv_gateway` trong `core/`, đặt trong thư mục riêng:
 ```
-core/include/ktv/gateway/{store,seed,server}.hpp
-core/src/gateway/{store,seed,server,main}.cpp
+core/include/ktv/gateway/{store,seed,redis_store,server}.hpp
+core/src/gateway/{store,seed,redis_store,server,main}.cpp
 core/tests/test_gateway_*.cpp
 ```
-**Không làm:** Kafka, Redis, reoptimize, auth thật, `include_map`, endpoint kéo lô, `/metrics`. Không expose stage nội bộ. Không sửa core pipeline.
+**Không làm:** Kafka, reoptimize, auth thật, `include_map`, endpoint kéo lô, `/metrics`. Không expose stage nội bộ. Không sửa core pipeline.
 
-Chia thành 2 phase nhỏ:
+Chia thành 3 phase nhỏ:
 
 | Phase | Nội dung | Exit gate |
 |---|---|---|
 | 6.1 Dữ liệu vào ✅ | `gateway/store.*`: `RouteStore` (`put/get/get_latest/size`) + `MemoryRouteStore` (map + mutex). `gateway/seed.*`: đọc OUT JSONL → index `(staff_id, date)`, bỏ dòng hỏng | unit test store + seed; chưa HTTP |
 | 6.2 HTTP + binary ✅ | `gateway/server.*`: `GET /api/v1/worklist/{staff_id}?date=`, `GET /healthz`, token tĩnh tùy chọn. `gateway/main.cpp`: `ktv_gateway --port --seed --token`. E2E `ktv_core plan → seed → GET` | HTTP test cổng tạm + toàn bộ `ctest` pass; demo chạy |
+| 6.3 Redis store ✅ | `gateway/redis_store.*`: `RedisRouteStore` cùng interface; key `{prefix}route:{staff}:{date}` + `{prefix}latest:{staff}`, TTL 7 ngày; CLI thêm `--redis HOST:PORT --redis-password --redis-prefix`; hiredis optional qua pkg-config | test trên Redis thật (skip nếu không có), demo seed → `redis-cli` xem key, restart không seed vẫn đọc |
 
 **Kết quả 6.1:** `core/include/ktv/gateway/store.hpp`, `seed.hpp`; `core/src/gateway/store.cpp`, `seed.cpp`; `tests/test_gateway_store.cpp`, `test_gateway_seed.cpp`; lib `gateway` trong CMake. `ctest` 13/13 pass. Store thread-safe (mutex), `get_latest` theo date tăng dần; seed bỏ dòng hỏng/thiếu `planned_at`/`data.staff_id`/staff rỗng, cùng key thì bản sau thắng. Không sửa core pipeline.
 
@@ -543,9 +546,11 @@ Chia thành 2 phase nhỏ:
 - `/healthz` → 200 `{"ok":true,"entries":N}`.
 - GET **không** tính, không gọi `plan()`.
 
-**Sau này:** Phase 7 thay `--seed` bằng consumer OUT; HTTP + `RouteStore` giữ nguyên. Redis = thêm `RedisRouteStore` khi cần nhiều replica/persist.
+**Sau này:** Phase 7 thay feeder `--seed`/`--redis` bằng consumer OUT; HTTP + `RouteStore` giữ nguyên.
 
 **Kết quả 6.2:** `core/include/ktv/gateway/server.hpp`, `core/src/gateway/server.cpp`, `core/src/gateway/main.cpp` (binary `ktv_gateway`), `tests/test_gateway_server.cpp`. `ctest` 14/14 pass. Demo E2E: sinh 300 message → 294 dòng OUT → seed 120 key `(staff, date)`; `/healthz` 200; thiếu token 401; có token trả đúng route; staff lạ 202 `retry_after`. GET không gọi `plan()`, core pipeline không đổi.
+
+**Kết quả 6.3:** `core/include/ktv/gateway/redis_store.hpp`, `core/src/gateway/redis_store.cpp`, `tests/test_gateway_redis.cpp`. hiredis phát hiện qua pkg-config; không có hiredis thì store Redis tắt, build vẫn chạy (`KTV_WITH_REDIS`). Key `{prefix}route:{staff}:{date}` (TTL 7 ngày) + `{prefix}latest:{staff}`; `get_latest` đọc latest rồi route; ghi ngày cũ không kéo latest lùi. `ctest` 15/15 pass (test Redis chạy trên Redis 7.4.9 local). Demo: seed 120 bản → 240 key, TTL ~604800s; restart gateway **không seed** vẫn trả route (dữ liệu nằm Redis). Key demo đã dọn sạch.
 
 **Ghi chú:** `artifacts/fake/responses.jsonl` là format cũ (`type`, không envelope, không `planned_at`) → seed sẽ bỏ qua mọi dòng; phải sinh lại:
 
