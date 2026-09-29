@@ -17,6 +17,11 @@ target_link_libraries(ktv PUBLIC Threads::Threads)
 add_executable(ktv_core src/main.cpp)
 target_link_libraries(ktv_core ktv)
 
+# Gateway read model: app riêng, không phụ thuộc pipeline.
+add_library(gateway STATIC src/gateway/store.cpp src/gateway/seed.cpp)
+target_include_directories(gateway PUBLIC include third_party)
+target_link_libraries(gateway PUBLIC Threads::Threads)
+
 enable_testing()
 foreach(name api dp plan travel normalization sla cluster adapter pipeline)
   add_executable(test_${name} tests/test_${name}.cpp)
@@ -28,6 +33,13 @@ endforeach()
 add_executable(test_cli tests/test_cli.cpp)
 target_link_libraries(test_cli ktv)
 add_test(NAME cli COMMAND test_cli $<TARGET_FILE:ktv_core>)
+
+# Gateway: store + seed loader.
+foreach(name gateway_store gateway_seed)
+  add_executable(test_${name} tests/test_${name}.cpp)
+  target_link_libraries(test_${name} gateway)
+  add_test(NAME ${name} COMMAND test_${name})
+endforeach()
 
 # Bất biến trên diện rộng; tùy chọn chạy thêm benchmark thật.
 add_executable(test_invariants tests/test_invariants.cpp)

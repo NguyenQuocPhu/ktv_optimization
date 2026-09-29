@@ -117,13 +117,13 @@ Quy ước retry/DLQ và format lỗi cuối cùng sẽ chốt cùng Infra. Hai 
 ### Tiếp theo trước khi có broker
 
 6. **Phase 5.1 — harden CLI (đã xong):** `--at` sai báo lỗi và thoát; pretty JSON hỏng tạo đúng một error response; thêm CTest chạy end-to-end CLI. `ctest` 9/9 pass; benchmark 5.332 record không đổi.
-7. **Phase 5.2 — dễ đọc pipeline (chưa làm):** tách phần dựng cluster/schedule/aggregate còn nằm trong `plan.cpp` thành helper/module rõ trách nhiệm. Giữ nguyên TASK order/ETA/metrics; có golden test trước và sau.
+7. **Phase 5.2 — dễ đọc pipeline (đã xong):** `summarize_clusters` tách sang `cluster.*`; `plan.cpp` chỉ còn điều phối. Giữ nguyên TASK order/ETA/metrics; `ctest` 11/11 pass.
 
 ### Chờ dependency ngoài repo
 
-8. **Phase 6 — Reoptimize do KTV yêu cầu:** phase riêng. Đã chốt KTV chọn mode và route mới hợp lệ thay route đang xem dù metrics không tốt hơn. Chưa chốt ai cung cấp/lấy snapshot mới nhất và route baseline; không mặc định Gateway/OA/Core. Không đồng nhất với replan tự động sau khi task thay đổi.
-9. **Phase 7 — Kafka worker:** chỉ làm khi có broker/auth/client library, group/partition/key, envelope contract, retry/DLQ. Flow: consume IN → dispatch replan hoặc reoptimize → produce OUT → commit offset.
-10. **Phase 8 — Gateway/API Mobix:** Bot Gateway sở hữu HTTP; không tạo API riêng cho từng stage của Core AI.
+8. **Phase 6 — Gateway read model (gateway của ta):** binary `ktv_gateway`, thư mục riêng `core/include/ktv/gateway/` + `core/src/gateway/`. Chia 2 bước: **6.1 (đã xong)** `store` + `seed` (RouteStore/MemoryRouteStore, đọc OUT JSONL) → **6.2** `server` + `main` (`GET /api/v1/worklist/{staff_id}`, `/healthz`, `ktv_gateway --port --seed --token`) + E2E. Feeder tạm là file OUT; khi có Kafka chỉ thay bằng consumer. Cache memory trước, Redis sau.
+9. **Phase 7 — Kafka worker:** chỉ làm khi có broker/auth/client library, group/partition/key, envelope contract, retry/DLQ. Flow: consume IN → pipeline → produce OUT → commit offset; gateway đổi feeder `--seed` sang consume OUT.
+10. **Phase 8 — Reoptimize do KTV yêu cầu:** bàn sau khi nối Kafka. Đã chốt KTV chọn mode và route mới hợp lệ thay route đang xem dù metrics không tốt hơn. Chưa chốt ai cung cấp/lấy snapshot mới nhất và route baseline; không mặc định Gateway/OA/Core. Không đồng nhất với replan tự động.
 11. **Phase 9 — feedback/AI learning:** sau khi OA/Gateway chốt nguồn kết quả thật, version rule/model và guardrail backtest.
 
 ### Các mục được cố ý hoãn
@@ -131,18 +131,17 @@ Quy ước retry/DLQ và format lỗi cuối cùng sẽ chốt cùng Infra. Hai 
 - `staff_plots_id=0 && staff_role=0`: ý nghĩa data đã rõ nhưng implementation chưa hỗ trợ; parser hiện từ chối role 0.
 - Đồng bộ đầy đủ task type/subtype: workbook mới thiếu/chưa nhất quán bảng số; không đoán thêm ID.
 - Output `priority`, `task_role=INSERTED`, `insert_reason`: chưa có formula/insertion behavior đủ rõ.
-- Tách DTO/domain thành hai bộ struct và tạo service class riêng cho batch: chưa có lợi ích đủ lớn khi mới có một nguồn và một pipeline `plan()`. Reoptimize vẫn có application use case riêng, nhưng có thể là function thay vì microservice/class.
+- Tách DTO/domain thành hai bộ struct: chưa cần khi chỉ có một nguồn input.
+- Tạo service class riêng cho ProcessWorklist/Batch/Reoptimize: ProcessWorklist đúng là một lần `plan()`, batch là nhiều lần; class riêng chỉ là bọc rỗng. Reoptimize cần thêm input/policy nên sẽ là **function** riêng ở Phase 8, không phải class.
 
-### Sơ đồ module đích
+### Bố cục code hiện tại (flat, cố ý)
 
 ```text
-core/include/ktv/contract/     message, response, JSON contract
-core/include/ktv/application/  process_worklist, batch, reoptimize
-core/include/ktv/domain/       normalize, rules/priority, cluster, route/DP, travel
-core/include/ktv/ports/        interface travel và message I/O khi cần
-core/src/adapters/file/        prototype local trước broker
-core/src/adapters/kafka/       consumer/producer sau khi có broker
+core/include/ktv/*.hpp   api, normalization, sla, rules, travel, dp, cluster, plan, adapter
+core/src/*.cpp           hiện thực tương ứng
+core/src/main.cpp        adapter file + CLI (một lần plan mỗi record)
 ```
 
-Luồng phụ thuộc một chiều: `adapter → application → domain`. Không viết lại QHĐ hiện có;
-refactor `plan.cpp` theo từng bước và giữ output/behavior tương đương trước khi thêm rule mới.
+Sơ đồ nested `contract/application/domain/ports/adapters` là định hướng ban đầu; hiện **không tách** vì chỉ có một implementation và một nguồn input. Khi có transport thứ hai thật (Kafka), cân nhắc thêm một hàm application `process_record` dùng chung CLI + worker để tránh lặp parse→plan→wrap; vẫn là function, không phải class/microservice.
+
+Luồng phụ thuộc: `adapter/CLI → plan (application façade) → domain (normalize, sla, dp, cluster, travel)`. Không viết lại QHĐ.

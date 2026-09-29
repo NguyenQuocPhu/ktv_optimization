@@ -159,7 +159,7 @@ Không cần tạo một class riêng cho mỗi “service”. `plan()` hiện l
 | Tuyến có giờ hẹn | `plan()` → travel matrix → `dp::solve()` | QHĐ hiện có xử lý appointment/late/shift/lunch break |
 | Batch đầu ngày | input fan-out + worker loop | N message một KTV; mỗi record gọi cùng `plan()`, không tạo batch solver/API riêng |
 | Replan tự động | OA gửi worklist mới sau event; cùng pipeline `plan()` | Dữ liệu đổi là nguyên nhân tính lại; không cần ý định/tuỳ chọn của KTV |
-| Reoptimize do KTV | Use case riêng, có context của lần gợi ý và ý định/điều kiện user | Không coi là replan thường; contract và tiêu chí chấp nhận kết quả phải chốt ở Phase 6 |
+| Reoptimize do KTV | Use case riêng, bàn sau khi nối Kafka (Phase 8); có context/ý định của user | Không coi là replan thường; contract và tiêu chí chấp nhận kết quả chốt ở Phase 8 |
 
 ### 4.4 Adapter về sau
 
@@ -314,9 +314,11 @@ Future Kafka worker adapter ───┴─> parse_message (api)
 | 5. Local end-to-end | Mở rộng `main.cpp` để đọc JSON object staging và JSONL; sinh envelope local; ghi OUT prototype | Fixture route được ra response đúng schema; malformed input có response lỗi; CLI suite pass |
 | 5.1. Local adapter hardening | Sửa edge cases CLI; thêm CLI end-to-end test | Giờ test xác định; một input lỗi cho đúng một output lỗi |
 | 5.2. Pipeline readability | Tách cluster/output aggregation còn nằm trong `plan.cpp` thành helper/module có contract rõ | `plan()` đọc như orchestration; response/metrics giữ nguyên trên golden fixtures |
-| 6. Reoptimize use case | Chốt request/context và policy riêng cho thao tác KTV; test local, chưa cần broker | Có input phân biệt với replan thường; kết quả/compare semantics được business duyệt |
-| 7. Kafka worker | Chỉ bắt đầu khi có broker/config/topic contract; dispatch message vào replan hoặc Reoptimize | Produce OUT thành công trước commit IN; retry/replay không làm sai correlation/run_code |
-| 8. Gateway/API | Ngoài Core AI; phối hợp Bot Gateway/Optimal Assign | GET cho Mobix đọc bản mới nhất; nút reoptimize gửi đúng command/context Phase 6 |
+| 6. Gateway read model | Binary `ktv_gateway`, thư mục `gateway/*`; xem 6.1–6.2 | GET cho Mobix đọc bản mới nhất; không tính lại |
+| 6.1 Dữ liệu vào | `gateway/store.*` + `gateway/seed.*`: `RouteStore`, `MemoryRouteStore`, loader OUT JSONL | unit test store + seed |
+| 6.2 HTTP + binary | `gateway/server.*` + `gateway/main.cpp`: `GET /worklist/{staff_id}`, `/healthz`, `ktv_gateway --port --seed --token` | HTTP test + E2E `ktv_core plan → seed → GET` |
+| 7. Kafka worker | Chỉ bắt đầu khi có broker/config/topic contract; consume IN → pipeline → produce OUT | Produce OUT thành công trước commit IN; retry/replay không làm sai correlation/run_code |
+| 8. Reoptimize use case | Sau khi Kafka đã nối; chốt request/context và policy riêng cho thao tác KTV | Có input phân biệt với replan thường; kết quả/compare semantics được business duyệt |
 | 9. Feedback/AI learning | Chỉ sau khi chốt nguồn feedback, DB/topic và versioning | Có log gợi ý ↔ kết quả thật; backtest/guardrail trước khi phát hành model/rules |
 
 ### Phase 0 — Baseline
@@ -514,7 +516,54 @@ Gán timeline + serialize (mức `plan` JSON, giữ trong `test_cluster`/`test_p
 
 **Kết quả:** `cluster.hpp/.cpp` có `TaskStop`, `ClusterSummary`, `summarize_clusters`; `plan.cpp` bỏ `plot_label`, dựng `stops` TASK và gọi `summarize_clusters`, gắn timeline + serialize như cũ. `ctest` 11/11 pass; `invariants` ~380k kiểm giữ `5202/130`; output `api_sample` giữ nguyên hình dạng cụm. Không sửa `dp.cpp`/`rules.cpp`/`travel.cpp`.
 
-### Phase 6 — Reoptimize do KTV yêu cầu (design gate trước khi code)
+### Phase 6 — Gateway read model (đọc cho Mobix)
+
+**Bối cảnh.** Luồng ghi của ta là Kafka: Core consume IN → produce OUT; các consumer độc lập đọc OUT (Optimal Assign lưu Oracle, gateway giữ cache). Gateway **chỉ đọc**, không tính lại. Trước khi có Kafka, gateway lấy dữ liệu từ **file OUT** (`--seed`); khi có Kafka chỉ thay loader bằng consumer — HTTP và store không đổi. Đây là gateway của ta; bot gateway là việc của team khác.
+
+**Phạm vi:** thêm binary `ktv_gateway` trong `core/`, đặt trong thư mục riêng:
+```
+core/include/ktv/gateway/{store,seed,server}.hpp
+core/src/gateway/{store,seed,server,main}.cpp
+core/tests/test_gateway_*.cpp
+```
+**Không làm:** Kafka, Redis, reoptimize, auth thật, `include_map`, endpoint kéo lô, `/metrics`. Không expose stage nội bộ. Không sửa core pipeline.
+
+Chia thành 2 phase nhỏ:
+
+| Phase | Nội dung | Exit gate |
+|---|---|---|
+| 6.1 Dữ liệu vào ✅ | `gateway/store.*`: `RouteStore` (`put/get/get_latest/size`) + `MemoryRouteStore` (map + mutex). `gateway/seed.*`: đọc OUT JSONL → index `(staff_id, date)`, bỏ dòng hỏng | unit test store + seed; chưa HTTP |
+| 6.2 HTTP + binary | `gateway/server.*`: `GET /api/v1/worklist/{staff_id}?date=`, `GET /healthz`, token tĩnh tùy chọn. `gateway/main.cpp`: `ktv_gateway --port --seed --token`. E2E `ktv_core plan → seed → GET` | HTTP test cổng tạm + toàn bộ `ctest` pass; demo chạy |
+
+**Kết quả 6.1:** `core/include/ktv/gateway/store.hpp`, `seed.hpp`; `core/src/gateway/store.cpp`, `seed.cpp`; `tests/test_gateway_store.cpp`, `test_gateway_seed.cpp`; lib `gateway` trong CMake. `ctest` 13/13 pass. Store thread-safe (mutex), `get_latest` theo date tăng dần; seed bỏ dòng hỏng/thiếu `planned_at`/`data.staff_id`/staff rỗng, cùng key thì bản sau thắng. Không sửa core pipeline.
+
+**Hành vi chốt cho 6.2:**
+- 200 JSON bản mới nhất; thiếu → `202 {"retry_after":5}`; token sai → 401.
+- `date` bỏ trống → bản mới nhất của staff đó.
+- `/healthz` → 200 `{"ok":true,"entries":N}`.
+- GET **không** tính, không gọi `plan()`.
+
+**Sau này:** Phase 7 thay `--seed` bằng consumer OUT; HTTP + `RouteStore` giữ nguyên. Redis = thêm `RedisRouteStore` khi cần nhiều replica/persist.
+
+**Ghi chú:** `artifacts/fake/responses.jsonl` là format cũ (`type`, không envelope, không `planned_at`) → seed sẽ bỏ qua mọi dòng; phải sinh lại:
+
+```bash
+core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/responses_v2.jsonl
+```
+
+`artifacts/` không được git track nên không cần commit. In-memory: 1 instance, restart mất cache → seed lại.
+
+### Phase 7 — Kafka adapter (sau khi có broker)
+
+- Chỉ thực hiện khi có broker access, auth, consumer group, partition/key và client library chuẩn của công ty.
+- Worker consume IN → parse → `plan()` → produce OUT; không đưa Kafka code vào `plan`, `dp`, `rules` hay `travel`.
+- Consume mỗi record; produce OUT rồi mới commit offset. At-least-once, correlation theo `message_id`, `run_code` ổn định theo input.
+- Một message vẫn là một KTV. Batch đầu ngày là throughput nhiều record; không tạo payload/solver batch khác.
+- Lỗi dữ liệu trả lỗi OUT; retry/DLQ chỉ áp dụng lỗi transport/runtime theo policy Infra.
+- Lúc này mới có envelope thật (header hay body) từ producer, nên chốt cả nguồn `message_id/planned_at/trigger`.
+- Gateway (Phase 6) chuyển feeder từ `--seed` sang consume OUT; HTTP/store giữ nguyên.
+
+### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.
 
@@ -535,21 +584,9 @@ Với cùng snapshot + cùng rules/mode + cùng travel matrix, QHĐ hiện tại
 
 **Còn phải chốt trước khi code logic mode:** workbook/PDF nêu default 70% SLA + 30% distance, SLA 100%, distance 100%; QHĐ hiện tại dùng objective theo tier. Cần định nghĩa rõ từng mode ánh xạ vào objective ra sao. Default 70/30 không được tự quy đổi ngầm; nếu cần sửa objective QHĐ thì trình bày/duyệt riêng trước khi đổi `dp.cpp`.
 
-Phase 6 bắt đầu bằng design gate cho request/response, owner snapshot/baseline và mode semantics. Sau đó mới thêm application function/use case `reoptimize(...)` riêng, gọi chung normalization/SLA/travel/QHĐ/cluster pipeline. Không định nghĩa candidate payload/API trước khi các owner được chốt.
+Phase 8 bắt đầu bằng design gate cho request/response, owner snapshot/baseline và mode semantics. Sau đó mới thêm application function/use case `reoptimize(...)` riêng, gọi chung normalization/SLA/travel/QHĐ/cluster pipeline. Không định nghĩa candidate payload/API trước khi các owner được chốt.
 
-### Phase 7 — Kafka adapter
-
-- Chỉ thực hiện khi có broker access, auth, consumer group, partition/key và client library chuẩn của công ty.
-- Worker dispatch record tự động vào replan; record reoptimize đi vào use case Phase 6 sau khi contract và owner của input được chốt.
-- Consume mỗi record; produce response OUT rồi mới commit offset. Xử lý at-least-once, correlation theo `message_id`, `run_code` ổn định theo command.
-- Một message vẫn là một KTV. Batch đầu ngày là throughput của nhiều record; không tạo payload/solver batch khác.
-- Lỗi dữ liệu trả lỗi OUT; retry/DLQ chỉ áp dụng lỗi transport/runtime theo policy Infra.
-
-### Phase 8 — Gateway/API
-
-- Ngoài Core AI; phối hợp Bot Gateway/Optimal Assign.
-- Gateway sở hữu HTTP đọc route mới nhất cho Mobix và là một phần của luồng nhận thao tác reoptimize.
-- Owner cung cấp snapshot/baseline cho reoptimize chưa được quyết định; Phase 6 phải chốt việc này. Không expose từng bước pipeline thành API.
+**Luồng reoptimize xuyên hệ thống:** Mobix → Gateway `POST /reoptimize` → Gateway lấy snapshot + baseline (owner chốt ở Phase 8) → đưa command vào Core (qua Kafka hoặc kênh đã chốt) → Core chạy use case reoptimize → OUT → Gateway cache → Mobix đọc lại.
 
 ### Phase 9 — Feedback/AI learning
 
@@ -573,10 +610,11 @@ Giao **một phase mỗi lần**, không giao “implement toàn bộ architectu
 | Normalization lifecycle/current/completion | Đã làm ở Phase 2; `staff_plots_id=0 && staff_role=0` bị deferred | Giữ policy status 6/10/khác; không tự bật role 0 |
 | KPI/SLA/rule và route | SLA đã tách; QHĐ vẫn chấm theo tier rules | Không thêm scalar pre-sort score hoặc scorer thứ hai khi chưa có công thức nghiệp vụ |
 | Gom cụm và output | Đã có split theo leg, nhưng cluster aggregation/schedule JSON vẫn nằm trong `plan.cpp` | Thêm Phase 5.2 vì giúp hiểu luồng; không phải thay optimizer |
-| ProcessWorklist, batch | `plan()` là entrypoint dùng chung; một message = một KTV | Không tạo service class riêng. Batch là nhiều record |
-| Reoptimize | Chưa được implement; KTV chọn mode và route hợp lệ được thay route đang xem | Phase 6 riêng; owner của snapshot/baseline vẫn chưa chốt, không tự mặc định Gateway/OA/Core |
+| ProcessWorklist, batch | `plan()` là entrypoint dùng chung; một message = một KTV; batch là driver gọi `plan()` N lần | Không tạo service class. Batch chậm thì tối ưu **worker/parallelism/OSRM**, không viết lại `plan()`. Chỉ tách `plan_batch` khi batch cần **đánh đổi khác** (solver xấp xỉ, chia sẻ ma trận OSRM, deadline riêng), không phải khi chỉ cần nhanh hơn |
+| Reoptimize | Chưa được implement; KTV chọn mode và route hợp lệ được thay route đang xem | Phase 8 (sau Kafka); owner của snapshot/baseline vẫn chưa chốt, không tự mặc định Gateway/OA/Core |
 | Local adapter | Đã làm Phase 5; có hai edge cases CLI đã tái hiện | Phase 5.1 hardening trước khi coi local CLI là harness chuẩn |
 | Kafka + hai consumer OUT | Chưa làm, thiếu broker details | Phase 7 sau khi Infra cấp contract; không viết adapter giả broker |
+| Gateway read model | Chưa làm; dùng file OUT làm feeder tạm | Phase 6, 2 bước 6.1 (store+seed) và 6.2 (HTTP+binary) |
 | API cho Mobix | Không thuộc Core AI theo sơ đồ đã chốt | Bot Gateway expose HTTP; không tạo API riêng cho normalization/rule/cluster/DP |
 | Feedback để học model/weights | Chưa có nguồn feedback contract hoặc DB/topic | Phase 9; cần versioning và actual outcomes từ OA/Gateway |
 

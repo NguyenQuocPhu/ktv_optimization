@@ -60,11 +60,14 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 | ✅ 2 | cluster | Tách cụm theo chặng > 2 km, tên cụm theo lô, `revisit_count` |
 | ✅ 3a | dp | Nghỉ trưa = việc ảo + 1 bit "đã nghỉ" trong QHĐ (bắt buộc, khung 11:30–13:30, 45 phút) |
 | 3b | dp | Nhiều khung giờ làm (OT) |
-| 4 | dp | Rule 4: giữ tuyến cũ nếu tuyến mới không tốt hơn rõ (Phase 6 reoptimize) |
+| 4 | dp | Rule 4: giữ tuyến cũ nếu tuyến mới không tốt hơn rõ (Phase 8 reoptimize) |
 | ✅ 5 | travel | OSRM tự host (một lần gọi `/table` mỗi KTV), lỗi thì chim bay × 1,3 |
 | ✅ 5.1 | adapter, main | Hardening CLI local: `--at` sai báo lỗi, JSON hỏng một output |
 | ✅ 5.2 | cluster | Tách `summarize_clusters`; plan chỉ còn điều phối |
-| 6 | service | Kafka worker: đọc topic vào → xếp → ghi topic ra (chờ broker) |
-| 7 | binding | pybind11 cho backtest/mô phỏng Python; khớp rồi xóa planner Python |
+| ✅ 6.1 | gateway/store, gateway/seed | `RouteStore` + `MemoryRouteStore`, loader OUT JSONL |
+| 6.2 | gateway/server, gateway/main | `ktv_gateway`: `GET /worklist/{staff_id}`, `/healthz` |
+| 7 | service | Kafka worker: đọc topic vào → xếp → ghi topic ra (chờ broker); gateway đổi feeder sang OUT |
+| 8 | service | Reoptimize do KTV yêu cầu: chốt mode + owner snapshot/baseline rồi làm (sau Kafka) |
+| 9 | binding | pybind11 cho backtest/mô phỏng Python; khớp rồi xóa planner Python |
 
 Giả định đang dùng (chờ xác nhận): nghỉ trưa bắt buộc, phải bắt đầu trong 11:30–12:45, nghỉ 45 phút (`lunch_break`, `lunch_break_minutes` trong rules); việc đang làm còn 30 phút nữa xong; việc "trong ngày tạo phiếu" không hẹn tính hạn là hết hôm nay (API chưa có ngày tạo phiếu); định mức thời gian xử lý theo loại ở `src/api.cpp`.
