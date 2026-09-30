@@ -1,25 +1,50 @@
 # KTV Routing (core C++)
 
-Team routing nhận **job đã được gán sẵn cho từng KTV** và trả về **thứ tự làm việc**, kèm ETA, giờ xong và cảnh báo trễ hạn.
+Team routing nhận **task đã được gán sẵn cho một KTV** (một message = một KTV) và trả về **thứ tự làm việc** chia theo cụm, kèm giờ tới, giờ xong, dự báo đúng hẹn và số liệu tổng.
 
-Những việc sau thuộc các team khác nên routing không làm: gán việc, theo dõi vòng đời checklist, UI, database.
+Không thuộc team routing: gán việc (Optimal Assign), vòng đời checklist, app Mobix và Bot Gateway (phía Mobix), lưu Oracle.
 
-## Luồng giữa các team
+## Luồng giữa các hệ thống
 
 ```text
- Frontend            Team routing (repo này)              Team data / hệ thống checklist
- ────────            ───────────────────────              ──────────────────────────────
- chọn điều kiện lọc
- (VD MAINTENANCE) ──WorkloadQuery──▶ RoutingService ──WorkloadQuery──▶ lọc, lấy job đã gán,
-                                          │                             vị trí KTV, ca làm
-                                          │◀──────────RouteRequest──────────────┘
-                                          │ plan_routes()
- hiển thị tuyến ◀────RouteResponse────────┘
+Optimal Assign ──Kafka IN (task đã gán, 1 KTV/message)──▶ ktv_worker ──▶ state cache (Redis: IN mới nhất mỗi KTV)
+                                                                              │
+Mobix ──GET /api/v1/staff/{staff_id}/replan──▶ ktv_gateway (API của team) ────┤ lấy state + vị trí Mobix gửi
+                          ◀── 202 (không trả route) ──┘                       │ plan()
+                                                                              ▼
+                                        Kafka OUT ──▶ Optimal Assign (lưu Oracle), phía Mobix đọc route
 ```
 
-Khi chạy realtime, hệ thống nguồn phát sự kiện (tạo job, check-in, checkout, đóng job, GPS) và team data cập nhật trạng thái. Frontend gửi lại `WorkloadQuery` với `filter.emp_accounts` là các KTV vừa có thay đổi, nên routing chỉ xếp lại những KTV đó. Routing vẫn không lưu trạng thái.
+Mobix chủ động gọi API của team khi cần xếp lại (KTV đổi vị trí, xong một việc…). Gateway lấy state mới nhất của KTV, tính lại rồi đẩy kết quả ra Kafka OUT; HTTP chỉ xác nhận đã nhận. Thiết kế chi tiết: [core/IMPLEMENTATION_SPEC.md](core/IMPLEMENTATION_SPEC.md) Phase 7.
 
-Hợp đồng chi tiết để trao đổi với các team khác nằm ở [docs/CONTRACT.md](docs/CONTRACT.md); spec triển khai của lõi ở [core/IMPLEMENTATION_SPEC.md](core/IMPLEMENTATION_SPEC.md).
+**Trạng thái hiện tại** (2026-09-30):
+
+| Mảnh | Có chưa |
+|---|---|
+| Lõi `plan()`: parse → lọc → SLA → OSRM → QHĐ → cụm → response | ✅ |
+| `ktv_worker` đọc Kafka IN | ✅ (hiện tính luôn mỗi message và ghi response ra stdout/file) |
+| State cache + API `replan` + dedup | ⏳ Phase 7A |
+| Produce Kafka OUT | ⏸ tạm hoãn (chờ topic OUT + bàn sau) |
+| `ktv_gateway` `GET /worklist` + Redis | ✅ đồ nghề dev (đọc route đã tính từ file OUT) |
+
+## Hợp đồng dữ liệu
+
+- Input/output: file `API-Goi-y-cong-viec.xlsx` (sheet 01–07), tóm tắt ở [docs/STAGING_DATA_SPEC.md](docs/STAGING_DATA_SPEC.md). Định nghĩa chuẩn trong code: `core/include/ktv/api.hpp` + `core/src/api.cpp`.
+- [docs/CONTRACT.md](docs/CONTRACT.md) là contract thời Python (`WorkloadQuery`/`RouteRequest`), **đã cũ**, chỉ giữ để tham chiếu.
+- Parser có hai chế độ:
+  - **Nới lỏng** (`ktv_worker`, `ktv_core plan`): chỉ trả `400` khi không xếp được tuyến (JSON hỏng, `staff` hỏng: ID, tọa độ, ca làm). Field lạ, `staff_role` lạ (VD 0), lệch/ngoài danh mục sheet 05 → vẫn xếp theo giả định và ghi **cảnh báo có mã**; một task hỏng hoặc trùng ID → chỉ bỏ task đó. Cảnh báo không vào OUT, mà vào log + `/healthz` (`data_issues`).
+  - **Strict** (`ktv_core validate`): lệch ở đâu cũng là lỗi, để soát hết chỗ lệch của một file dữ liệu.
+- Mã cảnh báo, giả định đang dùng và câu hỏi cho team data: [docs/DATA_QUESTIONS.md](docs/DATA_QUESTIONS.md).
+
+| `statuscode` | Khi nào | `success` |
+|---|---|---|
+| `200` | Có tuyến | true |
+| `424` | Có tuyến nhưng OSRM lỗi, khoảng cách là chim bay × 1,3 | true |
+| `400` | JSON hỏng / không xếp được tuyến (nới lỏng) hoặc sai contract (strict); message nêu tối đa 3 lỗi đầu, kèm đường dẫn field | false |
+| `422` | Không còn task xếp được, KTV off (`staff.status = 3`), hoặc quá 64 task | false |
+| `500` | Lỗi xử lý bất ngờ trong worker (message vẫn được commit, worker chạy tiếp) | false |
+
+Task bị loại trước khi xếp (status khác 6, đã hoàn tất, thiếu tọa độ, dòng trùng việc đang làm, task hỏng ở chế độ nới lỏng) **không** được ghi trong response.
 
 ## Cấu trúc repo
 
@@ -29,10 +54,14 @@ core/                       lõi chạy thật (C++20) — chi tiết module: co
                             adapter (envelope/file), cli, gateway, kafka
   tests/                    unit + pipeline + invariants (ctest)
   third_party/              nlohmann/json, cpp-httplib
-docs/                       CONTRACT.md, BUSINESS_RULES.md, STAGING_DATA_SPEC.md, AI_ROUTING_PLAN.md
+docs/                       STAGING_DATA_SPEC.md, DATA_QUESTIONS.md (sổ câu hỏi team data), BUSINESS_RULES.md,
+                            MOBIX-REPLAN-API-DRAFT.md, AI_ROUTING_PLAN.md, CONTRACT.md (cũ)
+tools/                      kafka_consumer_test.py: đọc thử topic bằng Python
 data/sample/                dữ liệu mẫu HNI_04 tháng 6 (giữ để tham chiếu)
 compose.yaml                Redis + Kafka local (chỉ bind 127.0.0.1)
-MEMORY.md                   ghi chú làm việc: dữ liệu, quyết định, câu hỏi mở
+Dockerfile                  image chạy 3 binary (build kèm ctest)
+.github/workflows/ci.yml    CI: build + ctest (có Redis) + docker build
+MEMORY.md                   ghi chú làm việc thời Python — phần lớn đã cũ
 ```
 
 Bản Python cũ (`src/ktv_routing`, `simulator/`, `research/`, `tests/`) đã xóa ngày **2026-09-30**; bản đầy đủ còn ở tag `python-legacy-2026-09-30`.
@@ -42,8 +71,8 @@ Bản Python cũ (`src/ktv_routing`, `simulator/`, `research/`, `tests/`) đã x
 | Binary | Vai trò |
 |---|---|
 | `ktv_core` | CLI local: `plan` (JSON/JSONL → response JSONL), `validate`, `print-rules` |
-| `ktv_gateway` | HTTP read model cho Mobix: `GET /api/v1/worklist/{staff_id}?date=YYYY-MM-DD`, `/healthz`; store in-memory + Redis (tùy chọn) |
-| `ktv_worker` | Kafka worker: đọc topic IN → `plan()` → ghi response ra stdout/file, commit offset sau khi ghi xong. Produce OUT: bước sau của Phase 7 |
+| `ktv_worker` | Kafka worker: đọc topic IN → `plan()` → ghi response ra stdout/file, commit offset sau khi ghi xong; `/healthz` tùy chọn |
+| `ktv_gateway` | Gateway API của team. Hiện có `GET /api/v1/worklist/{staff_id}?date=YYYY-MM-DD`, `/healthz` (store RAM hoặc Redis, nạp từ file OUT) — đồ nghề dev; API `replan` là Phase 7A |
 
 ## Build & test
 
@@ -59,7 +88,20 @@ cmake --build core/build -j"$(nproc)"
 ctest --test-dir core/build --output-on-failure        # 16 test: api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants, gateway, kafka config
 ```
 
-`hiredis` và `librdkafka` là tùy chọn: thiếu thì `ktv_gateway` không có Redis store / `ktv_worker` không được build, phần còn lại vẫn chạy.
+- `hiredis` và `librdkafka` là tùy chọn: thiếu thì `ktv_gateway` không có Redis store / `ktv_worker` không được build, phần còn lại vẫn chạy (thiếu hiredis thì còn 15 test).
+- Test `invariants` chạy thêm benchmark 5.332 message nếu có `artifacts/fake/messages.jsonl`. File này **không nằm trong git** (`artifacts/` bị ignore) và tool sinh nó là bản Python đã xóa (lấy lại từ tag `python-legacy-2026-09-30`); không có thì test chỉ chạy 3.000 message sinh ngẫu nhiên.
+- Test `kafka_config` đọc biến môi trường thật: chạy `ctest` trong shell đang export `KAFKA_*` có thể làm test fail.
+- Thư mục build tạo trong container (đường dẫn `/workspace/...`) không dùng lại được ngoài container: `rm -rf core/build` rồi build lại.
+
+### Docker
+
+```bash
+docker build -t ktv-core .                                  # build + ctest trong image; test đỏ thì không ra image
+docker run --rm --env-file .env -p 8081:8081 ktv-core       # ktv_worker, /healthz ở 8081
+docker run --rm -p 8080:8080 ktv-core ktv_gateway --port 8080
+```
+
+CI (GitHub Actions) chạy mỗi push/PR: build + `ctest` với Redis service, và `docker build`.
 
 ## Chạy
 
@@ -70,7 +112,7 @@ core/build/ktv_core plan request.json --out response.jsonl
 # --at "YYYY-MM-DD HH:mm:ss" để cố định giờ máy chủ (test); --rules rules.json để đè rule
 
 core/build/ktv_core print-rules > rules.json          # in rule đang dùng (sửa trọng số trong file rồi --rules)
-core/build/ktv_core validate request.json             # chỉ kiểm tra contract
+core/build/ktv_core validate request.json             # chỉ kiểm tra contract, strict (plan thì nới lỏng + in bảng cảnh báo)
 
 # Gateway (sinh OUT trước rồi seed, không tính lại khi đọc)
 core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/responses_v2.jsonl
@@ -102,14 +144,25 @@ Cấu hình qua `.env` (copy từ `.env.example`; biến môi trường thật �
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | tài khoản SASL |
 | `KAFKA_CLIENT_ID`, `KAFKA_GROUP_ID` | định danh client và consumer group (khác nhau) |
 | `KAFKA_TOPIC_IN` | topic "task đã gán cho KTV" do Optimal Assign phát |
-| `KAFKA_TOPIC_OUT` | topic route trả ra — chờ SYS cấp; chưa dùng ở bước này |
+| `KAFKA_TOPIC_OUT` | topic route trả ra — chờ SYS cấp; chưa dùng |
 | `KAFKA_AUTO_OFFSET_RESET` | `earliest` / `latest` |
 
 ```bash
 core/build/ktv_worker --env .env --max 1          # đọc 1 message → in response
-core/build/ktv_worker --env .env --out responses.jsonl
+core/build/ktv_worker --env .env --out responses.jsonl --health-port 8081
 core/build/ktv_worker --env .env --osrm http://127.0.0.1:5000 --rules rules.json
 ```
+
+Hành vi:
+
+- Mỗi message lấy giờ lúc xử lý (hoặc `planned_at` của message); `--at` cố định giờ cho test.
+- Message thiếu `message_id` → dùng `topic-partition-offset` làm `message_id`/`run_code`.
+- Commit offset **sau khi** ghi response xong; ghi lỗi (đĩa đầy…) → thoát, không commit. `--out` ghi nối.
+- Một message gây lỗi bất ngờ → response `500`, commit, chạy tiếp (không kẹt partition).
+- Mất mạng/broker → librdkafka tự nối lại; chỉ dừng khi sai auth/quyền/topic hoặc lỗi fatal.
+- Ctrl-C / SIGTERM → xong message đang xử lý, đóng consumer (rời group ngay) rồi thoát.
+- Parse nới lỏng: lệch hợp đồng mà vẫn xếp được → cảnh báo; loại cảnh báo mới được log một lần kèm `message_id` (`cảnh báo dữ liệu mới (...)`), đếm trong `/healthz`.
+- `--health-port N` → `GET /healthz`: `200` khi vòng poll còn chạy (≤ 60 giây), `503` khi bị treo; body có `processed`, `by_status`, `last_message_at`, `uptime_s`, `data_issues` (loại cảnh báo → số lần). Consumer lag xem bằng công cụ của Kafka (`kafka-consumer-groups.sh --describe`).
 
 Test với Kafka local (không SASL):
 
@@ -144,16 +197,17 @@ Chỉ khi phải kết nối cluster **chỉ-SCRAM** (không phải cluster dev 
   cmake -S core -B core/build -DCMAKE_BUILD_RPATH="$HOME/.local/opt/librdkafka-2.15.1/lib"
   ```
 
-  (Không có quyền sudo: tải `apt-get download libssl-dev`, `dpkg -x` lấy header/lib, trỏ `-DOPENSSL_INCLUDE_DIR` / `-DOPENSSL_SSL_LIBRARY` / `-DOPENSSL_CRYPTO_LIBRARY` vào đó.)
+  (Không có quyền sudo: tải `apt-get download librdkafka-dev librdkafka1` (hoặc `libssl-dev`), `dpkg -x` vào một thư mục, sửa `prefix`/`libdir`/`includedir` trong file `.pc` trỏ vào thư mục đó rồi dùng `PKG_CONFIG_PATH` + `CMAKE_BUILD_RPATH` như trên.)
 
 ## Routing làm gì
 
 Toàn bộ nghiệp vụ (loại tác vụ, hạn, ưu tiên, cách tính thời gian và quãng đường, rule và trọng số) cùng các câu hỏi chờ xác nhận nằm ở [docs/BUSINESS_RULES.md](docs/BUSINESS_RULES.md). Rule cụ thể trong code: `core/src/rules.cpp`.
 
-- Nguồn km/phút: **OSRM đường bộ** khi truyền `--osrm` (một lần gọi `/table` mỗi KTV), lỗi thì lùi về chim bay × 1,3 và trả mã 424; mặc định trong code là chim bay 30 km/h.
+- Chọn task để xếp (`core/src/normalization.cpp`): chỉ status 6; status 10 trùng `staff.current_task` là việc đang làm (khóa đầu tuyến, không thành điểm dừng); bỏ task đã có `complete_date` và task thiếu tọa độ; KTV `status = 3` (off) không có tuyến.
+- Nguồn km/phút: **OSRM đường bộ** khi truyền `--osrm` (một lần gọi `/table` mỗi KTV), lỗi hoặc trả ma trận méo thì lùi về chim bay × 1,3 và trả mã 424; mặc định trong code là chim bay 30 km/h.
 - Hạn check-in/hoàn tất tính theo loại việc, mốc hẹn và `create_date` (`core/src/sla.cpp`). Trễ hẹn tính theo **giờ check-in**; trễ hoàn tất so với giờ xong.
 - Thứ tự tối ưu bằng **QHĐ theo tầng rule** (`core/src/dp.cpp`): ≤ 12 việc giải chính xác; nhiều hơn dùng tham lam + 2-opt. Nghỉ trưa bắt buộc 45 phút, bắt đầu trong 11:30–12:45 [giả định].
-- Dữ liệu xấu trả `issue` trong response (thiếu tọa độ, trùng job, hết ca...), không dừng chương trình; input sai contract trả 400; không còn việc để xếp trả 422.
+- Cắt cụm sau khi xếp: chặng giữa hai task > 2 km thì mở cụm mới (`core/src/cluster.cpp`); không đổi thứ tự.
 
 ## OSRM tự host
 
@@ -184,7 +238,7 @@ Chỉ `data/sample/` được commit (16 MB), cắt từ export QOS chi nhánh H
 - `QOS_MAINT_CHECKIN_INFO_utf8.csv`: 18.445 lượt check-in của các checklist đó.
 - `boundary_fake_from_checkins.geojson`: 25 phường giả dựng từ chính bộ mẫu (job cùng phường trùng tọa độ).
 - `events_2026-06_HNI_04.jsonl`: 59.410 sự kiện (không có GPS — file GPS mẫu không có KTV nào của HNI_04).
-- `Data staging.txt`: một payload message mẫu.
+- `Data staging.txt`: một payload message staging mẫu. `validate` (strict) trả `400` vì `staff_role = 0`; `plan` (nới lỏng) ra 2 cảnh báo `STAFF_ROLE` rồi `422` vì task có status 0/97 (chỉ status 6 được xếp).
 
 Lịch sử: bản Python đầy đủ trong tag `python-legacy-2026-09-30`; bản lưu SQLite cũ ở `.temp/backup_before_routing_core_2026-09-11.tar.gz`.
 
@@ -196,7 +250,8 @@ Lịch sử: bản Python đầy đủ trong tag `python-legacy-2026-09-30`; b�
 | 3a | dp | ✅ nghỉ trưa trong QHĐ |
 | 3b, 4 | dp | ⏳ nhiều khung giờ (OT); rule 4 giữ tuyến cũ khi reoptimize |
 | 5.x | travel, adapter, cluster | ✅ OSRM tự host, hardening CLI |
-| 6.x | gateway | ✅ store + HTTP + Redis |
-| 7 | service | 🟡 kafka worker đọc IN; còn produce OUT + gateway feeder |
+| 6.x | gateway | ✅ store + HTTP + Redis (đồ nghề dev) |
+| 7 | kafka, gateway | 🟡 đọc IN + hardening + `/healthz` ✅; 7A state cache + API `replan` ⏳; produce OUT ⏸ tạm hoãn |
+| — | vận hành | ✅ Dockerfile, CI |
 | 8 | service | ⏳ reoptimize theo yêu cầu KTV |
 | 9 | binding | ❌ đã bỏ: Python legacy xóa 2026-09-30; chỉ làm pybind11 nếu cần chạy lại backtest/mô phỏng |
