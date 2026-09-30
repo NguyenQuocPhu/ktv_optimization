@@ -1,6 +1,8 @@
 #include "ktv/api.hpp"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <regex>
 #include <set>
@@ -98,6 +100,19 @@ std::optional<std::vector<std::pair<int, int>>> parse_available(const std::strin
         start = comma + 1;
     }
     return windows;
+}
+
+// Số nguyên kể cả khi gửi dạng 3.0 hoặc "3" (dữ liệu nguồn hay lẫn kiểu). Không phải số nguyên → không có.
+std::optional<int> whole_number(const json& value) {
+    if (value.is_number_integer()) return value.get<int>();
+    if (value.is_number_float() && value.get<double>() == std::floor(value.get<double>()) && std::abs(value.get<double>()) < 1e6)
+        return static_cast<int>(value.get<double>());
+    if (value.is_string()) {
+        const std::string& text = value.get_ref<const std::string&>();
+        if (!text.empty() && text.size() <= 6 && std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c); }))
+            return std::stoi(text);
+    }
+    return std::nullopt;
 }
 
 // Đọc từng field, ghi lỗi theo đường dẫn (thống nhất với bản Python legacy — tag python-legacy-2026-09-30).
@@ -221,8 +236,18 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
         s.staff_location = r.text(*staff, p, "staff_location", false);
         if (staff->contains("status")) {  // Không bắt buộc: workbook mới có, JSON mẫu không gửi.
             const json& value = (*staff)["status"];
-            if (value.is_number_integer() && value.get<int>() >= 1 && value.get<int>() <= 3) s.status = value.get<int>();
-            else r.tolerate("STAFF_STATUS", p + ".status", "cần 1, 2 hoặc 3 (đang là " + value.dump() + ")");
+            const std::optional<int> number = whole_number(value);
+            const std::string shown = "(đang là " + value.dump() + ")";
+            if (value.is_number_integer() && *number >= 1 && *number <= 3) {
+                s.status = *number;
+            } else if (number && *number >= 1 && *number <= 3) {  // "3" hoặc 3.0: hiểu là số, vẫn ghi sổ.
+                s.status = *number;
+                r.tolerate("STAFF_STATUS", p + ".status", "cần số nguyên 1, 2 hoặc 3 " + shown + ", đã hiểu là " + std::to_string(*number));
+            } else {
+                // Không rõ KTV có đang làm không: xếp nhầm cho người đang nghỉ tệ hơn bỏ sót một lần → không xếp (422).
+                s.status = kStaffStatusUnknown;
+                r.tolerate("STAFF_STATUS", p + ".status", "cần 1, 2 hoặc 3 " + shown + ", không xếp tuyến");
+            }
         }
         if (staff->contains("latlng")) {
             auto point = (*staff)["latlng"].is_string() ? parse_latlng((*staff)["latlng"].get<std::string>()) : std::nullopt;
@@ -321,8 +346,9 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
             const json& item = (*found)[i];
             const std::string path = "tasks." + key + "[" + std::to_string(i) + "]";
             // Lỗi của task này gom vào `local`: nới lỏng thì chỉ bỏ task này (TASK_DROPPED), không bỏ cả KTV.
-            std::vector<Error> local;
-            Reader tr{local, warnings};
+            // Cảnh báo của task cũng gom riêng: task bị bỏ chỉ để lại một TASK_DROPPED, không đếm dư vào sổ.
+            std::vector<Error> local, local_warnings;
+            Reader tr{local, warnings ? &local_warnings : nullptr};
             if (!item.is_object()) {
                 tr.fail(path, "cần object");
                 r.keep(local, "TASK_DROPPED", path);
@@ -432,8 +458,13 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
             // Nên nới lỏng: lệch/ngoài danh mục vẫn xếp (loại ngoài danh mục dùng kind_or_default).
             // Task đã hỏng (sẽ bị bỏ) thì không cảnh báo thêm về danh mục cho đỡ nhiễu.
             if (!warnings || local.empty()) {
-                if (t.task_group_name != key || t.task_group_id != g + 1)
-                    tr.tolerate("TASK_GROUP", path, "nằm trong nhóm " + key + " nhưng task_group khác");
+                if (t.task_group_name != key || t.task_group_id != g + 1) {
+                    tr.tolerate("TASK_GROUP", path, "nằm trong nhóm " + key + " nhưng task_group khác, dùng nhóm " + key);
+                    // plan() tra danh mục theo task_group_name: phải cùng nhóm với lúc kiểm ở đây, không thì
+                    // âm thầm rơi về loại mặc định (sai định mức + kiểu hạn).
+                    t.task_group_name = key;
+                    t.task_group_id = g + 1;
+                }
                 if (const TaskKind* kind = find_kind(key, t.task_type_name)) {
                     if (t.task_type_id != kind->type_id)
                         tr.tolerate("CATALOG_MISMATCH", path + ".task_type_id", "danh mục ghi " + std::to_string(kind->type_id));
@@ -452,7 +483,10 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
             // Strict: kiểm trùng như cũ. Nới lỏng: chỉ task sạch mới giữ chỗ ID, task trùng sau bị bỏ.
             if ((!warnings || local.empty()) && !seen.insert(t.task_id).second)
                 tr.fail(path + ".task_id", "trùng với việc khác trong message");
-            if (r.keep(local, "TASK_DROPPED", path)) message.tasks.push_back(std::move(t));
+            if (r.keep(local, "TASK_DROPPED", path)) {
+                if (warnings) warnings->insert(warnings->end(), local_warnings.begin(), local_warnings.end());
+                message.tasks.push_back(std::move(t));
+            }
         }
     }
     // Staging có thể gửi kèm row task của việc đang làm để bổ sung dữ liệu; không coi là lỗi.

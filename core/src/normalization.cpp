@@ -4,7 +4,7 @@ namespace ktv {
 
 NormalizedWorklist normalize_worklist(const Message& message) {
     NormalizedWorklist result;
-    result.staff_off = message.staff.status == kStaffOff;
+    result.staff_off = message.staff.status == kStaffOff || message.staff.status == kStaffStatusUnknown;
 
     const std::optional<long long> current_id =
         message.staff.current_task ? std::optional<long long>(message.staff.current_task->task_id) : std::nullopt;

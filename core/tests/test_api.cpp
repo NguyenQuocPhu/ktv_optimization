@@ -192,6 +192,7 @@ int main() {
         CHECK(errors.empty());
     }
 
+    constexpr int kUnknownStatus = -1;  // = ktv::kStaffStatusUnknown (viết số để test chạy được cả trên bản cũ khi soát hồi quy)
     // ---- Chế độ nới lỏng (worker / `plan`): mỗi mã trong docs/DATA_QUESTIONS.md. Strict vẫn lỗi như cũ.
     std::vector<ktv::Error> errors, warnings;
     auto lenient = [&](const json& data) {
@@ -280,10 +281,60 @@ int main() {
         data["staff"]["current_task"] = "đang làm";
         auto m = lenient(data);
         CHECK(errors.empty() && m.tasks.size() == 2);
-        CHECK(!m.planned_at && m.staff.status == 0 && m.staff.plots.empty() && !m.staff.current_task);
+        CHECK(!m.planned_at && m.staff.plots.empty() && !m.staff.current_task);
         CHECK(warned("PLANNED_AT", ".planned_at") && warned("STAFF_STATUS", "staff.status"));
         CHECK(warned("STAFF_PLOTS", "staff.plots[0]") && warned("STAFF_PLOTS", "staff.plots") && warned("CURRENT_TASK", "staff.current_task"));
         CHECK(strict_fails(data));
+    }
+    {  // staff.status: "3"/3.0 hiểu là số (vẫn ghi sổ); giá trị lạ = không rõ → không xếp (422), không coi như đang làm.
+        const ktv::Minutes at = *ktv::parse_datetime("2026-09-10 09:00:00");
+        for (const json& off : {json("3"), json(3.0)}) {
+            json data = sample();
+            data["staff"]["status"] = off;
+            auto m = lenient(data);
+            CHECK(errors.empty() && m.staff.status == 3 && warned("STAFF_STATUS", "staff.status"));
+            CHECK(ktv::plan(m, ktv::default_rules(), at).response["message"] == "KTV đang off, không sinh tuyến");
+            CHECK(strict_fails(data));
+        }
+        for (const json& odd : {json(9), json("off"), json(2.5), json(nullptr)}) {
+            json data = sample();
+            data["staff"]["status"] = odd;
+            auto m = lenient(data);
+            CHECK(errors.empty() && m.staff.status == kUnknownStatus && warned("STAFF_STATUS", "staff.status"));
+            ktv::PlanResult r = ktv::plan(m, ktv::default_rules(), at);
+            CHECK(r.response["statuscode"] == "422" && r.response["message"] == "Trạng thái KTV không rõ, không sinh tuyến");
+        }
+        json data = sample();
+        data["staff"]["status"] = "1";
+        auto m = lenient(data);
+        CHECK(m.staff.status == 1 && ktv::plan(m, ktv::default_rules(), at).response["statuscode"] == "200");
+    }
+    {  // Nhóm ghi lệch → chuẩn hóa về nhóm chứa task, để plan() tra đúng loại (không rơi về mặc định 60 phút).
+        json data = sample();
+        json& t = data["tasks"]["hoa_don"][0];
+        t["task_group_name"] = "";
+        t["handle_minutes"] = 0;  // dùng định mức của loại: hoa_don_tra_sau
+        auto m = lenient(data);
+        CHECK(errors.empty() && warned("TASK_GROUP", "tasks.hoa_don[0]") && !warned("UNKNOWN_TASK_TYPE", "tasks.hoa_don[0].task_type_name"));
+        CHECK(m.tasks[1].task_group_name == "hoa_don" && m.tasks[1].task_group_id == 4);
+        const int norm = ktv::find_kind("hoa_don", "hoa_don_tra_sau")->handle_minutes;
+        CHECK(norm != 60);  // nếu bằng 60 thì test không phân biệt được với loại mặc định
+        ktv::PlanResult r = ktv::plan(m, ktv::default_rules(), *ktv::parse_datetime("2026-09-10 09:00:00"));
+        bool found = false;
+        for (const auto& cluster : r.response["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row["entry_type"] == "TASK" && row["task_id"] == 5454544) found = row["handle_minutes"] == norm;
+        CHECK(found);
+    }
+    {  // Task bị bỏ chỉ để lại TASK_DROPPED, không đếm thêm cảnh báo khác của chính nó.
+        json data = sample();
+        json& t = data["tasks"]["hoa_don"][0];
+        t["staff_role"] = 0;
+        t["extra"] = 1;
+        t["latlng"] = "abc";
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 1);
+        CHECK(warnings.size() == 1 && warned("TASK_DROPPED", "tasks.hoa_don[0]"));
     }
     {  // Không xếp được tuyến → vẫn 400 ở cả chế độ nới lỏng.
         json data = sample();

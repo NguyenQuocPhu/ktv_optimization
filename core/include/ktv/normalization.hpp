@@ -44,7 +44,7 @@ struct NormalizationStats {
 struct NormalizedWorklist {
     std::vector<const Task*> candidates;  // Con trỏ vào Message, giữ nguyên thứ tự message.tasks.
     std::optional<Task> current_task;     // Việc đang làm; đầy đủ nếu có row khớp, tối thiểu nếu không.
-    bool staff_off = false;               // staff.status == 3.
+    bool staff_off = false;               // staff.status == 3, hoặc trạng thái không rõ (kStaffStatusUnknown).
     NormalizationStats stats;
 };
 

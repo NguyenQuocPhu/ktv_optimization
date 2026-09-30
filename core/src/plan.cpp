@@ -40,8 +40,10 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     const Minutes now = message.planned_at.value_or(server_now);
     const Minutes day = start_of_day(now);
     const NormalizedWorklist worklist = normalize_worklist(message);
-    if (worklist.staff_off) {  // KTV off: không sinh tuyến.
-        result.response = error_response("422", "KTV đang off, không sinh tuyến", message.message_id, server_now);
+    if (worklist.staff_off) {  // KTV off (hoặc trạng thái không rõ): không sinh tuyến.
+        const char* why = message.staff.status == kStaffStatusUnknown ? "Trạng thái KTV không rõ, không sinh tuyến"
+                                                                       : "KTV đang off, không sinh tuyến";
+        result.response = error_response("422", why, message.message_id, server_now);
         return result;
     }
     const std::vector<const Task*>& tasks = worklist.candidates;
