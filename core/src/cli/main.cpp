@@ -84,19 +84,14 @@ int main(int argc, char** argv) {
         const ktv::json& record = records[i];
         const ktv::Envelope envelope = ktv::local_envelope(record, "local-" + std::to_string(i + 1), server_now);
         std::vector<ktv::Error> errors, warnings;
-        ktv::Message message;
-        if (record.is_discarded()) errors.push_back({"", "JSON hỏng"});
-        else message = ktv::parse_message(record, errors, command == "plan" ? &warnings : nullptr);
+        // plan: nới lỏng như worker; validate: strict để soát hết chỗ lệch hợp đồng.
+        const ktv::Message message = ktv::parse_record(record, envelope, errors, command == "plan" ? &warnings : nullptr);
         for (const ktv::Error& warning : warnings) ++issues[ktv::issue_key(warning)];
-        message.message_id = envelope.message_id;      // để trace_id = message_id của envelope
-        message.planned_at = envelope.planned_at;      // lập tuyến theo đúng planned_at của envelope
 
         nlohmann::ordered_json response;
         if (!errors.empty()) {
-            std::string text = "Sai định dạng tham số:";
-            for (size_t k = 0; k < errors.size() && k < 3; ++k) text += " " + errors[k].path + " " + errors[k].problem + ";";
-            response = ktv::error_response("400", text, envelope.message_id, server_now);
-            if (shown++ < 20) std::cerr << "record " << i + 1 << ": " << text << "\n";
+            response = ktv::bad_request(errors, envelope.message_id, server_now);
+            if (shown++ < 20) std::cerr << "record " << i + 1 << ": " << response["message"].get<std::string>() << "\n";
         } else if (command == "plan") {
             ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url);
             response = std::move(result.response);

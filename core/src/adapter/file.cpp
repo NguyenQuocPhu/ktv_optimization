@@ -1,5 +1,7 @@
 #include "ktv/adapter/file.hpp"
 
+#include "ktv/plan.hpp"
+
 #include <iterator>
 #include <optional>
 #include <sstream>
@@ -47,6 +49,21 @@ Envelope local_envelope(const json& record, const std::string& fallback_id, Minu
         planned = parse_datetime(record["planned_at"].get<std::string>());
     envelope.planned_at = planned.value_or(default_planned_at);
     return envelope;
+}
+
+Message parse_record(const json& record, const Envelope& envelope, std::vector<Error>& errors, std::vector<Error>* warnings) {
+    Message message;
+    if (record.is_discarded()) errors.push_back({"", "JSON hỏng"});
+    else message = parse_message(record, errors, warnings);
+    message.message_id = envelope.message_id;  // trace_id = message_id của envelope
+    message.planned_at = envelope.planned_at;  // lập tuyến theo đúng planned_at của envelope
+    return message;
+}
+
+nlohmann::ordered_json bad_request(const std::vector<Error>& errors, const std::string& trace_id, Minutes now) {
+    std::string text = "Sai định dạng tham số:";
+    for (size_t k = 0; k < errors.size() && k < 3; ++k) text += " " + errors[k].path + " " + errors[k].problem + ";";
+    return error_response("400", text, trace_id, now);
 }
 
 }  // namespace ktv

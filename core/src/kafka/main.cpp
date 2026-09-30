@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "ktv/adapter/file.hpp"
+#include "ktv/adapter/http.hpp"
 #include "ktv/kafka/config.hpp"
 #include "ktv/kafka/consumer.hpp"
 #include "ktv/plan.hpp"
@@ -121,12 +122,7 @@ std::unique_ptr<HealthServer> start_health(Health& health, int port) {
         response.status = gap <= kMaxPollGap ? 200 : 503;
         response.set_content(body.dump(), "application/json");
     });
-    // httplib mặc định bật SO_REUSEPORT: hai worker cùng cổng đều bind được, /healthz trả ngẫu nhiên
-    // của một trong hai. Chỉ giữ SO_REUSEADDR để trùng cổng là báo lỗi.
-    hs->server.set_socket_options([](socket_t sock) {
-        int yes = 1;
-        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
-    });
+    ktv::exclusive_port(hs->server);  // hai worker trùng cổng → báo lỗi thay vì /healthz trả của tiến trình khác
     if (!hs->server.bind_to_port("0.0.0.0", port)) return nullptr;
     hs->thread = std::thread([server = &hs->server] { server->listen_after_bind(); });
     // Chờ server chạy hẳn: stop() của httplib chỉ tác dụng khi server đã chạy. Thiếu dòng này, worker thoát
@@ -140,16 +136,8 @@ std::unique_ptr<HealthServer> start_health(Health& health, int port) {
 nlohmann::ordered_json respond(const ktv::json& value, const ktv::Envelope& envelope, const ktv::Rules& rules,
                                ktv::Minutes now, const std::string& osrm_url, std::vector<ktv::Error>& warnings) {
     std::vector<ktv::Error> errors;
-    ktv::Message message;
-    if (value.is_discarded()) errors.push_back({"", "JSON hỏng"});
-    else message = ktv::parse_message(value, errors, &warnings);
-    if (!errors.empty()) {
-        std::string text = "Sai định dạng tham số:";
-        for (size_t k = 0; k < errors.size() && k < 3; ++k) text += " " + errors[k].path + " " + errors[k].problem + ";";
-        return ktv::error_response("400", text, envelope.message_id, now);
-    }
-    message.message_id = envelope.message_id;  // trace_id = message_id của envelope
-    message.planned_at = envelope.planned_at;  // lập tuyến theo đúng planned_at của message
+    const ktv::Message message = ktv::parse_record(value, envelope, errors, &warnings);
+    if (!errors.empty()) return ktv::bad_request(errors, envelope.message_id, now);
     return ktv::plan(message, rules, now, osrm_url).response;
 }
 

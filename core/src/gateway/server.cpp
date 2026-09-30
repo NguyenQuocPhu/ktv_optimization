@@ -1,5 +1,7 @@
 #include "ktv/gateway/server.hpp"
 
+#include "ktv/adapter/http.hpp"
+
 #include <optional>
 
 #include <nlohmann/json.hpp>
@@ -23,12 +25,7 @@ void json(httplib::Response& response, int status, const nlohmann::json& body) {
 
 std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const GatewayOptions& options) {
     auto server = std::make_unique<httplib::Server>();
-    // httplib mặc định bật SO_REUSEPORT: hai gateway cùng cổng đều listen được và chia request ngẫu nhiên.
-    // Chỉ giữ SO_REUSEADDR để trùng cổng là listen lỗi.
-    server->set_socket_options([](socket_t sock) {
-        int yes = 1;
-        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
-    });
+    exclusive_port(*server);  // trùng cổng là listen lỗi, không chia request ngẫu nhiên với tiến trình khác
 
     server->Get("/healthz", [&store](const httplib::Request&, httplib::Response& response) {
         json(response, 200, {{"ok", true}, {"entries", store.size()}});
