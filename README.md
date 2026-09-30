@@ -123,7 +123,12 @@ core/build/ktv_worker --env .env --max 1 --at "2026-09-10 09:00:00"
 
 ### Queue cluster của công ty (trạng thái 2026-09-30)
 
-- **Ubuntu 22.04 không đủ**: `librdkafka` từ apt là **1.8.0**, không đăng nhập được SCRAM-SHA-512 của queue dev cluster. Phải build **librdkafka 2.x** và trỏ `core` vào bản đó:
+- **Cluster đúng**: `kafka-queue-dev-1:9092,kafka-queue-dev-2:9093,kafka-queue-dev-3:9094` (bảng dev của SYS), SASL **PLAIN**; `librdkafka` 1.8 từ apt là đủ. Topic `dev-inside-par-assignment-optimal-assign-task-emp-assigned-queue` nằm ở đây (3 partition, hiện chưa có message: low = high).
+- **Cẩn thận nhầm cluster**: `isc-queue-dev0x:1x092` (172.27.62.22 — từng nằm trong `.env`, còn trong script test bên `tet/`) là cluster **khác** (SYS: 172.27.62.36): chỉ hỗ trợ **SCRAM-SHA-512** và **không** chứa topic optimal-assign (tài khoản chỉ thấy `dev-chatbot-ftel-bot-gateway-api-ivr-data`, rỗng). PLAIN ở đó bị trả `Invalid username or password`.
+- **Consumer group theo quy ước `chatbot-ftel-*`**: tài khoản đăng nhập được, lấy được watermark topic (⇒ quyền READ/DESCRIBE đã có). Group tên tự đặt (`ktv-core-test-*`) bị `GROUP_AUTHORIZATION_FAILED`, còn `chatbot-ftel-group` (trong `.env`) vào group và chờ message bình thường. Topic hiện rỗng nên chưa có message nào để đọc.
+- Với Kafka local (không SASL) thì worker đã chạy end-to-end: đọc message → `statuscode 200`.
+
+Chỉ khi phải kết nối cluster **chỉ-SCRAM** (không phải cluster dev hiện tại) thì cần build librdkafka 2.x — apt Ubuntu 22.04 là 1.8.0, không đăng nhập được SCRAM:
 
   ```bash
   sudo apt install -y libssl-dev          # header OpenSSL cho SCRAM
@@ -140,10 +145,6 @@ core/build/ktv_worker --env .env --max 1 --at "2026-09-10 09:00:00"
   ```
 
   (Không có quyền sudo: tải `apt-get download libssl-dev`, `dpkg -x` lấy header/lib, trỏ `-DOPENSSL_INCLUDE_DIR` / `-DOPENSSL_SSL_LIBRARY` / `-DOPENSSL_CRYPTO_LIBRARY` vào đó.)
-
-- Tài khoản dev phải dùng **`SCRAM-SHA-512`**: `PLAIN` bị broker trả `Invalid username or password` (cả confluent-kafka 2.15 lẫn librdkafka 1.8).
-- Còn **chờ SYS cấp quyền** mới đọc được topic thật: consumer group hiện bị `GROUP_AUTHORIZATION_FAILED`, và tài khoản chưa thấy topic optimal-assign trong metadata. Cần: quyền group + READ/DESCRIBE topic `dev-inside-par-assignment-optimal-assign-task-emp-assigned-queue`.
-- Với Kafka local (không SASL) thì worker đã chạy end-to-end: đọc message → `statuscode 200`.
 
 ## Routing làm gì
 
