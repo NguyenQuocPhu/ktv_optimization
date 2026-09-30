@@ -58,7 +58,13 @@ std::optional<Matrix> osrm_matrix(const std::string& url, const std::vector<Poin
     const auto& distances = body["distances"];
     const auto& durations = body["durations"];
     size_t n = points.size();
-    if (!distances.is_array() || !durations.is_array() || distances.size() != n || durations.size() != n) {
+    auto square = [n](const json& rows) {  // Đủ n hàng, mỗi hàng là mảng n ô. Méo → lùi về chim bay, không ném.
+        if (!rows.is_array() || rows.size() != n) return false;
+        for (const json& row : rows)
+            if (!row.is_array() || row.size() != n) return false;
+        return true;
+    };
+    if (!square(distances) || !square(durations)) {
         error = "OSRM trả ma trận sai kích thước";
         return std::nullopt;
     }
