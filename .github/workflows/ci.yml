@@ -1,0 +1,25 @@
+# Build + ctest core C++ (đủ Redis/Kafka lib) và kiểm Dockerfile build được.
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    services:
+      redis:  # cho test gateway_redis (không có thì test tự bỏ qua)
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libhiredis-dev librdkafka-dev
+      - run: cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build core/build -j"$(nproc)"
+      - run: ctest --test-dir core/build --output-on-failure
+
+  image:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t ktv-core .

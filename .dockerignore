@@ -1,0 +1,4 @@
+# Chỉ gửi core/ vào build context (data/osrm vài GB, artifacts, .env có mật khẩu).
+*
+!core/
+core/build*
