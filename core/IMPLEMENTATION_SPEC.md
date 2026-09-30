@@ -783,3 +783,250 @@ local file / Kafka record
 - Cách producer thông báo batch completion; hiện mỗi message là một KTV.
 - Formula cho output `priority`, và tiêu chí `MAIN/INSERTED`/`insert_reason` khi bật Rule 5.
 - OT nhiều cửa sổ, route giữ tuyến cũ, reoptimize threshold và batch-level API.
+
+## 12. Brainstorm lên prod (ý tưởng, chưa phải kế hoạch)
+
+> Danh sách mở, chưa ưu tiên, chưa cam kết. Mỗi ý có cách làm cụ thể để khi chọn thì biết bắt đầu từ đâu.
+> Khi một ý được chọn thì chuyển thành phase có exit gate ở mục 9; ý nào đổi thuật toán/objective phải
+> trình bày và duyệt trước (không sửa `dp.cpp` ngầm).
+
+Số liệu gốc để so: benchmark 5.332 message, chim bay p95 < 1 ms, max ~130 ms (12 việc chính xác);
+OSRM tự host p50 3 ms, p95 10 ms. Topic IN 3 partition. `max_exact_tasks = 12`, `max_labels = 32`,
+2-opt chỉ tới 40 việc, `mask` 64 bit (tối đa 63 việc/KTV, hơn thì 422).
+
+### 12.1 Scale thuật toán
+
+**A1. Ngân sách thời gian mỗi lần gọi (anytime).** Thêm `Rules.time_budget_ms` (VD 300). `plan()` chạy
+tham lam + 2-opt trước (vài ms) để luôn có lời giải; rồi chạy QHĐ, kiểm đồng hồ mỗi `mask` (vòng ngoài của
+`exact()`), quá ngân sách thì bỏ và trả lời giải heuristic, `sequence_source = HEURISTIC`, kèm lý do
+`TIME_BUDGET`. Lợi: nâng `max_exact_tasks` lên 14–15 mà không sợ đuôi dài. Test: bài 15 việc với ngân sách
+1 ms phải trả heuristic hợp lệ; ngân sách lớn phải trùng vét cạn.
+
+**A2. Cắt nhánh QHĐ bằng cận dưới.** Trước QHĐ đã có lời giải heuristic → khóa `K_heur`. Khi mở rộng nhãn,
+nếu khóa tầng 1 hiện tại (số điểm trễ đã chắc chắn) đã lớn hơn `K_heur[0]` thì bỏ nhãn đó. Cận dưới rẻ:
+việc chưa làm có `due` < `clock + leg nhỏ nhất tới nó` thì chắc chắn trễ → cộng vào. Không đổi kết quả
+(chỉ bỏ nhãn không thể thắng), nên test vét cạn hiện có vẫn là cổng.
+
+**A3. Heuristic tốt hơn cho KTV nhiều việc (> 12).** Hiện: tham lam + 2-opt 2 vòng. Thêm Or-opt (dời đoạn
+1–3 việc sang chỗ khác) và relocate một việc, lặp tới khi không cải thiện hoặc hết ngân sách A1. Tùy chọn
+sau đó: LNS (xóa ngẫu nhiên k việc rồi chèn lại tốt nhất, seed cố định để tất định). Đo trên benchmark:
+số KTV `HEURISTIC` (126) có khóa tốt hơn bao nhiêu, thời gian p95.
+
+**A4. QHĐ theo cụm cho KTV rất nhiều việc (30–63).** Cắt việc thành cụm địa lý trước (lưới ~2 km hoặc
+theo `task_plots_id`), giải thứ tự giữa các cụm (ít phần tử → chính xác), rồi QHĐ trong từng cụm (≤ 12).
+Nhược điểm: bỏ lỡ tuyến xen kẽ giữa cụm khi hạn gấp → chỉ dùng khi n > ngưỡng và so khóa với heuristic,
+lấy cái tốt hơn.
+
+**A5. Bộ nhớ QHĐ.** `table` là `vector<vector<int>>` kích thước `2^(n+1) × (n+1)`; ở n = 15 ~ 1 triệu ô
+vector rỗng (~24 MB chỉ để header). Đổi sang mảng phẳng + offset (nhãn nằm trong một `vector<Label>`,
+ô chỉ giữ `[begin, count]`) → ít cấp phát, cache tốt hơn, cần trước khi nâng ngưỡng. Parity: test `dp`.
+
+**A6. Tính lại tăng dần khi replan.** Khi Mobix gọi replan chỉ vì vị trí đổi, phần lớn thứ tự cũ vẫn tốt.
+Seed heuristic bằng thứ tự lần trước (lấy từ dedup/route cache ở 12.4), 2-opt từ đó → hội tụ nhanh và ít
+"nhảy tuyến" làm KTV khó chịu. Liên quan Rule 4 (giữ tuyến cũ) ở Phase 8.
+
+### 12.2 Scale hệ thống
+
+**B1. Nhiều luồng trong một worker, giữ thứ tự theo KTV.** librdkafka giao message theo partition; mở
+pool N luồng, băm `staff_id` (hoặc key Kafka) → luồng, mỗi luồng một hàng đợi → cùng KTV luôn xử lý tuần tự.
+Commit: theo từng partition, chỉ commit offset liên tục đã xong (giữ `std::map<offset, done>` mỗi partition,
+commit tới lỗ hổng đầu tiên). Hiện tại 1 luồng ~1 ms/message chim bay → ~1.000 msg/s; OSRM ~10 ms → ~100 msg/s
+mỗi worker, đủ cho batch 6h với vài nghìn KTV. Chỉ làm khi đo lag thật cao.
+
+**B2. Nhiều replica.** Số consumer có ích tối đa = số partition (IN hiện 3). Cần thêm thì xin SYS tăng
+partition topic IN, hoặc dùng B1. Gateway (7A) stateless nhờ Redis → scale ngang sau load balancer tùy ý.
+
+**B3. Batch đầu ngày.** OA đẩy vài nghìn message cùng lúc 6h. Đo: thời gian từ message đầu tới hết lag.
+Nếu OSRM là nút cổ chai: giới hạn số request OSRM đồng thời (semaphore) để không làm sập OSRM, và bật
+keep-alive (hiện `osrm_matrix` tạo `httplib::Client` mới mỗi lần → mỗi lần một TCP handshake ~vài ms;
+giữ một client mỗi luồng).
+
+**B4. Backpressure.** Nếu OSRM chậm hẳn (> 3 s timeout), mọi message trả 424 chim bay → vẫn chạy nhưng
+chất lượng giảm. Thêm circuit breaker: 20 lần OSRM lỗi liên tiếp thì bỏ gọi OSRM 30 s (đi thẳng chim bay),
+đỡ tốn 3 s timeout mỗi message; `/healthz` báo `osrm: "open"`.
+
+### 12.3 Docker, môi trường, cấu hình
+
+**C1. Một image, nhiều vai.** Image hiện có đủ `ktv_core`/`ktv_worker`/`ktv_gateway`. Deploy mỗi vai một
+service với cùng image tag (gắn git SHA: `ktv-core:<sha>`), chỉ khác `command`. Không build riêng từng vai.
+
+**C2. Compose cho staging.** `compose.prod.yaml` (hoặc k8s manifest) gồm: `worker` (replica 1–3),
+`gateway` (replica ≥ 2), `redis` (có AOF, hoặc Redis công ty), `osrm` (volume dữ liệu bản đồ, chỉ mạng nội
+bộ). Mọi cổng chỉ mở trong mạng nội bộ; gateway ra ngoài qua reverse proxy/ingress có TLS.
+
+**C3. Cấu hình theo môi trường.** Giữ quy ước hiện có: biến môi trường đè `.env`. Tách 3 file mẫu
+`.env.dev/.env.staging/.env.prod` (không chứa mật khẩu). Mật khẩu Kafka/Redis/token gateway lấy từ secret
+của nền tảng (k8s Secret, Vault, hoặc `docker secret`), không để trong image hay git. Worker in `describe()`
+lúc khởi động (đã không in password) để soát cấu hình.
+
+**C4. Rules theo phiên bản.** `rules.json` là cấu hình nghiệp vụ, không nên đóng vào image: mount từ
+ConfigMap/volume. Thêm field `version` trong rules và ghi vào mọi response/log (để biết tuyến nào tính bằng
+bộ trọng số nào — cần cho learning 12.8). Đổi rules = đổi file + restart (hoặc SIGHUP reload, làm sau).
+
+**C5. Healthcheck trong image.** Thêm `HEALTHCHECK` trong Dockerfile gọi `/healthz` (cần `curl` hoặc một
+lệnh nhỏ trong `ktv_core`). Với k8s dùng `livenessProbe` → `/healthz`, `readinessProbe` → đã kết nối
+Kafka/Redis.
+
+**C6. Build tái lập.** Ghim base image theo digest, ghim phiên bản apt (librdkafka 1.8 hiện dùng). Khi cần
+SCRAM thì tầng build tự build librdkafka 2.x (công thức ở README).
+
+### 12.4 Redis
+
+**D1. Khóa và TTL (7A).** `ktv:state:{staff}` = message IN mới nhất (TTL 2 ngày, hết ngày là vô nghĩa);
+`ktv:dedup:{staff}` = fingerprint (TTL 1 ngày). Nếu cần tách theo ngày: `ktv:state:{staff}:{date}`.
+Ghi state có điều kiện: chỉ ghi đè khi message mới hơn (so `planned_at` hoặc offset) để message đến trễ
+không làm state lùi — dùng Lua script `if new > old then SET`.
+
+**D2. Cache ma trận OSRM.** Nhiều KTV cùng chi nhánh đi qua cùng các điểm. Khóa theo cặp tọa độ đã làm tròn
+5 chữ số (~1 m): `ktv:leg:{lat1,lng1}:{lat2,lng2}` → `km,phút`, TTL 7 ngày (bản đồ đổi chậm). Trước khi
+gọi OSRM, `MGET` các cặp; thiếu mới gọi `/table` phần thiếu. Chỉ đáng làm nếu OSRM là nút cổ chai (đo trước).
+
+**D3. Route cache cho Mobix (nếu sau này cần).** Kết quả `plan()` mới nhất: `ktv:route:{staff}:{date}`
+— đã có `RedisRouteStore` ở Phase 6.3, chỉ cần gateway ghi vào sau khi tính. Hiện không phục vụ Mobix
+(hướng đã chốt là OUT), nhưng hữu ích để A6 và để debug "lần trước trả gì".
+
+**D4. Vận hành Redis.** Bật AOF (`appendonly yes` như compose), `maxmemory` + `volatile-lru` (mọi khóa đều
+có TTL). Kích thước ước lượng: message IN ~5–20 KB × vài nghìn KTV → vài chục MB. Dùng Redis công ty nếu có
+(Sentinel/Cluster); code hiện dùng hiredis một node → cần thêm cấu hình Sentinel nếu bắt buộc HA.
+
+### 12.5 Store lâu dài (database)
+
+**E1. Nhật ký tuyến đã gợi ý (bắt buộc cho learning).** Mỗi lần `plan()`: `run_code`, `message_id`,
+`staff_id`, `planned_at`, `server_time`, `rules_version`, `travel_source`, `sequence_source`, hash input,
+thứ tự task + ETA/giờ xong dự kiến từng task, metrics, cảnh báo dữ liệu, thời gian tính. Không cần full
+payload trong DB — full payload ghi ra object storage (S3/MinIO) dạng JSONL nén theo ngày
+(`s3://ktv-log/in/2026-10-01/part-*.jsonl.gz`), DB chỉ giữ con trỏ.
+
+**E2. Chọn DB.** Truy vấn chủ yếu là phân tích (theo ngày/chi nhánh/KTV) → ClickHouse hoặc PostgreSQL có
+partition theo ngày. Bắt đầu đơn giản: PostgreSQL, bảng `route_run` (1 dòng/lần tính) + `route_stop`
+(1 dòng/task trong tuyến). Ghi không đồng bộ: worker đẩy vào một topic Kafka `ktv-audit` (hoặc file JSONL),
+một job riêng nạp vào DB → không để DB chậm làm chậm đường realtime.
+
+**E3. Giữ bao lâu.** Log chi tiết 90 ngày, tổng hợp theo ngày giữ lâu. Tọa độ khách/KTV là dữ liệu nhạy
+cảm → che bớt (làm tròn 3 chữ số) trong bảng phân tích, bản đầy đủ chỉ trong object storage có phân quyền.
+
+### 12.6 OSRM
+
+**F1. Chạy ở đâu.** Một service nội bộ (2,6 GB RAM, CPU cho `/table`), 2 replica sau load balancer để
+không phụ thuộc một máy. Dữ liệu bản đồ dựng sẵn thành image riêng `ktv-osrm:<ngày-bản-đồ>` → deploy như
+code, rollback được.
+
+**F2. Cập nhật bản đồ.** Job hàng tháng: tải `vietnam-latest.osm.pbf`, extract + contract (~5 phút, 13 GB
+RAM lúc extract), build image mới, chạy smoke test (vài cặp tọa độ cố định so với bản cũ, lệch > 20% thì
+dừng), rồi đổi tag.
+
+**F3. Xe máy thay ô tô.** KTV đi xe máy; profile `car.lua` bỏ qua hẻm và cấm đường ngược với xe máy. Thử
+profile tùy chỉnh (copy `car.lua`, cho phép `highway=path/footway` hẹp, tốc độ xe máy) và so km với lịch sử
+check-in thật (BUSINESS_RULES Q21).
+
+**F4. Giờ cao điểm.** OSRM không biết kẹt xe. Rẻ nhất: nhân hệ số thời gian theo khung giờ (VD 7–9h và
+16:30–19h × 1,4), cấu hình trong `rules.json`, học hệ số từ dữ liệu thật (12.8).
+
+### 12.7 Quan sát (observability)
+
+**G1. Metrics.** `/healthz` hiện đã có bộ đếm. Thêm `/metrics` dạng Prometheus (text đơn giản, không cần
+thư viện): `ktv_messages_total{status}`, `ktv_plan_ms` (histogram), `ktv_osrm_errors_total`,
+`ktv_data_issues_total{code}`, `ktv_sequence_source_total{source}`. Consumer lag lấy bằng Kafka exporter
+có sẵn, không tự tính.
+
+**G2. Log có cấu trúc.** Hiện log là chữ tự do ra stderr. Đổi sang một dòng JSON mỗi sự kiện
+(`{"ts","level","event":"message_done","message_id","staff_id","status","ms"}`) để đưa vào ELK/Loki và lọc
+theo `message_id`. Không log tọa độ thô và token.
+
+**G3. Cảnh báo.** Lag > N phút; tỉ lệ 400/500 > x%; `/healthz` 503; OSRM lỗi liên tục; `data_issues` xuất
+hiện mã mới (loại dữ liệu lạ lần đầu) → báo kênh team.
+
+**G4. Truy vết end-to-end.** Giữ `message_id`/`run_code` xuyên suốt IN → state → replan → OUT → OA. Khi
+Mobix gọi replan, `X-Request-ID` ghi cùng `run_code` → từ một khiếu nại của KTV lần được payload, rules
+version, ma trận travel đã dùng.
+
+### 12.8 Học từ dữ liệu (ML) và LLM
+
+Nguyên tắc: **không có mô hình nào nằm trên đường realtime nếu không tất định và rẻ.** QHĐ tất định;
+mô hình học chỉ cập nhật tham số (bảng số trong `rules.json`), LLM chỉ ở ngoài đường tính tuyến.
+
+**H1. Vòng dữ liệu cần có trước.** Hai nguồn phải nối được theo `task_id`:
+(a) nhật ký gợi ý (E1): ta đã dự đoán thứ tự nào, ETA nào;
+(b) kết quả thật: giờ check-in/checkout, thứ tự thực tế KTV đã đi — lấy từ OA/QOS (cần hỏi team data
+nguồn nào, định kỳ hay topic). Bảng join `route_outcome(run_code, task_id, eta_pred, checkin_actual,
+done_pred, done_actual, order_pred, order_actual)`. Không có (b) thì không học được gì.
+
+**H2. Học thời gian (đã từng làm bằng Python, 2026-09-13).** Thời gian xử lý: median theo KTV (≥ 10 lượt)
+→ theo loại → chung; thời gian di chuyển: bảng theo km × khung giờ. Kết quả trước: MAE thời gian làm
+59 → 37 phút. Làm lại dưới dạng job offline (Python/SQL, không cần vào core) xuất `time_model.json`
+có `version`; core đọc như một phần rules (thêm bảng tra `handle_minutes` theo KTV/loại). Job chạy tuần,
+chỉ phát hành khi backtest không tệ hơn bản đang chạy.
+
+**H3. Tinh chỉnh trọng số rule.** Trọng số tầng 3 (km, phút trễ, quay lại khu vực…) hiện là giả định.
+Offline: cho QHĐ chạy lại các ngày cũ với nhiều bộ trọng số (grid nhỏ hoặc Bayesian optimization),
+chấm bằng mô phỏng theo dữ liệu thật (số trễ, km), chọn bộ tốt nhất; ràng buộc: không bao giờ tăng số
+việc trễ để đổi lấy km (tầng 1 thắng). Gọi core qua CLI `ktv_core plan --rules x.json` (không cần binding).
+
+**H4. Học "KTV thực sự đi thế nào".** Backtest cũ: gần nhất đoán đúng việc kế tiếp 45%, QHĐ 37%. Có thể
+thêm một rule tầng 3 phản ánh thói quen (VD phạt đổi hướng/quay đầu) với trọng số học từ H1. Đây là thay
+objective → trình bày và duyệt trước.
+
+**H5. Chỗ LLM hợp lý (ngoài đường tính).**
+- *Giải thích tuyến cho KTV/điều phối*: đầu vào là response + chi phí từng rule (đã có trong QHĐ), LLM viết
+  1–2 câu tiếng Việt "đi A trước vì hẹn 10h, B cùng khu với C". Chạy bất đồng bộ hoặc khi người dùng bấm xem,
+  không chặn replan. Có mẫu câu cố định làm fallback.
+- *Phân loại phản hồi*: nếu app có ô "vì sao không đi theo gợi ý", LLM gắn nhãn lý do (khách đổi giờ, đường
+  cấm, kẹt xe, thiếu vật tư) → thành feature cho H3/H4.
+- *Trợ lý sổ câu hỏi dữ liệu*: đọc `data_issues` + mẫu payload, soạn nháp câu hỏi gửi team data kèm ví dụ.
+- Cần: bảng lưu prompt/response/model version cho mọi lần gọi (audit), che PII (tên, SĐT, địa chỉ) trước khi
+  gửi ra ngoài, hạn mức chi phí, và đánh giá thủ công một tập mẫu trước khi bật.
+
+**H6. Không làm.** Không để LLM chọn thứ tự tuyến trực tiếp: không tất định, khó kiểm chứng, chậm, và
+không đảm bảo ràng buộc cứng (hẹn, ca, nghỉ trưa) mà QHĐ đang bảo đảm.
+
+**H7. Phát hành mô hình/trọng số an toàn.** Mỗi bản `rules.json`/`time_model.json` có version; chạy
+**shadow** (tính song song bản mới, chỉ log, không gửi) vài ngày, so số trễ dự báo/km/ETA error với bản
+đang chạy; đạt thì bật cho 1 chi nhánh (theo `staff_location`), rồi toàn bộ. Rollback = trỏ lại version cũ.
+
+### 12.9 Độ tin cậy
+
+**I1. Replay.** Vì OUT/IN là Kafka có offset, có thể chạy lại một khoảng thời gian bằng group mới +
+`auto.offset.reset` hoặc reset offset tới timestamp — dùng khi sửa bug tính sai. Cần `run_code` tất định
+theo input để downstream nhận ra bản tính lại (đã có: `run_code = message_id`).
+
+**I2. DLQ.** Message gây 500 hiện được commit và bỏ qua. Ghi nguyên payload + lỗi vào topic
+`ktv-dlq` (hoặc file) để tra và phát lại sau khi sửa.
+
+**I3. Chống bão replan.** Mobix có thể gọi dồn (GPS cập nhật liên tục). Ngoài dedup: làm tròn `latlng`
+(~50 m) trong fingerprint để vị trí xê dịch nhỏ không tính lại; giới hạn 1 lần tính / KTV / 30 s
+(Redis `SET ktv:lock:{staff} NX EX 30`), lần gọi trong khoảng đó trả 202 và đánh dấu "tính lại sau".
+
+**I4. Thời gian.** Mọi mốc giờ đang là giờ VN không múi giờ. Server prod phải chạy UTC chuẩn
+(`vietnam_now` cộng 7 giờ từ `time()` — không phụ thuộc TZ máy, tốt); cần NTP để `server_time` và
+"giờ lập tuyến" không lệch.
+
+### 12.10 Bảo mật
+
+**J1.** Gateway: token thật (JWT của hệ thống Mobix/SSO, kiểm chữ ký + `staff_id` trong token khớp path),
+không dùng token tĩnh `--token` như hiện tại. **J2.** Kafka: mỗi môi trường một tài khoản, quyền tối thiểu
+(READ IN, WRITE OUT). **J3.** Redis: có mật khẩu (đã có `--redis-password`), không mở ra ngoài mạng nội bộ.
+**J4.** Log/DB: không lưu tọa độ và địa chỉ đầy đủ quá thời hạn cần (E3). **J5.** Image quét lỗ hổng trong
+CI (Trivy) trước khi deploy.
+
+### 12.11 Kiểm thử và phát hành
+
+**K1. Golden set từ dữ liệu thật.** Khi có message thật từ OA: lấy mẫu vài trăm message (ẩn danh), commit
+vào repo làm fixture; mỗi thay đổi core phải cho kết quả giống hệt, hoặc diff được giải thích. Thay cho
+benchmark giả không nằm trong git.
+
+**K2. Test tải.** Script đẩy N nghìn message vào Kafka local (đã có cách ở README) và đo thời gian tới hết
+lag, p95 `plan_ms`, CPU OSRM → biết cần bao nhiêu replica trước giờ batch 6h.
+
+**K3. Canary.** Deploy bản mới cho 1 replica worker (cùng group) → nhận ~1/3 partition; so `/metrics` với bản
+cũ vài giờ rồi mới thay hết.
+
+### 12.12 Tính năng sản phẩm (sau khi luồng chính ổn)
+
+- **Tuyến thay thế**: trả thêm 1–2 thứ tự khác gần tốt nhất (lấy từ các nhãn còn lại của QHĐ ở trạng thái
+  cuối, hoặc chạy lại với một rule tắt) để KTV chọn — nối vào Phase 8 reoptimize.
+- **Đường đi trên bản đồ**: gọi OSRM `/route` cho các chặng đã chọn, trả polyline (BUSINESS_RULES Q26);
+  chỉ gọi khi app cần hiển thị, không gọi trong `plan()`.
+- **Giải thích bằng số**: chi phí từng rule của tuyến chọn so với tuyến "gần nhất trước" — cho điều phối
+  thấy vì sao không đi điểm gần nhất.
+- **Cảnh báo quá tải**: KTV có tổng thời gian vượt ca → báo sớm cho OA để chia lại việc (routing chỉ báo,
+  không gán lại — đúng phạm vi team).
