@@ -38,6 +38,7 @@ cluster    cắt cụm theo chặng > 2 km + tóm tắt (tâm, bán kính, km v�
 | adapter/file | `include/ktv/adapter/file.hpp`, `src/adapter/file.cpp` | Vỏ truyền tải local: đọc object/JSONL, sinh envelope |
 | (CLI) | `src/cli/main.cpp` | `ktv_core`: `plan`, `validate`, `print-rules` |
 | (Gateway) | `src/gateway/main.cpp` | `ktv_gateway`: HTTP đọc + seed + Redis |
+| (Worker) | `src/kafka/main.cpp`, `kafka/config.*`, `kafka/consumer.*` | `ktv_worker`: đọc topic IN → `plan()` → ghi response (produce OUT làm sau). Config qua `.env` |
 
 ## Chạy
 
@@ -61,6 +62,14 @@ redis-cli --scan --pattern 'ktv:*' | head          # xem key
 redis-cli TTL ktv:route:00201964:2026-06-08        # ~604800 giây (7 ngày)
 ```
 
+Kafka worker cần `librdkafka` (`sudo apt install -y librdkafka-dev`; thiếu thì binary tự tắt).
+Cấu hình qua file `.env` — copy từ `.env.example` rồi điền; biến môi trường thật đè lên file.
+
+```bash
+cp .env.example .env
+core/build/ktv_worker --env .env --max 1     # đọc 1 message topic IN → in response ra stdout
+```
+
 Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 - chim bay: p95 dưới 1 ms, chậm nhất 122 ms (12 việc giải chính xác);
 - OSRM tự host: p50 3 ms, p95 10 ms, chậm nhất 54 ms. Tổng km đường bộ gấp 1,54 lần chim bay, và 982 lần gọi (19%) ra thứ tự khác so với chim bay.
@@ -80,7 +89,7 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 | ✅ 6.1 | gateway/store, gateway/seed | `RouteStore` + `MemoryRouteStore`, loader OUT JSONL |
 | ✅ 6.2 | gateway/server, gateway/main | `ktv_gateway`: `GET /worklist/{staff_id}`, `/healthz` |
 | ✅ 6.3 | gateway/redis_store | `RedisRouteStore` (hiredis optional), `--redis HOST:PORT` |
-| 7 | service | Kafka worker: đọc topic vào → xếp → ghi topic ra (chờ broker); gateway đổi feeder sang OUT |
+| 🟡 7 | service | Kafka worker: đọc IN ✅ (`ktv_worker`); produce OUT + gateway feeder = bước sau |
 | 8 | service | Reoptimize do KTV yêu cầu: chốt mode + owner snapshot/baseline rồi làm (sau Kafka) |
 | 9 | binding | pybind11 cho backtest/mô phỏng Python; khớp rồi xóa planner Python |
 

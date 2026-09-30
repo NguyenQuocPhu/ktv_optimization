@@ -41,6 +41,27 @@ endif()
 add_executable(ktv_gateway src/gateway/main.cpp)
 target_link_libraries(ktv_gateway gateway)
 
+# Kafka worker: đọc topic IN. Cần librdkafka (pkg-config rdkafka);
+# thiếu thì chỉ build phần config + test, binary ktv_worker tắt.
+if(PkgConfig_FOUND)
+  pkg_check_modules(RDKAFKA QUIET rdkafka)
+endif()
+
+add_library(kafka STATIC src/kafka/config.cpp)
+target_include_directories(kafka PUBLIC include)
+target_link_libraries(kafka PUBLIC Threads::Threads)
+if(RDKAFKA_FOUND)
+  target_sources(kafka PRIVATE src/kafka/consumer.cpp)
+  target_include_directories(kafka PRIVATE ${RDKAFKA_INCLUDE_DIRS})
+  target_link_libraries(kafka PUBLIC ${RDKAFKA_LIBRARIES})
+  target_compile_definitions(kafka PUBLIC KTV_WITH_KAFKA=1)
+  add_executable(ktv_worker src/kafka/main.cpp)
+  target_link_libraries(ktv_worker kafka ktv)
+  message(STATUS "kafka: ktv_worker BẬT (rdkafka ${RDKAFKA_VERSION})")
+else()
+  message(STATUS "kafka: ktv_worker TẮT (thiếu librdkafka; cài: apt install librdkafka-dev)")
+endif()
+
 enable_testing()
 foreach(name api dp plan travel normalization sla cluster adapter pipeline)
   add_executable(test_${name} tests/test_${name}.cpp)
@@ -59,6 +80,11 @@ foreach(name gateway_store gateway_seed gateway_server)
   target_link_libraries(test_${name} gateway)
   add_test(NAME ${name} COMMAND test_${name})
 endforeach()
+
+# Kafka config: parse/validate .env — không cần librdkafka nên luôn chạy.
+add_executable(test_kafka_config tests/test_kafka_config.cpp)
+target_link_libraries(test_kafka_config kafka)
+add_test(NAME kafka_config COMMAND test_kafka_config)
 
 # Redis store: chỉ build khi có hiredis; test tự skip nếu không kết nối được Redis.
 if(HIREDIS_FOUND)

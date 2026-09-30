@@ -570,6 +570,17 @@ core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/resp
 - Lúc này mới có envelope thật (header hay body) từ producer, nên chốt cả nguồn `message_id/planned_at/trigger`.
 - Gateway (Phase 6) chuyển feeder từ `--seed` sang consume OUT; HTTP/store giữ nguyên.
 
+**Kết quả bước 1 — đọc IN (2026-09-30):** `core/include/ktv/kafka/{config,consumer}.hpp`,
+`core/src/kafka/{config,consumer,main}.cpp`, `tests/test_kafka_config.cpp`; binary `ktv_worker`
+chỉ build khi có librdkafka (`KTV_WITH_KAFKA`, thiếu thì tắt nhưng ctest vẫn xanh). Config từ
+`.env` (biến môi trường thật đè file; xem `.env.example`): `SASL_PLAINTEXT` + `PLAIN` theo hướng
+dẫn SYS cho queue cluster. Consume IN → `parse_message`/`plan()` → response ra stdout/`--out`;
+`enable.auto.commit=false`, commit từng message sau khi ghi xong. Envelope đọc từ body
+(`local_envelope`); header được log ra stderr để soi khi có message thật từ Optimal Assign.
+`ctest` 16/16. Kiểm thử E2E trên Kafka local (compose): produce 1 message vào topic → worker
+trả response `200` đúng, chạy lại cùng group không đọc lại (offset đã commit). Còn lại: produce
+OUT + gateway chuyển feeder sang OUT.
+
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.
