@@ -63,9 +63,9 @@ redis-cli TTL ktv:route:00201964:2026-06-08        # ~604800 giây (7 ngày)
 ```
 
 Kafka worker cần `librdkafka`; thiếu thì binary tự tắt, phần còn lại vẫn build.
-**Lưu ý phiên bản**: `librdkafka` từ apt Ubuntu 22.04 là 1.8.0, không đăng nhập được SCRAM-SHA-512
-của queue dev cluster — phải build 2.x (công thức + cách trỏ `core` vào bản đó: xem mục "Kafka worker"
-trong README gốc).
+**Lưu ý phiên bản**: queue dev cluster dùng SASL PLAIN nên `librdkafka` 1.8.0 từ apt Ubuntu 22.04 là đủ.
+Chỉ khi phải nối cluster chỉ-SCRAM mới cần build 2.x (công thức + cách trỏ `core` vào bản đó: xem mục
+"Kafka worker" trong README gốc).
 Cấu hình qua file `.env` — copy từ `.env.example` rồi điền; biến môi trường thật đè lên file.
 
 ```bash

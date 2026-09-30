@@ -1,8 +1,8 @@
-"""Đọc thử message từ queue cluster của công ty (SASL_PLAINTEXT + PLAIN).
+"""Đọc thử message Kafka: queue cluster công ty (SASL_PLAINTEXT + PLAIN) hoặc Kafka local.
 
 Cấu hình: biến môi trường thật, thiếu thì đọc `.env` ở gốc repo
-(KAFKA_BOOTSTRAP_SERVERS, KAFKA_SASL_MECHANISM, KAFKA_SASL_USERNAME,
-KAFKA_SASL_PASSWORD, KAFKA_GROUP_ID, KAFKA_TOPIC_IN, KAFKA_AUTO_OFFSET_RESET)
+(KAFKA_BOOTSTRAP_SERVERS, KAFKA_USE_SASL, KAFKA_SECURITY_PROTOCOL, KAFKA_SASL_MECHANISM,
+KAFKA_SASL_USERNAME, KAFKA_SASL_PASSWORD, KAFKA_GROUP_ID, KAFKA_TOPIC_IN, KAFKA_AUTO_OFFSET_RESET)
 — cùng bộ biến với ktv_worker.
 
 Chạy:
@@ -38,7 +38,10 @@ def load_env_file(path: str) -> dict:
             text = text[7:].strip()
         key, _, value = text.partition("=")
         if key:
-            values[key.strip()] = value.strip().strip('"').strip("'")
+            value = value.strip()
+            if len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]:  # chỉ bóc quote có cặp
+                value = value[1:-1]
+            values[key.strip()] = value
     return values
 
 
@@ -60,19 +63,27 @@ def main() -> int:
         print(f"thiếu KAFKA_BOOTSTRAP_SERVERS / KAFKA_TOPIC_IN / KAFKA_GROUP_ID (env hoặc {args.env})", file=sys.stderr)
         return 2
 
-    consumer = Consumer(
-        {
-            "bootstrap.servers": setting("KAFKA_BOOTSTRAP_SERVERS", env),
-            "security.protocol": "SASL_PLAINTEXT",
-            "sasl.mechanisms": setting("KAFKA_SASL_MECHANISM", env, "PLAIN"),
-            "sasl.username": setting("KAFKA_SASL_USERNAME", env),
-            "sasl.password": setting("KAFKA_SASL_PASSWORD", env),
-            "group.id": group,
-            "auto.offset.reset": setting("KAFKA_AUTO_OFFSET_RESET", env, "earliest"),
-            "enable.auto.commit": False,
-            "error_cb": lambda error: print("Kafka error:", error, file=sys.stderr),
-        }
-    )
+    # Cùng quy tắc KAFKA_USE_SASL / KAFKA_SECURITY_PROTOCOL với core/src/kafka/config.cpp.
+    protocol = setting("KAFKA_SECURITY_PROTOCOL", env, "PLAINTEXT")
+    use_sasl = setting("KAFKA_USE_SASL", env).lower()
+    if use_sasl in ("true", "1", "yes"):
+        protocol = {"PLAINTEXT": "SASL_PLAINTEXT", "SSL": "SASL_SSL"}.get(protocol, protocol)
+    elif use_sasl in ("false", "0", "no") and protocol.startswith("SASL"):
+        print(f"KAFKA_USE_SASL=false nhưng KAFKA_SECURITY_PROTOCOL={protocol} đang bật SASL", file=sys.stderr)
+        return 2
+    config = {
+        "bootstrap.servers": setting("KAFKA_BOOTSTRAP_SERVERS", env),
+        "security.protocol": protocol,
+        "group.id": group,
+        "auto.offset.reset": setting("KAFKA_AUTO_OFFSET_RESET", env, "earliest"),
+        "enable.auto.commit": False,
+        "error_cb": lambda error: print("Kafka error:", error, file=sys.stderr),
+    }
+    if protocol.startswith("SASL"):
+        config["sasl.mechanisms"] = setting("KAFKA_SASL_MECHANISM", env, "PLAIN")
+        config["sasl.username"] = setting("KAFKA_SASL_USERNAME", env)
+        config["sasl.password"] = setting("KAFKA_SASL_PASSWORD", env)
+    consumer = Consumer(config)
     consumer.subscribe([topic])
     print(f"Đang chờ message từ {topic} (group {group}); Ctrl-C để dừng...")
 
