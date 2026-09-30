@@ -4,6 +4,8 @@
 //   ktv_core validate <input>
 //   ktv_core print-rules
 // Output mỗi record là một response OUT prototype (message_id, run_code, trigger, ..., data).
+// `plan` parse nới lỏng như worker (lệch hợp đồng mà vẫn xếp được → cảnh báo, đếm ở cuối);
+// `validate` parse strict: soát MỌI chỗ lệch hợp đồng của file.
 #include <algorithm>
 #include <ctime>
 #include <fstream>
@@ -75,16 +77,17 @@ int main(int argc, char** argv) {
     if (!out_path.empty()) file.open(out_path);
     std::ostream* out = command == "plan" && !out_path.empty() ? &file : nullptr;
 
-    std::map<std::string, int> status, sources, travels;
+    std::map<std::string, int> status, sources, travels, issues;
     std::vector<long long> times;
     long long shown = 0;
     for (size_t i = 0; i < records.size(); ++i) {
         const ktv::json& record = records[i];
         const ktv::Envelope envelope = ktv::local_envelope(record, "local-" + std::to_string(i + 1), server_now);
-        std::vector<ktv::Error> errors;
+        std::vector<ktv::Error> errors, warnings;
         ktv::Message message;
         if (record.is_discarded()) errors.push_back({"", "JSON hỏng"});
-        else message = ktv::parse_message(record, errors);
+        else message = ktv::parse_message(record, errors, command == "plan" ? &warnings : nullptr);
+        for (const ktv::Error& warning : warnings) ++issues[ktv::issue_key(warning)];
         message.message_id = envelope.message_id;      // để trace_id = message_id của envelope
         message.planned_at = envelope.planned_at;      // lập tuyến theo đúng planned_at của envelope
 
@@ -124,6 +127,13 @@ int main(int argc, char** argv) {
         for (auto& [name, n] : travels) std::cout << " " << name << " " << n;
         std::cout << "\ngenerated_in_ms: p50 " << times[times.size() / 2] << " · p95 " << times[times.size() * 95 / 100]
                   << " · max " << times.back() << "\n";
+    }
+    if (!issues.empty()) {  // Sổ câu hỏi cho team data: loại gặp nhiều nhất trước (mã: docs/DATA_QUESTIONS.md).
+        std::vector<std::pair<int, std::string>> ranked;
+        for (auto& [key, n] : issues) ranked.emplace_back(n, key);
+        std::sort(ranked.rbegin(), ranked.rend());
+        std::cerr << "cảnh báo dữ liệu (" << issues.size() << " loại, vẫn xếp tuyến):\n";
+        for (size_t k = 0; k < ranked.size() && k < 30; ++k) std::cerr << "  " << ranked[k].first << " × " << ranked[k].second << "\n";
     }
     return status.count("400") ? 1 : 0;
 }

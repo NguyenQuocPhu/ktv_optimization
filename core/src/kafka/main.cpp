@@ -1,20 +1,28 @@
 // ktv_worker — adapter Kafka của lõi: đọc topic IN → plan() → trả response.
 // Bước hiện tại: đọc IN, xếp tuyến, ghi response ra stdout (hoặc --out file, ghi nối).
-// Produce OUT + commit chỉ sau khi produce thành công: bước tiếp theo của Phase 7.
+// Produce OUT: tạm hoãn (xem IMPLEMENTATION_SPEC Phase 7).
 //
 //   ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"]
-//              [--out responses.jsonl] [--max N]
+//              [--out responses.jsonl] [--max N] [--health-port N]
 //
 // --max N: dừng sau N message (test nhanh); bỏ qua = chạy tới khi bị dừng (Ctrl-C / SIGTERM).
+// --health-port N: mở GET /healthz (liveness + bộ đếm) cho k8s/giám sát; bỏ qua = không mở.
 // Cấu hình KAFKA_* xem .env.example; biến môi trường thật đè giá trị trong file .env.
+#include <httplib.h>
+
+#include <atomic>
 #include <csignal>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ktv/adapter/file.hpp"
@@ -32,17 +40,80 @@ ktv::Minutes vietnam_now() { return static_cast<ktv::Minutes>(std::time(nullptr)
 int usage() {
     std::cerr << "cách dùng:\n"
                  "  ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"]\n"
-                 "             [--out responses.jsonl] [--max N]\n";
+                 "             [--out responses.jsonl] [--max N] [--health-port N]\n";
     return 2;
 }
 
-// Một message → response nghiệp vụ (400 nếu sai contract, còn lại theo plan()).
+// Số liệu cho /healthz. Vòng poll trả về mỗi ≤ 1 giây (kể cả khi broker mất), nên poll quá
+// kMaxPollGap giây nghĩa là worker bị treo (kẹt trong một message) → 503 để k8s restart.
+constexpr long long kMaxPollGap = 60;
+constexpr size_t kMaxIssueKeys = 200;  // Số loại cảnh báo dữ liệu giữ riêng; vượt thì dồn vào "(loại khác)".
+struct Health {
+    const long long started = std::time(nullptr);
+    std::atomic<long long> last_poll{std::time(nullptr)};
+    std::mutex mutex;  // khóa các field dưới
+    long long processed = 0;
+    std::map<std::string, long long> by_status;    // statuscode → số message
+    std::map<std::string, long long> data_issues;  // issue_key(cảnh báo) → số lần: sổ câu hỏi cho team data
+    std::string last_message_at;                   // giờ VN lúc xử lý message gần nhất
+};
+
+// Cộng cảnh báo vào sổ. Trả các khóa lần đầu gặp để log chi tiết đúng một lần.
+std::vector<std::string> record_issues(Health& health, const std::vector<ktv::Error>& warnings) {
+    std::vector<std::string> fresh;
+    std::lock_guard<std::mutex> lock(health.mutex);
+    for (const ktv::Error& warning : warnings) {
+        std::string key = ktv::issue_key(warning);
+        if (!health.data_issues.count(key) && health.data_issues.size() >= kMaxIssueKeys) key = "(loại khác)";
+        if (health.data_issues[key]++ == 0) fresh.push_back(key);
+    }
+    return fresh;
+}
+
+// HTTP /healthz chạy ở luồng riêng; hủy thì dừng + join (mọi đường thoát của main đều an toàn).
+struct HealthServer {
+    httplib::Server server;
+    std::thread thread;
+    ~HealthServer() {
+        server.stop();
+        if (thread.joinable()) thread.join();
+    }
+};
+
+std::unique_ptr<HealthServer> start_health(Health& health, int port) {
+    auto hs = std::make_unique<HealthServer>();
+    hs->server.Get("/healthz", [&health](const httplib::Request&, httplib::Response& response) {
+        const long long now = std::time(nullptr), gap = now - health.last_poll;
+        nlohmann::json body{{"ok", gap <= kMaxPollGap}, {"uptime_s", now - health.started}, {"seconds_since_poll", gap}};
+        {
+            std::lock_guard<std::mutex> lock(health.mutex);
+            body["processed"] = health.processed;
+            body["by_status"] = health.by_status;
+            body["last_message_at"] = health.last_message_at;
+            body["data_issues"] = health.data_issues;
+        }
+        response.status = gap <= kMaxPollGap ? 200 : 503;
+        response.set_content(body.dump(), "application/json");
+    });
+    // httplib mặc định bật SO_REUSEPORT: hai worker cùng cổng đều bind được, /healthz trả ngẫu nhiên
+    // của một trong hai. Chỉ giữ SO_REUSEADDR để trùng cổng là báo lỗi.
+    hs->server.set_socket_options([](socket_t sock) {
+        int yes = 1;
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
+    });
+    if (!hs->server.bind_to_port("0.0.0.0", port)) return nullptr;
+    hs->thread = std::thread([server = &hs->server] { server->listen_after_bind(); });
+    return hs;
+}
+
+// Một message → response nghiệp vụ. Parse nới lỏng: chỉ 400 khi không xếp được; lệch hợp đồng khác
+// → `warnings` (ghi log + /healthz, không đưa vào OUT).
 nlohmann::ordered_json respond(const ktv::json& value, const ktv::Envelope& envelope, const ktv::Rules& rules,
-                               ktv::Minutes now, const std::string& osrm_url) {
+                               ktv::Minutes now, const std::string& osrm_url, std::vector<ktv::Error>& warnings) {
     std::vector<ktv::Error> errors;
     ktv::Message message;
     if (value.is_discarded()) errors.push_back({"", "JSON hỏng"});
-    else message = ktv::parse_message(value, errors);
+    else message = ktv::parse_message(value, errors, &warnings);
     if (!errors.empty()) {
         std::string text = "Sai định dạng tham số:";
         for (size_t k = 0; k < errors.size() && k < 3; ++k) text += " " + errors[k].path + " " + errors[k].problem + ";";
@@ -58,6 +129,7 @@ nlohmann::ordered_json respond(const ktv::json& value, const ktv::Envelope& enve
 int main(int argc, char** argv) {
     std::string env_path = ".env", rules_path, out_path, osrm_url, at;
     long long max_messages = 0;
+    int health_port = 0;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--env" && i + 1 < argc) env_path = argv[++i];
@@ -66,6 +138,7 @@ int main(int argc, char** argv) {
         else if (arg == "--osrm" && i + 1 < argc) osrm_url = argv[++i];
         else if (arg == "--at" && i + 1 < argc) at = argv[++i];
         else if (arg == "--max" && i + 1 < argc) max_messages = std::atoll(argv[++i]);
+        else if (arg == "--health-port" && i + 1 < argc) health_port = std::atoi(argv[++i]);
         else return usage();
     }
 
@@ -97,7 +170,7 @@ int main(int argc, char** argv) {
     }
     std::cerr << "ktv_worker: " << ktv::describe(config) << "\n";
     if (!config.topic_out.empty())
-        std::cerr << "ktv_worker: KAFKA_TOPIC_OUT chưa được dùng ở bước này (produce OUT làm sau)\n";
+        std::cerr << "ktv_worker: KAFKA_TOPIC_OUT chưa được dùng ở bước này (produce OUT tạm hoãn)\n";
 
     // Ghi nối: chạy lại cùng file không xóa response của các message đã commit.
     std::ofstream file;
@@ -110,6 +183,17 @@ int main(int argc, char** argv) {
     }
     std::ostream* out = out_path.empty() ? &std::cout : &file;
 
+    Health health;
+    std::unique_ptr<HealthServer> health_server;
+    if (health_port > 0) {
+        health_server = start_health(health, health_port);
+        if (!health_server) {
+            std::cerr << "không mở được cổng health " << health_port << "\n";
+            return 2;
+        }
+        std::cerr << "ktv_worker: /healthz ở cổng " << health_port << "\n";
+    }
+
     std::signal(SIGINT, request_stop);
     std::signal(SIGTERM, request_stop);
 
@@ -119,6 +203,7 @@ int main(int argc, char** argv) {
         ktv::KafkaConsumer consumer(config);
         while (!g_stop && (max_messages == 0 || processed < max_messages)) {
             std::optional<ktv::KafkaConsumer::Record> record = consumer.poll(1000);
+            health.last_poll = std::time(nullptr);
             if (!record) continue;
             ++processed;
 
@@ -130,8 +215,9 @@ int main(int argc, char** argv) {
             const ktv::Envelope envelope = ktv::local_envelope(value, position, now);
 
             std::string line, status;
+            std::vector<ktv::Error> warnings;
             try {
-                nlohmann::ordered_json response = respond(value, envelope, rules, now, osrm_url);
+                nlohmann::ordered_json response = respond(value, envelope, rules, now, osrm_url, warnings);
                 status = response["statuscode"].get<std::string>();
                 line = ktv::wrap_response(envelope, response).dump();
             } catch (const std::exception& error) {
@@ -147,10 +233,19 @@ int main(int argc, char** argv) {
             out->flush();
             if (!*out) throw std::runtime_error("ghi response thất bại, không commit " + position);
             consumer.commit(*record);  // chỉ commit sau khi đã ghi xong response
+            {
+                std::lock_guard<std::mutex> lock(health.mutex);
+                ++health.processed;
+                ++health.by_status[status];
+                health.last_message_at = ktv::format_datetime(vietnam_now());
+            }
 
             std::cerr << "#" << processed << " " << position << " key=" << record->key << " status=" << status;
+            if (!warnings.empty()) std::cerr << " cảnh_báo=" << warnings.size();
             for (const auto& [name, value_text] : record->headers) std::cerr << " header." << name << "=" << value_text;
             std::cerr << "\n";
+            for (const std::string& key : record_issues(health, warnings))  // chỉ log loại mới; đếm xem /healthz
+                std::cerr << "  cảnh báo dữ liệu mới (" << envelope.message_id << "): " << key << "\n";
         }
     } catch (const std::exception& error) {
         std::cerr << error.what() << "\n";

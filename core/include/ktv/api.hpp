@@ -6,19 +6,27 @@
 //   kiểm tra từng field, trả về struct `Message` để các module sau dùng. Sai thì ghi lỗi.
 //   Giống "form nhập liệu": nhận giấy tờ, soát từng ô, ô nào sai thì khoanh đỏ.
 //
+//   Hai chế độ:
+//     strict   (không truyền warnings) – lệch hợp đồng ở đâu cũng là lỗi → 400. Dùng cho `validate`, test.
+//     nới lỏng (truyền warnings)      – chỉ lỗi khi KHÔNG xếp được tuyến (staff hỏng, JSON sai kiểu gốc).
+//              Lệch mà vẫn xếp được → cảnh báo có mã (field lạ, role lạ, lệch/ngoài danh mục...);
+//              một task hỏng → bỏ riêng task đó (TASK_DROPPED). Dùng cho worker/gateway/`plan`.
+//              Mã cảnh báo + câu hỏi cho team data: docs/DATA_QUESTIONS.md.
+//
 // Dùng thế nào:
-//   std::vector<Error> errors;
-//   Message m = parse_message(json::parse(line), errors);
-//   if (!errors.empty()) → trả 400;   else → m.staff, m.tasks dùng tiếp ở plan
+//   std::vector<Error> errors, warnings;
+//   Message m = parse_message(json::parse(line), errors, &warnings);   // bỏ &warnings = strict
+//   if (!errors.empty()) → trả 400;   else → m.staff, m.tasks dùng tiếp ở plan (warnings ghi log)
 //
 // Trong file này có:
 //   Minutes              – kiểu giờ: số phút kể từ 1970 (giờ VN). Mọi mốc giờ đổi về đây
 //   Point, Plot, CurrentTask, Staff, Task, Message
 //                        – ánh xạ 1-1 với JSON: Message = {staff, tasks}; Staff = khối "staff"...
-//   Error                – một lỗi dữ liệu: đường dẫn field + mô tả
+//   Error                – một lỗi / cảnh báo dữ liệu: đường dẫn field + mô tả (+ mã nếu là cảnh báo)
 //   OnTime, TaskKind     – một dòng bảng loại việc (sheet 05): SLA, ưu tiên, định mức thời gian
 //   task_kinds, find_kind – lấy bảng loại việc / tìm một loại theo (nhóm, tên)
-//   parse_message        – HÀM CHÍNH: JSON → Message (+ danh sách lỗi)
+//   kind_or_default      – như find_kind, nhưng loại ngoài danh mục thì trả loại mặc định
+//   parse_message        – HÀM CHÍNH: JSON → Message (+ danh sách lỗi, + cảnh báo nếu nới lỏng)
 //   parse_datetime, format_datetime – "2026-09-10 14:00:00" ↔ Minutes
 //
 // Ẩn trong api.cpp: bảng loại việc cụ thể, cách đọc tọa độ / khung giờ, đổi ngày ↔ số ngày.
@@ -94,8 +102,10 @@ struct Message {
 };
 
 // Một lỗi dữ liệu. VD {"tasks.bao_tri[0].latlng", "cần \"lat,lng\" trong Việt Nam"}.
+// Cảnh báo (chế độ nới lỏng) có thêm mã, VD {"tasks.bao_tri[0].staff_role", "cần 1, 2 hoặc 3", "STAFF_ROLE"}.
 struct Error {
     std::string path, problem;
+    std::string code{};  // Rỗng với lỗi; mã cảnh báo (docs/DATA_QUESTIONS.md) với cảnh báo.
 };
 
 // Cột "Yêu cầu đúng hẹn" của sheet 05: tính trễ theo giờ check-in hay theo ngày làm xong.
@@ -118,11 +128,18 @@ struct TaskKind {
 };
 const std::vector<TaskKind>& task_kinds();                                     // Cả bảng (12 loại).
 const TaskKind* find_kind(const std::string& group, const std::string& name);  // Không thấy → nullptr.
+// Loại ngoài danh mục (chỉ lọt qua ở chế độ nới lỏng) → loại mặc định: không hạn theo loại (hạn chỉ
+// theo hẹn + SLA của input), xử lý 60 phút. [GIẢ ĐỊNH, xem docs/DATA_QUESTIONS.md UNKNOWN_TASK_TYPE]
+const TaskKind& kind_or_default(const std::string& group, const std::string& name);
 
 inline constexpr const char* kGroups[] = {"trien_khai", "bao_tri", "thu_hoi", "hoa_don", "onsite"};  // 5 khóa của tasks.
 
-// HÀM CHÍNH. Đọc + kiểm tra theo file API; mọi lỗi ghi vào errors (rỗng = hợp lệ).
-Message parse_message(const json& data, std::vector<Error>& errors);
+// HÀM CHÍNH. Đọc + kiểm tra theo file API; lỗi ghi vào errors (rỗng = xếp được).
+// warnings = nullptr: strict. Có: nới lỏng, lệch hợp đồng mà vẫn xếp được thì ghi vào *warnings (có mã).
+Message parse_message(const json& data, std::vector<Error>& errors, std::vector<Error>* warnings = nullptr);
+
+// Khóa gom cảnh báo cùng loại để đếm (bỏ chỉ số mảng). VD "STAFF_ROLE tasks.bao_tri[].staff_role — cần 1, 2 hoặc 3 (đang là 0)".
+std::string issue_key(const Error& warning);
 
 std::optional<Minutes> parse_datetime(const std::string& text);  // "2026-09-10 14:00:00" → Minutes; sai dạng → không có.
 std::string format_datetime(Minutes value);                      // Minutes → "2026-09-10 14:00:00".

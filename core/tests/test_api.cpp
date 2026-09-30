@@ -3,6 +3,7 @@
 #include <set>
 
 #include "ktv/api.hpp"
+#include "ktv/plan.hpp"
 
 using ktv::json;
 
@@ -190,6 +191,117 @@ int main() {
         for (const auto& e : errors) std::cerr << "  lỗi không mong đợi: " << e.path << " " << e.problem << "\n";
         CHECK(errors.empty());
     }
+
+    // ---- Chế độ nới lỏng (worker / `plan`): mỗi mã trong docs/DATA_QUESTIONS.md. Strict vẫn lỗi như cũ.
+    std::vector<ktv::Error> errors, warnings;
+    auto lenient = [&](const json& data) {
+        errors.clear();
+        warnings.clear();
+        return ktv::parse_message(data, errors, &warnings);
+    };
+    auto strict_fails = [](const json& data) {
+        std::vector<ktv::Error> strict_errors;
+        ktv::parse_message(data, strict_errors);
+        return !strict_errors.empty();
+    };
+    auto warned = [&](const std::string& code, const std::string& path) {
+        for (const auto& w : warnings)
+            if (w.code == code && w.path == path) return true;
+        return false;
+    };
+    {  // Dữ liệu chuẩn: không cảnh báo.
+        auto m = lenient(sample());
+        CHECK(errors.empty() && warnings.empty() && m.tasks.size() == 2);
+    }
+    {  // Field lạ ở mọi cấp, nhóm lạ, nhóm thiếu → bỏ qua, vẫn xếp.
+        json data = sample();
+        data["oa_version"] = 2;
+        data["staff"]["team"] = "x";
+        data["tasks"]["trien_khai"][0]["priority_score"] = 0.5;
+        data["tasks"]["kiem_dinh"] = json::array();
+        data["tasks"].erase("onsite");
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2);
+        CHECK(warned("UNKNOWN_FIELD", ".oa_version") && warned("UNKNOWN_FIELD", "staff.team"));
+        CHECK(warned("UNKNOWN_FIELD", "tasks.trien_khai[0].priority_score") && warned("UNKNOWN_FIELD", "tasks.kiem_dinh"));
+        CHECK(warned("TASK_GROUPS", "tasks.onsite"));
+        CHECK(strict_fails(data));
+    }
+    {  // staff_role = 0 (staging thật có) → giữ task, giữ nguyên số 0.
+        json data = sample();
+        data["tasks"]["trien_khai"][0]["staff_role"] = 0;
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2 && m.tasks[0].staff_role == 0);
+        CHECK(warned("STAFF_ROLE", "tasks.trien_khai[0].staff_role"));
+        CHECK(strict_fails(data));
+    }
+    {  // Lệch danh mục → dùng giá trị input.
+        json data = sample();
+        data["tasks"]["trien_khai"][0]["task_type_id"] = 9;
+        data["tasks"]["trien_khai"][0]["sla"]["sla_minutes"] = 90;
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2 && m.tasks[0].sla_minutes == 90 && m.tasks[0].task_type_id == 9);
+        CHECK(warned("CATALOG_MISMATCH", "tasks.trien_khai[0].task_type_id") && warned("CATALOG_MISMATCH", "tasks.trien_khai[0].sla"));
+        CHECK(strict_fails(data));
+    }
+    {  // Loại ngoài danh mục → vẫn xếp bằng loại mặc định (60 phút, không hạn theo loại).
+        json data = sample();
+        data["tasks"]["hoa_don"][0]["task_type_name"] = "hoa_don_moi";
+        data["tasks"]["hoa_don"][0]["handle_minutes"] = 0;
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2);
+        CHECK(warned("UNKNOWN_TASK_TYPE", "tasks.hoa_don[0].task_type_name"));
+        CHECK(warnings.size() == 1 && ktv::issue_key(warnings[0]).find("hoa_don/hoa_don_moi") != std::string::npos);
+        CHECK(ktv::kind_or_default("hoa_don", "hoa_don_moi").handle_minutes == 60);
+        ktv::PlanResult r = ktv::plan(m, ktv::default_rules(), *ktv::parse_datetime("2026-09-10 09:00:00"));
+        CHECK(r.response["statuscode"] == "200" && r.response["data"]["metrics"]["tasks_total"] == 2);
+        CHECK(strict_fails(data));
+    }
+    {  // Một task hỏng → chỉ bỏ task đó; task trùng ID → bỏ bản sau; phần tử không phải object → bỏ.
+        json data = sample();
+        data["tasks"]["hoa_don"][0]["latlng"] = "abc";
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 1 && m.tasks[0].task_id == 5454541);
+        CHECK(warned("TASK_DROPPED", "tasks.hoa_don[0]") && warnings.back().problem.rfind("latlng: ", 0) == 0);
+
+        data = sample();
+        data["tasks"]["hoa_don"][0]["task_id"] = 5454541;
+        data["tasks"]["bao_tri"] = json::array({"x"});
+        m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 1);
+        CHECK(warned("TASK_DROPPED", "tasks.hoa_don[0]") && warned("TASK_DROPPED", "tasks.bao_tri[0]"));
+        CHECK(strict_fails(data));
+    }
+    {  // Phần phụ của staff hỏng → vẫn xếp: status lạ = không rõ, lô hỏng bỏ, current_task hỏng = không có.
+        json data = sample();
+        data["planned_at"] = "30/09/2026";
+        data["staff"]["status"] = 9;
+        data["staff"]["plots"] = json::array({{{"id", 2}, {"role", 5}, {"block_id", 1}}});
+        data["staff"]["current_task"] = "đang làm";
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2);
+        CHECK(!m.planned_at && m.staff.status == 0 && m.staff.plots.empty() && !m.staff.current_task);
+        CHECK(warned("PLANNED_AT", ".planned_at") && warned("STAFF_STATUS", "staff.status"));
+        CHECK(warned("STAFF_PLOTS", "staff.plots[0]") && warned("STAFF_PLOTS", "staff.plots") && warned("CURRENT_TASK", "staff.current_task"));
+        CHECK(strict_fails(data));
+    }
+    {  // Không xếp được tuyến → vẫn 400 ở cả chế độ nới lỏng.
+        json data = sample();
+        data["staff"]["latlng"] = "abc";
+        lenient(data);
+        CHECK(!errors.empty());
+        data = sample();
+        data["staff"]["available"] = "sáng";
+        lenient(data);
+        CHECK(!errors.empty());
+        data = sample();
+        data["staff"].erase("staff_id");
+        lenient(data);
+        CHECK(!errors.empty());
+        lenient(json::array());
+        CHECK(!errors.empty());
+    }
+    CHECK(ktv::issue_key({"tasks.bao_tri[12].x", "p", "C"}) == "C tasks.bao_tri[].x — p");
 
     CHECK(!ktv::parse_datetime("2026-02-29 08:00:00"));
     CHECK(ktv::parse_datetime("2028-02-29 08:00:00"));

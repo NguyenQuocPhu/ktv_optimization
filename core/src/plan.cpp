@@ -64,7 +64,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     std::vector<Point> points{staff.latlng};
     auto relative = [&](std::optional<Minutes> t) { return t ? static_cast<double>(*t - start) : kNone; };
     for (const Task* task : tasks) {
-        const TaskKind& kind = *find_kind(task->task_group_name, task->task_type_name);
+        const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);  // Ngoài danh mục: chỉ lọt qua khi nới lỏng.
         Deadlines d = resolve_deadlines(*task, kind, now);
         points.push_back(*task->latlng);
 
