@@ -153,6 +153,35 @@ PYTHONPATH=src:simulator .venv/bin/python -m ktv_simulator.events \
 
 `--replay` và nút ▶ Chạy trên web demo mô phỏng vận hành realtime. Mỗi nhịp, team data áp các sự kiện mới. Frontend lấy các KTV có job vừa thay đổi (tạo, check-in, checkout, đóng, hoặc lượt check-in trước bị kết thúc) và chỉ gửi routing request cho những KTV đó; KTV khác giữ tuyến cũ. GPS chỉ cập nhật vị trí cho lần xếp sau, không kích hoạt xếp lại.
 
+## Môi trường C++ / Redis / Kafka
+
+Ubuntu 22.04: cài toolchain C++ và hiredis bằng apt; Docker Engine cần quyền sudo.
+Sau khi Docker được cài và daemon đang chạy, bật Redis + Kafka local:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential cmake pkg-config libhiredis-dev librdkafka-dev redis-tools docker.io docker-compose-v2
+sudo systemctl enable --now docker
+
+sudo docker compose up -d redis kafka
+sudo docker compose ps
+redis-cli -h 127.0.0.1 ping
+sudo docker exec ktv-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+
+cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Release
+cmake --build core/build -j"$(nproc)"
+ctest --test-dir core/build --output-on-failure
+```
+
+`compose.yaml` chỉ bind cổng vào localhost và lưu dữ liệu ở Docker volumes. Dừng
+service bằng `sudo docker compose down`; dữ liệu vẫn được giữ. Muốn xóa cả dữ liệu thử
+nghiệm: `sudo docker compose down -v`. Có thể thêm user vào nhóm `docker` để bỏ
+`sudo`, nhưng cần đăng nhập lại cho nhóm có hiệu lực.
+
+Core hiện đã hỗ trợ Redis qua hiredis; Kafka worker (`ktv_worker`) đã đọc được topic IN
+(kafka/config, kafka/consumer — xem `core/README.md`), produce OUT là bước tiếp theo.
+Broker ở đây để test worker trước, chưa dùng cho ứng dụng.
+
 ## Tự host OSRM bằng Docker
 
 Dùng thuật toán CH (Contraction Hierarchies) vì nhanh nhất cho `/table`. Dữ liệu nằm trong `data/osrm/` (gitignore).
