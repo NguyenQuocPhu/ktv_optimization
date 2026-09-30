@@ -6,11 +6,14 @@
 //              [--out responses.jsonl] [--max N] [--health-port N]
 //
 // --max N: dừng sau N message (test nhanh); bỏ qua = chạy tới khi bị dừng (Ctrl-C / SIGTERM).
-// --health-port N: mở GET /healthz (liveness + bộ đếm) cho k8s/giám sát; bỏ qua = không mở.
+// --health-port N: mở GET /healthz (worker còn chạy + bộ đếm) và GET /readyz (nối được broker) cho
+//   k8s/giám sát; bỏ qua = không mở.
 // Cấu hình KAFKA_* xem .env.example; biến môi trường thật đè giá trị trong file .env.
 #include <httplib.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <csignal>
 #include <cstdlib>
 #include <ctime>
@@ -44,13 +47,28 @@ int usage() {
     return 2;
 }
 
-// Số liệu cho /healthz. Vòng poll trả về mỗi ≤ 1 giây (kể cả khi broker mất), nên poll quá
-// kMaxPollGap giây nghĩa là worker bị treo (kẹt trong một message) → 503 để k8s restart.
+// Số nguyên trong [low, high], cả chuỗi phải là chữ số. Sai → không có.
+std::optional<long long> whole(const std::string& text, long long low, long long high) {
+    if (text.empty() || text.size() > 12 || !std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c); }))
+        return std::nullopt;
+    const long long value = std::stoll(text);
+    if (value < low || value > high) return std::nullopt;
+    return value;
+}
+
+// Số liệu cho /healthz và /readyz.
+// /healthz (sống): vòng poll trả về mỗi ≤ 1 giây kể cả khi broker mất, nên poll quá kMaxPollGap giây
+//   nghĩa là worker bị treo (kẹt trong một message) → 503 để k8s restart.
+// /readyz (sẵn sàng): broker có trả lời trong kMaxBrokerGap giây gần đây không. Broker mất thì restart
+//   worker không giúp gì → tách riêng, không làm /healthz đỏ.
 constexpr long long kMaxPollGap = 60;
+constexpr long long kMaxBrokerGap = 60;
+constexpr long long kBrokerCheckEvery = 15;  // giây giữa hai lần hỏi metadata broker
 constexpr size_t kMaxIssueKeys = 200;  // Số loại cảnh báo dữ liệu giữ riêng; vượt thì dồn vào "(loại khác)".
 struct Health {
     const long long started = std::time(nullptr);
     std::atomic<long long> last_poll{std::time(nullptr)};
+    std::atomic<long long> last_broker_ok{0};  // 0 = chưa lần nào nối được broker
     std::mutex mutex;  // khóa các field dưới
     long long processed = 0;
     std::map<std::string, long long> by_status;    // statuscode → số message
@@ -82,9 +100,17 @@ struct HealthServer {
 
 std::unique_ptr<HealthServer> start_health(Health& health, int port) {
     auto hs = std::make_unique<HealthServer>();
+    hs->server.Get("/readyz", [&health](const httplib::Request&, httplib::Response& response) {
+        const long long last = health.last_broker_ok;
+        const bool ready = last > 0 && std::time(nullptr) - last <= kMaxBrokerGap;
+        response.status = ready ? 200 : 503;
+        response.set_content(nlohmann::json{{"ready", ready}}.dump(), "application/json");
+    });
     hs->server.Get("/healthz", [&health](const httplib::Request&, httplib::Response& response) {
-        const long long now = std::time(nullptr), gap = now - health.last_poll;
-        nlohmann::json body{{"ok", gap <= kMaxPollGap}, {"uptime_s", now - health.started}, {"seconds_since_poll", gap}};
+        const long long now = std::time(nullptr), gap = now - health.last_poll, broker = health.last_broker_ok;
+        nlohmann::json body{{"ok", gap <= kMaxPollGap}, {"uptime_s", now - health.started}, {"seconds_since_poll", gap},
+                            {"kafka_reachable", broker > 0 && now - broker <= kMaxBrokerGap},
+                            {"seconds_since_broker_ok", broker > 0 ? nlohmann::json(now - broker) : nlohmann::json(nullptr)}};
         {
             std::lock_guard<std::mutex> lock(health.mutex);
             body["processed"] = health.processed;
@@ -103,6 +129,9 @@ std::unique_ptr<HealthServer> start_health(Health& health, int port) {
     });
     if (!hs->server.bind_to_port("0.0.0.0", port)) return nullptr;
     hs->thread = std::thread([server = &hs->server] { server->listen_after_bind(); });
+    // Chờ server chạy hẳn: stop() của httplib chỉ tác dụng khi server đã chạy. Thiếu dòng này, worker thoát
+    // ngay (VD cấu hình Kafka sai) thì ~HealthServer gọi stop() quá sớm và join() chờ mãi → tiến trình treo.
+    hs->server.wait_until_ready();
     return hs;
 }
 
@@ -127,7 +156,7 @@ nlohmann::ordered_json respond(const ktv::json& value, const ktv::Envelope& enve
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string env_path = ".env", rules_path, out_path, osrm_url, at;
+    std::string env_path = ".env", rules_path, out_path, osrm_url, at, max_text, port_text;
     long long max_messages = 0;
     int health_port = 0;
     for (int i = 1; i < argc; ++i) {
@@ -137,9 +166,26 @@ int main(int argc, char** argv) {
         else if (arg == "--out" && i + 1 < argc) out_path = argv[++i];
         else if (arg == "--osrm" && i + 1 < argc) osrm_url = argv[++i];
         else if (arg == "--at" && i + 1 < argc) at = argv[++i];
-        else if (arg == "--max" && i + 1 < argc) max_messages = std::atoll(argv[++i]);
-        else if (arg == "--health-port" && i + 1 < argc) health_port = std::atoi(argv[++i]);
+        else if (arg == "--max" && i + 1 < argc) max_text = argv[++i];
+        else if (arg == "--health-port" && i + 1 < argc) port_text = argv[++i];
         else return usage();
+    }
+    // Gõ nhầm (VD "8O81") không được âm thầm thành 0 = tắt health / chạy vô hạn.
+    if (!max_text.empty()) {
+        const auto value = whole(max_text, 1, 1'000'000'000);
+        if (!value) {
+            std::cerr << "--max cần số nguyên dương: " << max_text << "\n";
+            return 2;
+        }
+        max_messages = *value;
+    }
+    if (!port_text.empty()) {
+        const auto value = whole(port_text, 1, 65535);
+        if (!value) {
+            std::cerr << "--health-port cần cổng 1–65535: " << port_text << "\n";
+            return 2;
+        }
+        health_port = static_cast<int>(*value);
     }
 
     ktv::Rules rules;
@@ -201,10 +247,17 @@ int main(int argc, char** argv) {
     std::cerr << "ktv_worker: đang chờ message từ " << config.topic_in << " (Ctrl-C để dừng)\n";
     try {
         ktv::KafkaConsumer consumer(config);
+        long long last_check = 0;
         while (!g_stop && (max_messages == 0 || processed < max_messages)) {
+            const long long tick = std::time(nullptr);
+            if (health_server && tick - last_check >= kBrokerCheckEvery) {  // chỉ cần khi có /readyz
+                last_check = tick;
+                if (consumer.reachable(2000)) health.last_broker_ok = std::time(nullptr);
+            }
             std::optional<ktv::KafkaConsumer::Record> record = consumer.poll(1000);
             health.last_poll = std::time(nullptr);
             if (!record) continue;
+            health.last_broker_ok = health.last_poll.load();  // nhận được message = broker đang nối
             ++processed;
 
             const ktv::Minutes now = fixed_now.value_or(vietnam_now());
@@ -232,7 +285,9 @@ int main(int argc, char** argv) {
             *out << line << "\n";
             out->flush();
             if (!*out) throw std::runtime_error("ghi response thất bại, không commit " + position);
-            consumer.commit(*record);  // chỉ commit sau khi đã ghi xong response
+            // Chỉ commit sau khi đã ghi xong response. false = đang rebalance (đã log): message sẽ được giao
+            // lại cho consumer nhận partition, response có thể ghi hai lần — đúng at-least-once, không dừng worker.
+            consumer.commit(*record);
             {
                 std::lock_guard<std::mutex> lock(health.mutex);
                 ++health.processed;

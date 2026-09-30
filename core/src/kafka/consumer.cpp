@@ -95,13 +95,30 @@ std::optional<KafkaConsumer::Record> KafkaConsumer::poll(int timeout_ms) {
     return record;
 }
 
-void KafkaConsumer::commit(const Record& record) {
+bool KafkaConsumer::commit(const Record& record) {
     rd_kafka_topic_partition_list_t* offsets = rd_kafka_topic_partition_list_new(1);
     rd_kafka_topic_partition_t* item = rd_kafka_topic_partition_list_add(offsets, record.topic.c_str(), record.partition);
     item->offset = record.offset + 1;
     const rd_kafka_resp_err_t code = rd_kafka_commit(handle_, offsets, 0 /* đồng bộ */);
     rd_kafka_topic_partition_list_destroy(offsets);
-    if (code != RD_KAFKA_RESP_ERR_NO_ERROR) fail("commit: " + std::string(rd_kafka_err2str(code)));
+    if (code == RD_KAFKA_RESP_ERR_NO_ERROR) return true;
+    // Đang chia lại partition (thêm/bớt replica, restart): offset này không còn thuộc mình hoặc generation
+    // đã cũ. Bỏ qua; consumer mới nhận partition sẽ đọc lại message (at-least-once) — không phải lỗi worker.
+    if (code == RD_KAFKA_RESP_ERR_REBALANCE_IN_PROGRESS || code == RD_KAFKA_RESP_ERR_ILLEGAL_GENERATION ||
+        code == RD_KAFKA_RESP_ERR_UNKNOWN_MEMBER_ID || code == RD_KAFKA_RESP_ERR__ASSIGNMENT_LOST ||
+        code == RD_KAFKA_RESP_ERR__STATE) {
+        std::cerr << "kafka: bỏ commit " << record.topic << "[" << record.partition << "]@" << record.offset
+                  << " do đang chia lại partition (" << rd_kafka_err2str(code) << "), message sẽ được giao lại\n";
+        return false;
+    }
+    fail("commit: " + std::string(rd_kafka_err2str(code)));
+}
+
+bool KafkaConsumer::reachable(int timeout_ms) {
+    const struct rd_kafka_metadata* metadata = nullptr;  // "struct": trùng tên với hàm rd_kafka_metadata.  // all_topics=0: chỉ hỏi broker + topic đã biết, nhẹ.
+    const rd_kafka_resp_err_t code = rd_kafka_metadata(handle_, 0, nullptr, &metadata, timeout_ms);
+    if (metadata != nullptr) rd_kafka_metadata_destroy(metadata);
+    return code == RD_KAFKA_RESP_ERR_NO_ERROR;
 }
 
 }  // namespace ktv

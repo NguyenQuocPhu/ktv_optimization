@@ -162,7 +162,11 @@ Hành vi:
 - Mất mạng/broker → librdkafka tự nối lại; chỉ dừng khi sai auth/quyền/topic hoặc lỗi fatal.
 - Ctrl-C / SIGTERM → xong message đang xử lý, đóng consumer (rời group ngay) rồi thoát.
 - Parse nới lỏng: lệch hợp đồng mà vẫn xếp được → cảnh báo; loại cảnh báo mới được log một lần kèm `message_id` (`cảnh báo dữ liệu mới (...)`), đếm trong `/healthz`.
-- `--health-port N` → `GET /healthz`: `200` khi vòng poll còn chạy (≤ 60 giây), `503` khi bị treo; body có `processed`, `by_status`, `last_message_at`, `uptime_s`, `data_issues` (loại cảnh báo → số lần). Consumer lag xem bằng công cụ của Kafka (`kafka-consumer-groups.sh --describe`).
+- `--health-port N` (1–65535, sai là thoát) mở hai địa chỉ:
+  - `GET /healthz` (worker còn sống, dùng cho liveness): `200` khi vòng poll còn chạy (≤ 60 giây), `503` khi bị treo; body có `processed`, `by_status`, `last_message_at`, `uptime_s`, `kafka_reachable`, `data_issues` (loại cảnh báo → số lần).
+  - `GET /readyz` (nối được broker, dùng cho readiness/cảnh báo): `200` khi broker trả lời trong 60 giây gần đây (kiểm mỗi 15 giây), `503` khi chưa nối được hoặc mất broker. Mất broker thì restart worker không giúp gì, nên không đưa vào `/healthz`.
+  - Consumer lag xem bằng công cụ của Kafka (`kafka-consumer-groups.sh --describe`).
+- Kafka đang chia lại partition (thêm/bớt replica) lúc commit → log rồi chạy tiếp; message được giao lại cho consumer mới (có thể ghi response hai lần — đúng at-least-once).
 
 Test với Kafka local (không SASL):
 
