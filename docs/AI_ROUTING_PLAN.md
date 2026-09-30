@@ -73,7 +73,7 @@ Cách làm giống Uber DeepETA: **giữ bộ tính đường vật lý, dùng M
 - **Thời gian di chuyển** = OSRM (hoặc đường chim bay) + phần sai lệch do mô hình học. Phần sai lệch học theo: km, giờ rời đi, khu vực, KTV. Nó đã gồm cả thời gian gửi xe, chờ khách, tắc đường.
 - **Thời gian xử lý** (`handle_minutes` khi input bỏ trống): học theo loại tác vụ × KTV × giờ trong ngày × số lần tới lại.
 - **Khoảng dao động:** học theo quantile (ví dụ P50 và P80), không chỉ một con số. Việc là AT_RISK khi giờ check-in ở mức P80 vượt hạn. Cách này thay ngưỡng cứng "đệm dưới 20 phút" bằng mức rủi ro đo được.
-- **Mô hình:** bắt đầu bằng gradient boosting. Bảng median hiện có (`research/time_model.py`) là mốc so sánh. Chỉ dùng deep learning khi dữ liệu và kết quả cho thấy đáng làm.
+- **Mô hình:** bắt đầu bằng gradient boosting. Bảng median hiện có (`research/time_model.py`, đã xóa 2026-09-30 — còn trong tag `python-legacy-2026-09-30`) là mốc so sánh. Chỉ dùng deep learning khi dữ liệu và kết quả cho thấy đáng làm.
 - **Đo:** MAE và độ lệch trung bình của ETA theo từng bước trong tuyến, và tỷ lệ AT_RISK dự báo so với trễ thật.
 
 ## 6. Thành phần C: tự cải thiện

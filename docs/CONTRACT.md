@@ -1,6 +1,6 @@
 # Hợp đồng dữ liệu — KTV Routing
 
-Tài liệu này dùng để thống nhất dữ liệu với frontend và team data. Định nghĩa chuẩn nằm ở `src/ktv_routing/contract.py`. Ví dụ bên dưới được tạo bằng cách chạy code thật.
+Tài liệu này dùng để thống nhất dữ liệu với frontend và team data. Định nghĩa chuẩn nằm ở `core/include/ktv/api.hpp` + `core/src/api.cpp`. Ví dụ bên dưới được tạo bằng cách chạy code thật.
 
 ## 1. Luồng
 

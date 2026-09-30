@@ -83,7 +83,7 @@ std::optional<std::vector<std::pair<int, int>>> parse_available(const std::strin
     return windows;
 }
 
-// Đọc từng field, ghi lỗi theo đường dẫn giống bản Python (simulator/ktv_simulator/fake_worklist.py).
+// Đọc từng field, ghi lỗi theo đường dẫn (thống nhất với bản Python legacy — tag python-legacy-2026-09-30).
 struct Reader {
     std::vector<Error>& errors;
 

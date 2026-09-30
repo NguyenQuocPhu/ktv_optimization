@@ -1,5 +1,6 @@
 #include "ktv/kafka/config.hpp"
 
+#include <cctype>
 #include <fstream>
 #include <stdexcept>
 
@@ -15,6 +16,11 @@ std::string trimmed(const std::string& text) {
     if (start == std::string::npos) return "";
     const size_t end = text.find_last_not_of(" \t");
     return text.substr(start, end - start + 1);
+}
+
+std::string lower(std::string text) {
+    for (char& ch : text) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return text;
 }
 
 std::string get(const std::map<std::string, std::string>& env, const char* key, const std::string& fallback = "") {
@@ -72,6 +78,20 @@ KafkaConfig kafka_config_from_env(const std::map<std::string, std::string>& env)
     config.auto_offset_reset = get(env, "KAFKA_AUTO_OFFSET_RESET", "earliest");
 
     if (config.bootstrap_servers.empty()) fail("thiếu KAFKA_BOOTSTRAP_SERVERS");
+
+    // KAFKA_USE_SASL (tuỳ chọn, theo quy ước công ty): true = bật SASL theo transport đang chọn;
+    // false = xác nhận chạy không SASL. Bỏ trống = dùng nguyên KAFKA_SECURITY_PROTOCOL.
+    const std::string use_sasl = lower(get(env, "KAFKA_USE_SASL"));
+    if (!use_sasl.empty()) {
+        const bool on = use_sasl == "true" || use_sasl == "1" || use_sasl == "yes";
+        const bool off = use_sasl == "false" || use_sasl == "0" || use_sasl == "no";
+        if (!on && !off) fail("KAFKA_USE_SASL chỉ nhận true/false (hoặc 1/0, yes/no): " + use_sasl);
+        if (on && config.security_protocol == "PLAINTEXT") config.security_protocol = "SASL_PLAINTEXT";
+        else if (on && config.security_protocol == "SSL") config.security_protocol = "SASL_SSL";
+        else if (off && config.security_protocol.rfind("SASL", 0) == 0)
+            fail("KAFKA_USE_SASL=false nhưng KAFKA_SECURITY_PROTOCOL=" + config.security_protocol + " đang bật SASL");
+    }
+
     if (config.security_protocol != "PLAINTEXT" && config.security_protocol != "SSL" &&
         config.security_protocol != "SASL_PLAINTEXT" && config.security_protocol != "SASL_SSL")
         fail("KAFKA_SECURITY_PROTOCOL không hợp lệ: " + config.security_protocol);

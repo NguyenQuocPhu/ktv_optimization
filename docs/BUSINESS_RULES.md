@@ -11,7 +11,7 @@ Bản nháp ngày 2026-09-14. File này gom **mọi quy tắc có dính tới ng
 
 Câu hỏi cần trả lời được đánh mã **Q1, Q2...** và gom ở [mục 11](#11-câu-hỏi-cần-xác-nhận).
 
-Code tương ứng: rule chọn thứ tự ở `src/ktv_routing/rules.py`, thuật toán ở `src/ktv_routing/planner.py`, xử lý dữ liệu nguồn (phần team data sẽ làm thật) ở `simulator/ktv_simulator/`.
+Code tương ứng: rule chọn thứ tự ở `core/src/rules.cpp`, thuật toán ở `core/src/dp.cpp` và `core/src/plan.cpp`; xử lý dữ liệu nguồn (phần team data sẽ làm thật) mô tả ở mục 5.
 
 ---
 
@@ -251,7 +251,7 @@ Hệ quả cần xác nhận:
 - Để trễ **một** job ưu tiên 1 (4 điểm) tệ hơn để trễ **ba** job ưu tiên 4 (3 điểm).
 - **Không có số km nào đổi được một lần trễ hẹn**: tầng 1 luôn thắng tầng 3.
 
-Xem và sửa không cần code: `python -m ktv_routing --print-rules > rules.json`, sửa file, chạy lại với `--rules rules.json`. Web demo hiển thị bảng rule đang dùng.
+Xem và sửa không cần code: `core/build/ktv_core print-rules > rules.json`, sửa file, chạy lại với `--rules rules.json`.
 
 ### 8.3 Rule cứng và rule tính giờ
 - **Giữ thứ tự tuyến cũ** (mục 8.4).
@@ -312,7 +312,7 @@ Sheet "5. Đầu ra AI" **[TÀI LIỆU]** và trạng thái:
 
 ## 10. Kết quả kiểm chứng
 
-Ngày 2026-09-14, dữ liệu 16–30/06 cả nước, chạy bằng `research/backtest_routing.py`.
+Ngày 2026-09-14, dữ liệu 16–30/06 cả nước, chạy bằng backtest Python (đã xóa 2026-09-30; bản gốc trong tag `python-legacy-2026-09-30`).
 
 **Cách thử:**
 - Tọa độ job là tọa độ check-in thật.

@@ -88,6 +88,30 @@ int main() {
     plain["KAFKA_SECURITY_PROTOCOL"] = "PLAINTEXT";
     CHECK(ktv::rdkafka_properties(ktv::kafka_config_from_env(plain)).count("sasl.mechanism") == 0);
 
+    // KAFKA_USE_SASL: true tự bật SASL theo transport; false mâu thuẫn với SASL thì từ chối.
+    auto sasl_on = base_env();
+    sasl_on["KAFKA_SECURITY_PROTOCOL"] = "PLAINTEXT";
+    sasl_on["KAFKA_USE_SASL"] = "true";
+    const ktv::KafkaConfig upgraded = ktv::kafka_config_from_env(sasl_on);
+    CHECK(upgraded.security_protocol == "SASL_PLAINTEXT");
+    CHECK(ktv::rdkafka_properties(upgraded).count("sasl.mechanism") == 1);
+
+    sasl_on["KAFKA_SECURITY_PROTOCOL"] = "SSL";
+    CHECK(ktv::kafka_config_from_env(sasl_on).security_protocol == "SASL_SSL");
+
+    auto sasl_off = base_env();  // SASL_PLAINTEXT mà KAFKA_USE_SASL=false: mâu thuẫn.
+    sasl_off["KAFKA_USE_SASL"] = "false";
+    CHECK(rejects(sasl_off));
+
+    auto sasl_weird = base_env();
+    sasl_weird["KAFKA_USE_SASL"] = "maybe";
+    CHECK(rejects(sasl_weird));
+
+    auto sasl_local = base_env();  // false + PLAINTEXT: hợp lệ, bỏ cấu hình SASL còn sót.
+    sasl_local["KAFKA_SECURITY_PROTOCOL"] = "PLAINTEXT";
+    sasl_local["KAFKA_USE_SASL"] = "false";
+    CHECK(ktv::rdkafka_properties(ktv::kafka_config_from_env(sasl_local)).count("sasl.mechanism") == 0);
+
     // 4. Thiếu/sai phải bị từ chối.
     auto env = base_env();
     env.erase("KAFKA_BOOTSTRAP_SERVERS");

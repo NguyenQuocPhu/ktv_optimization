@@ -44,7 +44,7 @@ cluster    cắt cụm theo chặng > 2 km + tóm tắt (tâm, bán kính, km v�
 
 ```bash
 cmake -S core -B core/build && cmake --build core/build -j
-(cd core/build && ctest --output-on-failure)            # api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants
+(cd core/build && ctest --output-on-failure)            # 16 test: api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants, gateway_*, kafka_config
 
 core/build/ktv_core plan artifacts/fake/messages.jsonl --osrm http://127.0.0.1:5000 --out artifacts/fake/responses.jsonl
 # bỏ --osrm để dùng chim bay (không cần OSRM)
@@ -62,12 +62,23 @@ redis-cli --scan --pattern 'ktv:*' | head          # xem key
 redis-cli TTL ktv:route:00201964:2026-06-08        # ~604800 giây (7 ngày)
 ```
 
-Kafka worker cần `librdkafka` (`sudo apt install -y librdkafka-dev`; thiếu thì binary tự tắt).
+Kafka worker cần `librdkafka`; thiếu thì binary tự tắt, phần còn lại vẫn build.
+**Lưu ý phiên bản**: `librdkafka` từ apt Ubuntu 22.04 là 1.8.0, không đăng nhập được SCRAM-SHA-512
+của queue dev cluster — phải build 2.x (công thức + cách trỏ `core` vào bản đó: xem mục "Kafka worker"
+trong README gốc).
 Cấu hình qua file `.env` — copy từ `.env.example` rồi điền; biến môi trường thật đè lên file.
 
 ```bash
 cp .env.example .env
 core/build/ktv_worker --env .env --max 1     # đọc 1 message topic IN → in response ra stdout
+```
+
+Kafka local (docker compose, không SASL) để test nhanh đường đọc:
+
+```bash
+KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9092 KAFKA_USE_SASL=false KAFKA_SECURITY_PROTOCOL=PLAINTEXT \
+KAFKA_GROUP_ID=ktv-local-g1 KAFKA_TOPIC_IN=<topic> \
+core/build/ktv_worker --env .env --max 1 --at "2026-09-10 09:00:00"
 ```
 
 Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
@@ -91,6 +102,6 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 | ✅ 6.3 | gateway/redis_store | `RedisRouteStore` (hiredis optional), `--redis HOST:PORT` |
 | 🟡 7 | service | Kafka worker: đọc IN ✅ (`ktv_worker`); produce OUT + gateway feeder = bước sau |
 | 8 | service | Reoptimize do KTV yêu cầu: chốt mode + owner snapshot/baseline rồi làm (sau Kafka) |
-| 9 | binding | pybind11 cho backtest/mô phỏng Python; khớp rồi xóa planner Python |
+| 9 | binding | (đã bỏ) Python legacy xóa 2026-09-30 (tag `python-legacy-2026-09-30`); chỉ làm pybind11 nếu cần chạy lại backtest/mô phỏng |
 
 Giả định đang dùng (chờ xác nhận): nghỉ trưa bắt buộc, phải bắt đầu trong 11:30–12:45, nghỉ 45 phút (`lunch_break`, `lunch_break_minutes` trong rules); việc đang làm còn 30 phút nữa xong; việc "trong ngày tạo phiếu" không hẹn tính hạn là hết hôm nay (API chưa có ngày tạo phiếu); định mức thời gian xử lý theo loại ở `src/api.cpp`.
