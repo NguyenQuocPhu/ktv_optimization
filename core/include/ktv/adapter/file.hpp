@@ -26,7 +26,8 @@ namespace ktv {
 // không được thì coi là JSONL, mỗi dòng một record (dòng JSON hỏng giữ dạng discarded).
 std::vector<json> read_records(std::istream& in);
 
-// Suy envelope từ record; index dùng để sinh message_id khi thiếu; default_planned_at khi không có planned_at.
-Envelope local_envelope(const json& record, long long index, Minutes default_planned_at);
+// Suy envelope từ record. Thiếu message_id → fallback_id (CLI: "local-<n>"; Kafka: "topic-partition-offset"
+// để không trùng giữa các lần chạy/replica). Thiếu planned_at → default_planned_at.
+Envelope local_envelope(const json& record, const std::string& fallback_id, Minutes default_planned_at);
 
 }  // namespace ktv

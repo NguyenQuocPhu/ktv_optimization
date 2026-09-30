@@ -1,14 +1,25 @@
 // ============================================================================
 // kafka/consumer — ĐỌC MESSAGE TỪ TOPIC IN (librdkafka)
 // ============================================================================
-// Chỉ build khi có librdkafka (pkg-config rdkafka). Thiếu thư viện thì ktv_worker
-// tắt, phần còn lại vẫn build bình thường (KTV_WITH_KAFKA).
+// Hiểu nhanh:
+//   "Hòm thư" của worker. Đăng ký topic IN rồi mỗi lần poll() lấy ra MỘT message
+//   (payload + key + header + vị trí partition/offset). Xử lý xong mới commit() để
+//   Kafka ghi nhận "đã đọc tới đây"; chưa commit mà tắt thì lần sau đọc lại (at-least-once).
+//   Mất mạng/broker chập chờn: poll() chỉ log rồi trả rỗng, librdkafka tự nối lại.
+//   Sai quyền/sai topic/lỗi nặng: poll() ném lỗi để worker dừng và báo.
 //
 // Dùng thế nào:
 //   KafkaConsumer consumer(config);
-//   while (true)
+//   while (!stop)
 //     if (auto record = consumer.poll(1000)) { ...xử lý...; consumer.commit(*record); }
 //
+// Trong file này có:
+//   KafkaConsumer::Record – một message đọc được
+//   poll, commit          – lấy một message / xác nhận đã xử lý xong
+//
+// Ẩn trong consumer.cpp: dựng cấu hình librdkafka, log lỗi, phân loại lỗi tạm thời / lỗi nặng.
+// Chỉ build khi có librdkafka (pkg-config rdkafka). Thiếu thư viện thì ktv_worker
+// tắt, phần còn lại vẫn build bình thường (KTV_WITH_KAFKA).
 // Phụ thuộc: kafka/config.
 // ============================================================================
 #pragma once
@@ -40,8 +51,8 @@ public:
     KafkaConsumer(const KafkaConsumer&) = delete;
     KafkaConsumer& operator=(const KafkaConsumer&) = delete;
 
-    // Chờ tối đa timeout_ms. Không có message (hết dữ liệu/hết partition) → nullopt.
-    // Lỗi consumer → ném std::runtime_error để caller dừng và báo.
+    // Chờ tối đa timeout_ms. Không có message, hoặc lỗi tạm thời (đã log) → nullopt.
+    // Lỗi nặng (fatal, sai auth/quyền, topic không tồn tại) → ném std::runtime_error.
     std::optional<Record> poll(int timeout_ms);
 
     // Commit offset của record + 1 (đồng bộ). Ném khi lỗi.

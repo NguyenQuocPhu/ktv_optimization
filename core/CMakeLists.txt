@@ -52,8 +52,9 @@ target_include_directories(kafka PUBLIC include)
 target_link_libraries(kafka PUBLIC Threads::Threads)
 if(RDKAFKA_FOUND)
   target_sources(kafka PRIVATE src/kafka/consumer.cpp)
-  target_include_directories(kafka PRIVATE ${RDKAFKA_INCLUDE_DIRS})
-  target_link_libraries(kafka PUBLIC ${RDKAFKA_LIBRARIES})
+  target_include_directories(kafka PUBLIC ${RDKAFKA_INCLUDE_DIRS})  # consumer.hpp include rdkafka.h
+  # LINK_LIBRARIES = đường dẫn đầy đủ: PKG_CONFIG_PATH trỏ bản librdkafka tự build thì link đúng bản đó.
+  target_link_libraries(kafka PUBLIC ${RDKAFKA_LINK_LIBRARIES})
   target_compile_definitions(kafka PUBLIC KTV_WITH_KAFKA=1)
   add_executable(ktv_worker src/kafka/main.cpp)
   target_link_libraries(ktv_worker kafka ktv)

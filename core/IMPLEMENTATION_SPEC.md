@@ -581,6 +581,17 @@ dẫn SYS cho queue cluster. Consume IN → `parse_message`/`plan()` → respons
 trả response `200` đúng, chạy lại cùng group không đọc lại (offset đã commit). Còn lại: produce
 OUT + gateway chuyển feeder sang OUT.
 
+**Hardening worker (2026-09-30, sau review):** giờ lập tuyến lấy lại cho từng message (trước đây đứng
+ở giờ khởi động; `--at` vẫn cố định cho test); thiếu `message_id` → `topic-partition-offset` (trước là
+`local-<n>`, trùng giữa các lần chạy/replica — `local_envelope` nhận `fallback_id`); lỗi của một
+message → response `500` rồi commit, không chết worker/kẹt partition; ghi response lỗi → thoát,
+**không** commit; `--out` không mở được → thoát mã 2, mở kiểu ghi nối; SIGINT/SIGTERM → xong message
+đang xử lý rồi đóng consumer; `poll()` chỉ ném với lỗi nặng (fatal, auth, quyền, topic không có), lỗi
+mạng/broker thì log và thử lại. CMake link `RDKAFKA_LINK_LIBRARIES` + include dir `PUBLIC` (trỏ được bản
+librdkafka tự build). E2E Kafka local: thiếu envelope, JSON hỏng (400), giờ nhảy theo phút giữa hai
+message, `/dev/full` không commit rồi chạy lại đọc đúng message đó, OSRM trả ma trận sai kiểu → 500
+và worker chạy tiếp, tắt/bật broker giữa chừng, SIGTERM thoát sạch.
+
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.

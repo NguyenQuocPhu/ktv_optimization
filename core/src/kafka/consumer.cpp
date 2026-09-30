@@ -50,10 +50,25 @@ std::optional<KafkaConsumer::Record> KafkaConsumer::poll(int timeout_ms) {
     rd_kafka_message_t* message = rd_kafka_consumer_poll(handle_, timeout_ms);
     if (message == nullptr) return std::nullopt;
     if (message->err != RD_KAFKA_RESP_ERR_NO_ERROR) {
-        const bool eof = message->err == RD_KAFKA_RESP_ERR__PARTITION_EOF;
-        const std::string text = rd_kafka_message_errstr(message);
+        const rd_kafka_resp_err_t code = message->err;
+        std::string text = rd_kafka_message_errstr(message);
         rd_kafka_message_destroy(message);
-        if (eof) return std::nullopt;  // hết dữ liệu hiện có, không phải lỗi
+        if (code == RD_KAFKA_RESP_ERR__PARTITION_EOF) return std::nullopt;  // hết dữ liệu hiện có, không phải lỗi
+        // Chỉ dừng khi cấu hình/quyền sai hoặc client hỏng hẳn. Lỗi mạng/broker (_TRANSPORT,
+        // _ALL_BROKERS_DOWN, _RESOLVE...) là tạm thời: librdkafka tự kết nối lại, chỉ cần log.
+        const bool stop = code == RD_KAFKA_RESP_ERR__FATAL || code == RD_KAFKA_RESP_ERR__AUTHENTICATION ||
+                          code == RD_KAFKA_RESP_ERR_TOPIC_AUTHORIZATION_FAILED ||
+                          code == RD_KAFKA_RESP_ERR_GROUP_AUTHORIZATION_FAILED ||
+                          code == RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART;
+        if (!stop) {
+            std::cerr << "kafka: lỗi tạm thời, thử lại: " << text << "\n";
+            return std::nullopt;
+        }
+        if (code == RD_KAFKA_RESP_ERR__FATAL) {
+            char reason[512];
+            rd_kafka_fatal_error(handle_, reason, sizeof reason);
+            text += std::string(" (") + reason + ")";
+        }
         fail("consume: " + text);
     }
 

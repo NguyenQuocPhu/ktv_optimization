@@ -45,12 +45,12 @@ int main() {
     }
     {  // Envelope: thiếu metadata thì sinh; có thì dùng lại.
         json bare = json::object();
-        Envelope e = local_envelope(bare, 3, now);
+        Envelope e = local_envelope(bare, "local-3", now);
         CHECK(e.message_id == "local-3" && e.trigger == "DAY_START");
         CHECK(format_datetime(e.planned_at) == "2026-09-10 09:00:00");
 
         json full = {{"message_id", "M1"}, {"trigger", "TASK_NEW"}, {"planned_at", "2026-09-01 08:30:00"}};
-        Envelope f = local_envelope(full, 9, now);
+        Envelope f = local_envelope(full, "local-9", now);
         CHECK(f.message_id == "M1" && f.trigger == "TASK_NEW" && format_datetime(f.planned_at) == "2026-09-01 08:30:00");
     }
     {  // wrap_response: đúng khóa, run_code = message_id, giữ data.

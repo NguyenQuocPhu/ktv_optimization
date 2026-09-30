@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
     long long shown = 0;
     for (size_t i = 0; i < records.size(); ++i) {
         const ktv::json& record = records[i];
-        const ktv::Envelope envelope = ktv::local_envelope(record, static_cast<long long>(i) + 1, server_now);
+        const ktv::Envelope envelope = ktv::local_envelope(record, "local-" + std::to_string(i + 1), server_now);
         std::vector<ktv::Error> errors;
         ktv::Message message;
         if (record.is_discarded()) errors.push_back({"", "JSON hỏng"});

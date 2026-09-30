@@ -32,7 +32,7 @@ std::vector<json> read_records(std::istream& in) {
     return records;
 }
 
-Envelope local_envelope(const json& record, long long index, Minutes default_planned_at) {
+Envelope local_envelope(const json& record, const std::string& fallback_id, Minutes default_planned_at) {
     Envelope envelope;
     auto text_field = [&](const char* key) -> std::optional<std::string> {
         if (!record.is_object() || !record.contains(key) || !record[key].is_string()) return std::nullopt;
@@ -40,7 +40,7 @@ Envelope local_envelope(const json& record, long long index, Minutes default_pla
         if (value.empty()) return std::nullopt;
         return value;
     };
-    envelope.message_id = text_field("message_id").value_or("local-" + std::to_string(index));
+    envelope.message_id = text_field("message_id").value_or(fallback_id);
     envelope.trigger = text_field("trigger").value_or("DAY_START");
     std::optional<Minutes> planned;
     if (record.is_object() && record.contains("planned_at") && record["planned_at"].is_string())
