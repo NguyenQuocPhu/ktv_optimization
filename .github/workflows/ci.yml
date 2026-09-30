@@ -1,7 +1,9 @@
 # Build + ctest core C++ (đủ Redis/Kafka lib) và kiểm Dockerfile build được.
 name: ci
+# push chỉ main (nhánh khác đã chạy qua pull_request) → mỗi thay đổi chạy một lần, không phải hai.
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -19,7 +21,8 @@ jobs:
       - run: ctest --test-dir core/build --output-on-failure
 
   image:
+    needs: test  # test đỏ thì không build image; test đã chạy nên image bỏ ctest
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t ktv-core .
+      - run: docker build --build-arg RUN_TESTS=0 -t ktv-core .
