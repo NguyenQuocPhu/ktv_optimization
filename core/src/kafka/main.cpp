@@ -1,7 +1,8 @@
 // ktv_worker — adapter Kafka của lõi: đọc topic IN → plan() → trả response.
 // Bước hiện tại: đọc IN, xếp tuyến, ghi response ra stdout (hoặc --out file, ghi nối);
 // có --redis thì ghi thêm state + route vào Redis cho gateway trả Mobix (Phase 7.3, adapter/publish).
-// Produce OUT: Phase 7.5.
+// KAFKA_TOPIC_OUT có giá trị: route được ghi thì đẩy ra OUT (key = staff_id) và chờ Kafka xác nhận rồi mới
+// commit IN; không xác nhận trong 10 giây → thoát, không commit (Phase 7.5). Trống: không đẩy OUT.
 //
 //   ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"]
 //              [--out responses.jsonl] [--max N] [--health-port N]
@@ -36,6 +37,7 @@
 #include "ktv/adapter/publish.hpp"
 #include "ktv/kafka/config.hpp"
 #include "ktv/kafka/consumer.hpp"
+#include "ktv/kafka/producer.hpp"
 #include "ktv/plan.hpp"
 
 namespace {
@@ -201,8 +203,20 @@ int main(int argc, char** argv) {
         return 2;
     }
     std::cerr << "ktv_worker: " << ktv::describe(config) << "\n";
-    if (!config.topic_out.empty())
-        std::cerr << "ktv_worker: KAFKA_TOPIC_OUT chưa được dùng ở bước này (produce OUT tạm hoãn)\n";
+    std::unique_ptr<ktv::KafkaProducer> producer;
+    if (config.topic_out.empty()) {
+        std::cerr << "ktv_worker: KAFKA_TOPIC_OUT trống → không đẩy OUT\n";
+    } else {
+        try {
+            producer = std::make_unique<ktv::KafkaProducer>(config);
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << "\n";
+            return 2;
+        }
+        std::cerr << "ktv_worker: đẩy OUT vào " << config.topic_out << "\n";
+    }
+    ktv::SendOut send_out;
+    if (producer) send_out = [&producer](const std::string& key, const std::string& value) { producer->send(key, value); };
 
     std::unique_ptr<ktv::RedisStore> store;
     if (!redis_addr.empty()) {
@@ -272,7 +286,10 @@ int main(int argc, char** argv) {
             const ktv::json in = ktv::json::parse(record->payload, nullptr, false);
             const ktv::Published published =
                 ktv::plan_and_store(in, ktv::local_envelope(in, position, now), now, {record->timestamp_ms, record->offset},
-                                    rules, osrm_url, store.get());
+                                    rules, osrm_url, store.get(), send_out);
+            // OUT phải tới nơi trước khi commit IN; không thì thoát (ném ra vòng ngoài), restart đọc lại và gửi lại.
+            if (published.out_sent && !producer->flush(10'000))
+                throw std::runtime_error("OUT không được Kafka xác nhận, không commit " + position);
             const std::string& status = published.status;
             const std::vector<ktv::Error>& warnings = published.warnings;
             const std::string line =
@@ -293,6 +310,7 @@ int main(int argc, char** argv) {
 
             std::cerr << "#" << processed << " " << position << " key=" << record->key << " status=" << status;
             if (store) std::cerr << " route=" << (published.route_stored ? "ghi" : "giữ") << (published.used_mobix_loc ? " vị_trí=mobix" : "");
+            if (producer) std::cerr << " out=" << (published.out_sent ? "gửi" : "không");
             if (!warnings.empty()) std::cerr << " cảnh_báo=" << warnings.size();
             for (const auto& [name, value_text] : record->headers) std::cerr << " header." << name << "=" << value_text;
             std::cerr << "\n";

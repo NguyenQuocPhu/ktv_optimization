@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <unistd.h>
 
@@ -94,6 +95,12 @@ int main() {
     options.token = "secret";
     options.rules = ktv::default_rules();
     options.fixed_now = ktv::parse_datetime("2026-10-01 09:20:00");
+    std::vector<std::string> sent;  // OUT đã gửi (value); request tuần tự nên không cần khóa
+    options.send_out = [&sent](const std::string& key, const std::string& value) {
+        CHECK(key == "S1");
+        sent.push_back(value);
+    };
+    options.out_failed = [] { return 7LL; };
     const httplib::Headers auth = {{"Authorization", "Bearer secret"}};
     const std::string replan = "/api/v1/staff/S1/replan?latlng=";
 
@@ -119,6 +126,7 @@ int main() {
         CHECK(body.value("run_code", "") == "m1-r20261001092000");
         CHECK(body.value("trigger", "") == "MOBIX_REPLAN");
         CHECK(body.value("planned_at", "") == "2026-10-01 09:20:00");  // giờ gọi, không phải 08:00 của IN
+        CHECK(sent.size() == 1 && first && sent[0] == first->body);    // OA nhận đúng bản Mobix nhận
 
         // Gọi lại cùng vị trí, rồi GPS rung ~1 m (cùng làm tròn 4 số): HIT, đúng bản đó; GET route cũng ra bản đó.
         auto again = client.Get(replan + "21.0500,105.8500", auth);
@@ -128,6 +136,7 @@ int main() {
         CHECK(jitter && jitter->get_header_value("X-Cache") == "HIT" && jitter->body == first->body);
         auto read = client.Get("/api/v1/staff/S1/route", auth);
         CHECK(read && read->status == 200 && read->body == first->body);
+        CHECK(sent.size() == 1);  // HIT / đọc route: không gửi thêm OUT
 
         // Đổi vị trí → MISS, run_code theo latlng_at mới.
         auto moved = client.Get(replan + "21.0600,105.8600&latlng_at=2026-10-01 09:25:00", auth);
@@ -139,12 +148,17 @@ int main() {
         auto fresh = client.Get(replan + "21.0600,105.8600&latlng_at=2026-10-01 09:25:00", auth);
         CHECK(fresh && fresh->get_header_value("X-Cache") == "MISS");
         CHECK(json::parse(fresh->body).value("message_id", "") == "m2");
+        CHECK(sent.size() == 3);  // moved + fresh
 
         // Worker vừa ghi route mới hơn (state mới hơn) → route replan bị từ chối, trả bản của worker.
-        CHECK(store.put_route("S1", "2026-10-01", R"({"run_code":"worker-moi"})", {300, 1, 0}));
+        CHECK(store.put_route("S1", "2026-10-01", R"({"run_code":"worker-moi"})", {300, 1, 0}) == ktv::Write::Stored);
         auto lost = client.Get(replan + "21.0700,105.8700&latlng_at=2026-10-01 09:26:00", auth);
         CHECK(lost && lost->status == 200 && lost->get_header_value("X-Cache") == "HIT");
         CHECK(lost && json::parse(lost->body).value("run_code", "") == "worker-moi");
+        CHECK(sent.size() == 3);  // route bị từ chối → không gửi bản cũ
+
+        auto health = client.Get("/healthz");
+        CHECK(health && json::parse(health->body).value("out_failed", -1) == 7);
 
         // Redis cắt kết nối của gateway: request gặp lúc rớt → 503, request sau tự nối lại → 200.
         redis_command(*config, "CLIENT KILL TYPE normal");

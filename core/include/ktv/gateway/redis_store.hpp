@@ -30,6 +30,7 @@
 // Trong file này có:
 //   Version            dãy số so thứ tự (type alias)
 //   Versioned          {json, version} đọc ra từ state/vị trí
+//   Write              kết quả put_route: Stored / Same / Older
 //   RedisStore         HÀM CHÍNH: put_state/get_state, put_route (+ RouteStore put/get/get_latest/size),
 //                      put_loc/get_loc, put_dedup/get_dedup
 //   redis_config       "HOST:PORT" → Config (CLI worker + gateway)
@@ -53,6 +54,9 @@ namespace ktv {
 
 // So từ trái sang, thiếu coi là 0. VD {20261001080500, 123} < {20261001080500, 124} < {20261001080501}.
 using Version = std::vector<std::int64_t>;
+
+// Kết quả ghi route: Stored = đã ghi; Same = đúng bản này đã có (VD Kafka giao lại cùng IN); Older = có bản mới hơn.
+enum class Write { Stored, Same, Older };
 
 // Một giá trị đọc ra kèm version đã ghi. VD json = message IN, version = {20261001080500, 123}.
 struct Versioned {
@@ -87,7 +91,7 @@ public:
     std::optional<Versioned> get_state(const std::string& staff_id) const;
 
     // Route có based_on: chỉ ghi khi based_on mới hơn; ghi xong cập nhật latest nếu date >= latest.
-    bool put_route(const std::string& staff_id, const std::string& date, const std::string& json,
+    Write put_route(const std::string& staff_id, const std::string& date, const std::string& json,
                    const Version& based_on);
 
     // RouteStore (seed file OUT, GET của gateway). put() không version: luôn ghi đè (đồ nghề dev).
@@ -107,7 +111,7 @@ public:
 private:
     std::string key(const std::string& kind, const std::string& staff_id) const;  // {prefix}{kind}:{staff}
     // Lua "ghi khi mới hơn" lên hash `hash_key`; latest_key rỗng = không cập nhật latest.
-    bool set_if_newer(const std::string& hash_key, int ttl_seconds, const std::string& json,
+    int set_if_newer(const std::string& hash_key, int ttl_seconds, const std::string& json,
                       const std::optional<Version>& version, const std::string& latest_key = "",
                       const std::string& date = "");
     std::optional<Versioned> get_hash(const std::string& hash_key) const;  // khóa mutex_ bên trong

@@ -64,7 +64,7 @@ std::map<std::string, std::string> kafka_env(const std::string& env_path) {
     return values;
 }
 
-KafkaConfig kafka_config_from_env(const std::map<std::string, std::string>& env) {
+KafkaConfig kafka_config_from_env(const std::map<std::string, std::string>& env, bool consumer) {
     KafkaConfig config;
     config.bootstrap_servers = get(env, "KAFKA_BOOTSTRAP_SERVERS");
     config.security_protocol = get(env, "KAFKA_SECURITY_PROTOCOL", "PLAINTEXT");
@@ -105,22 +105,29 @@ KafkaConfig kafka_config_from_env(const std::map<std::string, std::string>& env)
         if (config.sasl_username.empty()) fail("thiếu KAFKA_SASL_USERNAME");
         if (config.sasl_password.empty()) fail("thiếu KAFKA_SASL_PASSWORD");
     }
-    if (config.group_id.empty()) fail("thiếu KAFKA_GROUP_ID (consumer group; khác KAFKA_CLIENT_ID)");
-    if (config.topic_in.empty()) fail("thiếu KAFKA_TOPIC_IN");
+    if (consumer && config.group_id.empty()) fail("thiếu KAFKA_GROUP_ID (consumer group; khác KAFKA_CLIENT_ID)");
+    if (consumer && config.topic_in.empty()) fail("thiếu KAFKA_TOPIC_IN");
     if (config.auto_offset_reset != "earliest" && config.auto_offset_reset != "latest")
         fail("KAFKA_AUTO_OFFSET_RESET chỉ nhận earliest hoặc latest");
     return config;
 }
 
-std::map<std::string, std::string> rdkafka_properties(const KafkaConfig& config) {
+std::map<std::string, std::string> rdkafka_properties(const KafkaConfig& config, bool consumer) {
     std::map<std::string, std::string> props{
         {"bootstrap.servers", config.bootstrap_servers},
         {"security.protocol", config.security_protocol},
         {"client.id", config.client_id},
-        {"group.id", config.group_id},
-        {"auto.offset.reset", config.auto_offset_reset},
-        {"enable.auto.commit", "false"},  // worker tự commit sau khi xử lý xong từng message
     };
+    if (consumer) {
+        props["group.id"] = config.group_id;
+        props["auto.offset.reset"] = config.auto_offset_reset;
+        props["enable.auto.commit"] = "false";  // worker tự commit sau khi xử lý xong từng message
+    } else {
+        props["acks"] = "all";
+        props["enable.idempotence"] = "true";
+        props["message.timeout.ms"] = "10000";  // quá 10 giây chưa xác nhận → báo lỗi giao nhận
+        props["linger.ms"] = "5";
+    }
     if (!config.sasl_mechanism.empty()) {
         props["sasl.mechanism"] = config.sasl_mechanism;
         props["sasl.username"] = config.sasl_username;

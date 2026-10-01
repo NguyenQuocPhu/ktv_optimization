@@ -83,6 +83,17 @@ int main() {
     CHECK(props.at("auto.offset.reset") == "earliest");
     CHECK(props.at("enable.auto.commit") == "false");
 
+    // Producer (OUT, Phase 7.5): không group/offset; acks=all + idempotence; gateway không cần group/topic IN.
+    const auto producer = ktv::rdkafka_properties(config, false);
+    CHECK(producer.count("group.id") == 0 && producer.count("enable.auto.commit") == 0);
+    CHECK(producer.at("acks") == "all" && producer.at("enable.idempotence") == "true");
+    CHECK(producer.at("sasl.username") == "user");
+    auto gateway_env = base_env();
+    gateway_env.erase("KAFKA_GROUP_ID");
+    gateway_env.erase("KAFKA_TOPIC_IN");
+    CHECK(rejects(gateway_env));  // worker vẫn bắt buộc
+    CHECK(ktv::kafka_config_from_env(gateway_env, false).bootstrap_servers == "broker1:9092,broker2:9093");
+
     // Không SASL: không sinh key sasl.*.
     auto plain = base_env();
     plain["KAFKA_SECURITY_PROTOCOL"] = "PLAINTEXT";

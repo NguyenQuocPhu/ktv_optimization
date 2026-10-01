@@ -33,6 +33,7 @@ struct Reply {
 };
 
 // Ghi hash {json, v} khi version mới hơn hẳn version đang có (so từ trái sang, thiếu = 0).
+// Trả 1 = đã ghi, 0 = bằng version đang có (không ghi), -1 = cũ hơn (không ghi).
 // KEYS[1] hash, KEYS[2] latest (tùy chọn). ARGV: ttl, json, có version? ("1"/"0"), version "n1 n2 ..", date.
 // Khóa cũ không phải hash (dạng chuỗi trước Phase 7.2) → xóa rồi ghi.
 const char* const kSetIfNewer = R"lua(
@@ -43,12 +44,12 @@ if ARGV[3] == '1' then
     local a, b = {}, {}
     for x in string.gmatch(ARGV[4], '%S+') do a[#a + 1] = tonumber(x) end
     for x in string.gmatch(old, '%S+') do b[#b + 1] = tonumber(x) end
-    local newer = false
+    local order = 0
     for i = 1, math.max(#a, #b) do
       local x, y = a[i] or 0, b[i] or 0
-      if x ~= y then newer = x > y break end
+      if x ~= y then order = x > y and 1 or -1 break end
     end
-    if not newer then return 0 end
+    if order <= 0 then return order end
   end
 end
 redis.call('HSET', KEYS[1], 'json', ARGV[2], 'v', ARGV[4])
@@ -137,7 +138,7 @@ std::string RedisStore::key(const std::string& kind, const std::string& staff_id
     return config_.prefix + kind + ":" + staff_id;
 }
 
-bool RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, const std::string& json,
+int RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, const std::string& json,
                               const std::optional<Version>& version, const std::string& latest_key,
                               const std::string& date) {
     std::vector<std::string> arguments{"EVAL", kSetIfNewer, latest_key.empty() ? "1" : "2", hash_key};
@@ -148,7 +149,7 @@ bool RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, cons
     Reply reply(live(), arguments);
     if (!reply.ok() || reply.value->type != REDIS_REPLY_INTEGER)
         throw std::runtime_error("redis: ghi " + hash_key + " thất bại (" + reply_error(context_, reply) + ")");
-    return reply.value->integer == 1;
+    return static_cast<int>(reply.value->integer);
 }
 
 std::optional<Versioned> RedisStore::get_hash(const std::string& hash_key) const {
@@ -174,17 +175,18 @@ std::optional<std::string> RedisStore::get_value(const std::string& key) const {
 }
 
 bool RedisStore::put_state(const std::string& staff_id, const std::string& json, const Version& version) {
-    return set_if_newer(key("state", staff_id), config_.state_ttl_seconds, json, version);
+    return set_if_newer(key("state", staff_id), config_.state_ttl_seconds, json, version) == 1;
 }
 
 std::optional<Versioned> RedisStore::get_state(const std::string& staff_id) const {
     return get_hash(key("state", staff_id));
 }
 
-bool RedisStore::put_route(const std::string& staff_id, const std::string& date, const std::string& json,
-                           const Version& based_on) {
-    return set_if_newer(key("route", staff_id + ":" + date), config_.route_ttl_seconds, json, based_on,
+Write RedisStore::put_route(const std::string& staff_id, const std::string& date, const std::string& json,
+                            const Version& based_on) {
+    const int order = set_if_newer(key("route", staff_id + ":" + date), config_.route_ttl_seconds, json, based_on,
                         key("latest", staff_id), date);
+    return order > 0 ? Write::Stored : order == 0 ? Write::Same : Write::Older;
 }
 
 void RedisStore::put(const std::string& staff_id, const std::string& date, std::string json) {
@@ -220,7 +222,7 @@ std::size_t RedisStore::size() const {
 }
 
 bool RedisStore::put_loc(const std::string& staff_id, const std::string& json, const Version& version) {
-    return set_if_newer(key("loc", staff_id), config_.loc_ttl_seconds, json, version);
+    return set_if_newer(key("loc", staff_id), config_.loc_ttl_seconds, json, version) == 1;
 }
 
 std::optional<Versioned> RedisStore::get_loc(const std::string& staff_id) const {

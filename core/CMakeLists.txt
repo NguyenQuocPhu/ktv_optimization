@@ -40,7 +40,7 @@ else()
 endif()
 
 add_executable(ktv_gateway src/gateway/main.cpp)
-target_link_libraries(ktv_gateway gateway)
+target_link_libraries(ktv_gateway gateway kafka)  # kafka: producer OUT khi có librdkafka (KTV_WITH_KAFKA)
 
 # Kafka worker: đọc topic IN. Cần librdkafka (pkg-config rdkafka);
 # thiếu thì chỉ build phần config + test, binary ktv_worker tắt.
@@ -52,7 +52,7 @@ add_library(kafka STATIC src/kafka/config.cpp)
 target_include_directories(kafka PUBLIC include)
 target_link_libraries(kafka PUBLIC Threads::Threads)
 if(RDKAFKA_FOUND AND HIREDIS_FOUND)
-  target_sources(kafka PRIVATE src/kafka/consumer.cpp)
+  target_sources(kafka PRIVATE src/kafka/consumer.cpp src/kafka/producer.cpp)
   target_include_directories(kafka PUBLIC ${RDKAFKA_INCLUDE_DIRS})  # consumer.hpp include rdkafka.h
   # LINK_LIBRARIES = đường dẫn đầy đủ: PKG_CONFIG_PATH trỏ bản librdkafka tự build thì link đúng bản đó.
   target_link_libraries(kafka PUBLIC ${RDKAFKA_LINK_LIBRARIES})

@@ -4,6 +4,8 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <unistd.h>
 
@@ -84,14 +86,19 @@ int main() {
     const ktv::Rules rules = ktv::default_rules();
     const ktv::Minutes now = *ktv::parse_datetime("2026-10-01 09:00:00");
     const std::string home = "21.02,105.80";
+    std::vector<std::pair<std::string, std::string>> sent;  // OUT đã gửi (key, value), xóa trước mỗi lần chạy
+    const ktv::SendOut send_out = [&sent](const std::string& key, const std::string& value) { sent.emplace_back(key, value); };
     const auto run = [&](const json& payload, const ktv::Version& version, ktv::RedisStore* target) {
-        return ktv::plan_and_store(payload, ktv::local_envelope(payload, "t-0-1", now), now, version, rules, "", target);
+        sent.clear();
+        return ktv::plan_and_store(payload, ktv::local_envelope(payload, "t-0-1", now), now, version, rules, "", target,
+                                   send_out);
     };
 
     try {
         {  // Không Redis: như worker cũ.
             const ktv::Published r = run(message("m0", home), {1, 1}, nullptr);
             CHECK(r.status == "200" && r.out && !r.route_stored && r.message_id == "m0");
+            CHECK(r.out_sent && sent.size() == 1);  // không Redis: 200 vẫn gửi OUT
         }
         const double km_home = first_leg_km(*run(message("m0", home), {1, 1}, nullptr).out);
 
@@ -101,10 +108,17 @@ int main() {
             CHECK(store.get_state("S1") && store.get_state("S1")->version == ktv::Version({100, 1}));
             CHECK(redis_text(raw, "HGET", route_key, "v") == "100 1 0");
             CHECK(store.get_latest("S1") && json::parse(*store.get_latest("S1"))["run_code"] == "m1");
+            // OUT: key = staff, value = đúng chuỗi trong Redis (Mobix và OA thấy cùng một thứ).
+            CHECK(r.out_sent && sent.size() == 1 && sent[0].first == "S1" && sent[0].second == *store.get("S1", "2026-10-01"));
+        }
+        {  // Kafka giao lại cùng IN sau khi đã ghi route nhưng chưa gửi được OUT → route "bằng", vẫn gửi lại OUT.
+            const ktv::Published r = run(message("m1", home), {100, 1}, &store);
+            CHECK(r.status == "200" && !r.route_stored && r.out_sent && sent.size() == 1);
         }
         {  // IN cũ hơn đến trễ → bỏ qua, không tính, state/route giữ nguyên.
             const ktv::Published r = run(message("m-cu", "21.05,105.85"), {90, 7}, &store);
             CHECK(r.status == "STALE" && !r.out && !r.route_stored);
+            CHECK(!r.out_sent && sent.empty());
             CHECK(store.get_state("S1") && store.get_state("S1")->version == ktv::Version({100, 1}));
             CHECK(json::parse(*store.get("S1", "2026-10-01"))["run_code"] == "m1");
         }
@@ -134,7 +148,7 @@ int main() {
         }
         {  // KTV off (422) vẫn ghi route: Mobix không được đọc tuyến cũ còn việc.
             const ktv::Published r = run(message("m5", home, 3), {140, 1}, &store);
-            CHECK(r.status == "422" && r.route_stored);
+            CHECK(r.status == "422" && r.route_stored && r.out_sent && sent.size() == 1);  // 422 cũng gửi: OA gỡ tuyến cũ
             CHECK(json::parse(*store.get_latest("S1"))["statuscode"] == "422");
         }
         {  // 400 (staff hỏng): không biết KTV nào → không đụng Redis.
@@ -142,7 +156,14 @@ int main() {
             broken["staff"].erase("staff_id");
             const ktv::Published r = run(broken, {150, 1}, &store);
             CHECK(r.status == "400" && r.out && !r.route_stored);
+            CHECK(!r.out_sent && sent.empty());
+            CHECK(run(broken, {1, 1}, nullptr).status == "400" && sent.empty());  // không Redis: 400 cũng không gửi
             CHECK(store.get_state("S1")->version == ktv::Version({140, 1}));
+        }
+        {  // Đã có route mới hơn (bản khác tính trên state mới hơn) → route bị từ chối, KHÔNG gửi OUT bản cũ.
+            CHECK(store.put_route("S1", "2026-10-01", R"({"run_code":"moi-hon"})", {999, 1, 0}) == ktv::Write::Stored);
+            const ktv::Published r = run(message("m7", home), {160, 1}, &store);
+            CHECK(r.status == "200" && !r.route_stored && !r.out_sent && sent.empty());
         }
     } catch (const std::exception& error) {
         std::cerr << "FAIL: ngoại lệ " << error.what() << "\n";

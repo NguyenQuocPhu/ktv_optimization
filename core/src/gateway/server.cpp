@@ -78,7 +78,8 @@ void replan(RedisStore& redis, const GatewayOptions& options, const httplib::Req
     envelope.trigger = "MOBIX_REPLAN";
     envelope.planned_at = now;
     envelope.run_code = envelope.message_id + "-r" + std::to_string(stamp(*latlng_at));
-    const Published published = plan_and_store(in, envelope, now, state->version, options.rules, options.osrm_url, &redis);
+    const Published published =
+        plan_and_store(in, envelope, now, state->version, options.rules, options.osrm_url, &redis, options.send_out);
     if (published.route_stored) {
         redis.put_dedup(staff_id, key);
         return route(response, published.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "MISS");
@@ -98,8 +99,10 @@ std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const Ga
     auto server = std::make_unique<httplib::Server>();
     exclusive_port(*server);  // trùng cổng là listen lỗi, không chia request ngẫu nhiên với tiến trình khác
 
-    server->Get("/healthz", [&store](const httplib::Request&, httplib::Response& response) {
-        send_json(response, 200, {{"ok", true}, {"entries", store.size()}});
+    server->Get("/healthz", [&store, &options](const httplib::Request&, httplib::Response& response) {
+        nlohmann::json body = {{"ok", true}, {"entries", store.size()}};
+        if (options.out_failed) body["out_failed"] = options.out_failed();
+        send_json(response, 200, body);
     });
 
     server->Get(R"(/api/v1/staff/([^/]+)/route)",

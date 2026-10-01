@@ -1,7 +1,9 @@
 // ktv_gateway: API của team cho Mobix — GET /api/v1/staff/{id}/route, GET /api/v1/staff/{id}/replan (cần Redis).
 //   ktv_gateway --port 8080 [--host H] [--seed out.jsonl] [--token T]
 //               [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]
-//               [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"]
+//               [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"] [--env .env]
+// --env: đọc KAFKA_* (như worker, không cần GROUP_ID/TOPIC_IN); KAFKA_TOPIC_OUT có giá trị thì route replan
+//        được đẩy ra Kafka OUT (Phase 7.5). Không --env: không đẩy OUT.
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -10,6 +12,11 @@
 #include "ktv/gateway/seed.hpp"
 #include "ktv/gateway/server.hpp"
 #include "ktv/gateway/store.hpp"
+#include "ktv/kafka/config.hpp"
+
+#ifdef KTV_WITH_KAFKA
+#include "ktv/kafka/producer.hpp"
+#endif
 
 #ifdef KTV_WITH_REDIS
 #include "ktv/gateway/redis_store.hpp"
@@ -20,7 +27,7 @@ namespace {
 int usage() {
     std::cerr << "cách dùng: ktv_gateway [--host H] [--port N] [--seed out.jsonl] [--token T]\n"
                  "                   [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]\n"
-                 "                   [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"]\n";
+                 "                   [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"] [--env .env]\n";
     return 2;
 }
 
@@ -28,7 +35,7 @@ int usage() {
 
 int main(int argc, char** argv) {
     ktv::GatewayOptions options;
-    std::string seed_path, redis_addr, redis_password, redis_prefix = "ktv:", rules_path, at;
+    std::string seed_path, redis_addr, redis_password, redis_prefix = "ktv:", rules_path, at, env_path;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         try {
@@ -42,6 +49,7 @@ int main(int argc, char** argv) {
             else if (arg == "--rules" && i + 1 < argc) rules_path = argv[++i];
             else if (arg == "--osrm" && i + 1 < argc) options.osrm_url = argv[++i];
             else if (arg == "--at" && i + 1 < argc) at = argv[++i];
+            else if (arg == "--env" && i + 1 < argc) env_path = argv[++i];
             else return usage();
         } catch (const std::exception&) {
             return usage();
@@ -61,6 +69,33 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
+
+#ifdef KTV_WITH_KAFKA
+    std::unique_ptr<ktv::KafkaProducer> producer;
+    if (!env_path.empty()) {
+        try {
+            const ktv::KafkaConfig kafka = ktv::kafka_config_from_env(ktv::kafka_env(env_path), false);
+            if (!kafka.topic_out.empty()) {
+                producer = std::make_unique<ktv::KafkaProducer>(kafka);
+                options.send_out = [&producer](const std::string& key, const std::string& value) {
+                    producer->send(key, value);
+                };
+                options.out_failed = [&producer] { return producer->failed(); };
+            }
+            std::cerr << "ktv_gateway: " << ktv::describe(kafka)
+                      << (producer ? " → đẩy OUT vào " + kafka.topic_out : std::string(" (KAFKA_TOPIC_OUT trống: không OUT)"))
+                      << "\n";
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << "\n";
+            return 2;
+        }
+    }
+#else
+    if (!env_path.empty()) {
+        std::cerr << "bản build này không có Kafka (thiếu librdkafka khi build)\n";
+        return 2;
+    }
+#endif
 
     std::unique_ptr<ktv::RouteStore> store;
     ktv::RedisStore* redis = nullptr;

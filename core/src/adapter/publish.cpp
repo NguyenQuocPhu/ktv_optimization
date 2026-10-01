@@ -33,7 +33,8 @@ std::int64_t stamp(Minutes value) {
 }
 
 Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, const Version& version,
-                         const Rules& rules, const std::string& osrm_url, RedisStore* store) {
+                         const Rules& rules, const std::string& osrm_url, RedisStore* store,
+                         const SendOut& send_out) {
     Published result;
     result.message_id = envelope.message_id;
 
@@ -71,11 +72,19 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
     result.status = response["statuscode"].get<std::string>();
     result.out = wrap_response(envelope, response);
 
-    // 422 (KTV off / hết việc) vẫn ghi: Mobix không được đọc tuyến cũ còn việc đã gỡ. 500 thì giữ route cũ.
-    if (store && result.status != "500") {
-        const std::string date = format_datetime(envelope.planned_at).substr(0, 10);
-        const std::string json_text = result.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-        result.route_stored = store->put_route(staff_id, date, json_text, based_on);
+    // 422 (KTV off / hết việc) vẫn ghi + gửi: Mobix/OA không được giữ tuyến cũ còn việc đã gỡ. 500 thì giữ route cũ.
+    if (result.status == "500") return result;
+    const std::string json_text = result.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    bool current = true;  // route này là bản hiện hành (không có bản mới hơn)?
+    if (store) {
+        const Write written =
+            store->put_route(staff_id, format_datetime(envelope.planned_at).substr(0, 10), json_text, based_on);
+        result.route_stored = written == Write::Stored;
+        current = written != Write::Older;
+    }
+    if (send_out && current) {
+        send_out(staff_id, json_text);
+        result.out_sent = true;
     }
     return result;
 }

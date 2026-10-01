@@ -28,7 +28,7 @@ struct KafkaConfig {
     std::string client_id = "ktv-core-ai";
     std::string group_id;                          // Consumer group. Khác client_id.
     std::string topic_in;
-    std::string topic_out;                         // Produce OUT làm ở bước sau, hiện chưa dùng.
+    std::string topic_out;                         // Route ra cho OA (Phase 7.5). Trống = không đẩy OUT.
     std::string auto_offset_reset = "earliest";    // earliest | latest
 };
 
@@ -40,10 +40,12 @@ std::map<std::string, std::string> load_env_file(const std::string& path);
 std::map<std::string, std::string> kafka_env(const std::string& env_path);
 
 // Validate và dựng config. Thiếu/sai → ném std::runtime_error với lý do cụ thể.
-KafkaConfig kafka_config_from_env(const std::map<std::string, std::string>& env);
+// consumer = false (gateway chỉ produce): không bắt buộc KAFKA_GROUP_ID / KAFKA_TOPIC_IN.
+KafkaConfig kafka_config_from_env(const std::map<std::string, std::string>& env, bool consumer = true);
 
-// Đổi sang cặp key/value của librdkafka.
-std::map<std::string, std::string> rdkafka_properties(const KafkaConfig& config);
+// Đổi sang cặp key/value của librdkafka. consumer = false: bỏ group/offset, thêm acks=all + idempotence
+// (Kafka không ghi trùng khi tự gửi lại), chờ xác nhận tối đa 10 giây.
+std::map<std::string, std::string> rdkafka_properties(const KafkaConfig& config, bool consumer = true);
 
 // Mô tả để log; KHÔNG chứa password.
 std::string describe(const KafkaConfig& config);

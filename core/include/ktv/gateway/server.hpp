@@ -10,7 +10,8 @@
 //       → 400 sai tham số / 404 chưa có IN của KTV / 401 / 503 không có Redis hoặc Redis lỗi
 //       Route replan: message_id của IN, run_code "<message_id>-r<latlng_at yyyymmddHHMMSS>",
 //       trigger MOBIX_REPLAN, planned_at = giờ gọi. latlng_at bỏ trống = giờ gọi.
-//   - GET /healthz                                  → 200 {"ok":true,"entries":N}
+//       Có options.send_out: route vừa ghi thì đẩy Kafka OUT, không chờ; lỗi chỉ log + đếm (Mobix vẫn nhận route).
+//   - GET /healthz                                  → 200 {"ok":true,"entries":N[,"out_failed":M]}
 //
 // Dùng thế nào:
 //   RedisStore store(config);
@@ -27,6 +28,7 @@
 // ============================================================================
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -48,6 +50,9 @@ struct GatewayOptions {
     Rules rules;                        // rule cho replan (main: default_rules() hoặc --rules)
     std::string osrm_url;               // rỗng = chim bay
     std::optional<Minutes> fixed_now;   // test: cố định giờ (--at); không có = giờ VN hiện tại
+    // Đẩy route replan ra Kafka OUT (key, value), không chờ xác nhận; trống = không đẩy (Phase 7.5).
+    std::function<void(const std::string&, const std::string&)> send_out;
+    std::function<long long()> out_failed;  // số OUT giao nhận lỗi, hiện ở /healthz; trống = không hiện
 };
 
 // Tạo server (chưa listen). redis = nullptr: replan trả 503 (gateway đọc store RAM/seed).

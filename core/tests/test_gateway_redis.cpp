@@ -129,19 +129,22 @@ int main() {
         CHECK(store.get_state("S") && store.get_state("S")->version == ktv::Version({20261001081000}));
 
         // --- Route có based_on: gateway tính chậm trên state cũ không đè route worker vừa ghi ---
-        CHECK(store.put_route("S", "2026-10-01", "route-tu-in-0810", {20261001081000, 0, 0}));
-        CHECK(!store.put_route("S", "2026-10-01", "route-cham-in-0805", {20261001080500, 7, 20261001092000}));
+        CHECK(store.put_route("S", "2026-10-01", "route-tu-in-0810", {20261001081000, 0, 0}) == ktv::Write::Stored);
+        CHECK(store.put_route("S", "2026-10-01", "route-cham-in-0805", {20261001080500, 7, 20261001092000}) ==
+              ktv::Write::Older);
+        CHECK(store.put_route("S", "2026-10-01", "lai-ban-cu", {20261001081000, 0, 0}) == ktv::Write::Same);
         CHECK(store.get("S", "2026-10-01") == std::optional<std::string>("route-tu-in-0810"));
-        CHECK(store.put_route("S", "2026-10-01", "route-replan-0920", {20261001081000, 0, 20261001092000}));
+        CHECK(store.put_route("S", "2026-10-01", "route-replan-0920", {20261001081000, 0, 20261001092000}) ==
+              ktv::Write::Stored);
         CHECK(store.get_latest("S") == std::optional<std::string>("route-replan-0920"));
-        CHECK(store.put_route("S", "2026-09-30", "route-hom-qua", {20260930080000}));  // ngày khác: khóa khác
+        CHECK(store.put_route("S", "2026-09-30", "route-hom-qua", {20260930080000}) == ktv::Write::Stored);  // ngày khác: khóa khác
         CHECK(store.get_latest("S") == std::optional<std::string>("route-replan-0920"));  // latest không lùi
 
         // --- Khóa route dạng chuỗi (trước 7.2) bị thay bằng hash, không lỗi WRONGTYPE ---
         const std::string legacy = config.prefix + "route:L:2026-10-01";
         redis_int(config.host, config.port, {"APPEND", legacy.c_str(), "chuoi-cu"});
         CHECK(!store.get("L", "2026-10-01"));
-        CHECK(store.put_route("L", "2026-10-01", "route-moi", {1}));
+        CHECK(store.put_route("L", "2026-10-01", "route-moi", {1}) == ktv::Write::Stored);
         CHECK(store.get("L", "2026-10-01") == std::optional<std::string>("route-moi"));
 
         // --- Vị trí Mobix + dedup ---
