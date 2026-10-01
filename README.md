@@ -25,7 +25,7 @@ Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ ga
 | Lõi `plan()`: parse → lọc → SLA → OSRM → QHĐ → cụm → response | ✅ |
 | `ktv_worker` đọc Kafka IN → state + route vào Redis (`--redis`) | ✅ Phase 7.1–7.3 |
 | `ktv_gateway` `GET /staff/{id}/route` + `GET /staff/{id}/replan` (Redis) | ✅ Phase 7.4 |
-| Produce Kafka OUT | ⏳ Phase 7.5 (chờ topic OUT từ SYS) |
+| Produce Kafka OUT (worker + gateway) | ✅ Phase 7.5 (chờ SYS cấp topic OUT thật) |
 | Compose chạy worker + gateway + Redis | ⏳ Phase 7.6 |
 
 ## Hợp đồng dữ liệu
@@ -120,6 +120,7 @@ core/build/ktv_gateway --port 8080 --token secret --redis 127.0.0.1:6379 --redis
 # → GET http://127.0.0.1:8080/api/v1/staff/{staff_id}/route?date=YYYY-MM-DD
 # → GET http://127.0.0.1:8080/api/v1/staff/{staff_id}/replan?latlng=21.02,105.79&latlng_at=2026-10-01%2009:20:00
 # thêm --osrm URL, --rules rules.json như ktv_core; --at để cố định giờ khi test
+# --env .env: KAFKA_TOPIC_OUT có giá trị thì route replan được đẩy ra OUT (không chờ; lỗi đếm out_failed ở /healthz)
 # Không Redis (đồ nghề dev): --seed file OUT, chỉ đọc route; replan trả 503
 ```
 
@@ -146,7 +147,7 @@ Cấu hình qua `.env` (copy từ `.env.example`; biến môi trường thật �
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | tài khoản SASL |
 | `KAFKA_CLIENT_ID`, `KAFKA_GROUP_ID` | định danh client và consumer group (khác nhau) |
 | `KAFKA_TOPIC_IN` | topic "task đã gán cho KTV" do Optimal Assign phát |
-| `KAFKA_TOPIC_OUT` | topic route trả ra — chờ SYS cấp; chưa dùng |
+| `KAFKA_TOPIC_OUT` | topic route trả ra cho OA (chờ SYS cấp tên + quyền WRITE). Trống = không đẩy OUT |
 | `KAFKA_AUTO_OFFSET_RESET` | `earliest` / `latest` |
 
 ```bash
@@ -158,6 +159,7 @@ core/build/ktv_worker --env .env --redis 127.0.0.1:6379   # ghi thêm state + ro
 
 Hành vi:
 
+- `KAFKA_TOPIC_OUT` có giá trị: route được ghi (200/424/422) thì đẩy ra OUT, key = `staff_id`, value = đúng JSON trong route cache; worker **chờ Kafka xác nhận** rồi mới commit IN, quá 10 giây → thoát, không commit (restart đọc lại và gửi lại, OA có thể nhận trùng). Không gửi 400/500, IN cũ, route bị từ chối vì đã có bản mới hơn.
 - `--redis HOST:PORT` (thêm `--redis-password`, `--redis-prefix`, mặc định `ktv:`): mỗi IN ghi `state` rồi `route` vào Redis cho gateway trả Mobix. Version của state = `{timestamp Kafka, offset}`: IN cũ hơn cái đang có → bỏ qua (log `status=STALE`), không tính. Vị trí Mobix trong 60 phút thay vị trí trong IN. 422 vẫn ghi route. Redis lỗi → worker thoát mã 1, **không** commit (restart đọc lại message). Chi tiết khóa: `core/include/ktv/gateway/redis_store.hpp`.
 
 - Mỗi message lấy giờ lúc xử lý (hoặc `planned_at` của message); `--at` cố định giờ cho test.
@@ -260,7 +262,7 @@ Lịch sử: bản Python đầy đủ trong tag `python-legacy-2026-09-30`; b�
 | 3b, 4 | dp | ⏳ nhiều khung giờ (OT); rule 4 giữ tuyến cũ khi reoptimize |
 | 5.x | travel, adapter, cluster | ✅ OSRM tự host, hardening CLI |
 | 6.x | gateway | ✅ store + HTTP + Redis (đồ nghề dev) |
-| 7 | kafka, gateway | 🟡 7.1–7.4 ✅ (đọc IN, Redis state/route, worker ghi Redis, gateway route + replan); 7.5 produce OUT ⏳; 7.6 compose ⏳ |
+| 7 | kafka, gateway | 🟡 7.1–7.4 ✅ (đọc IN, Redis state/route, worker ghi Redis, gateway route + replan); 7.5 produce OUT ✅; 7.6 compose ⏳ |
 | — | vận hành | ✅ Dockerfile, CI |
 | 8 | service | ⏳ reoptimize theo yêu cầu KTV |
 | 9 | binding | ❌ đã bỏ: Python legacy xóa 2026-09-30; chỉ làm pybind11 nếu cần chạy lại backtest/mô phỏng |

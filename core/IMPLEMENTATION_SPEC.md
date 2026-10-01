@@ -641,7 +641,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | Phần | File | Ghi chú |
 |---|---|---|
 | Redis ✅ | `gateway/redis_store.*` | `RedisRouteStore` đổi tên `RedisStore`, thêm state / route có version (Lua) / loc / dedup, không tạo class mới |
-| Producer | `kafka/producer.{hpp,cpp}` | librdkafka, idempotent, key = `staff_id`, chờ delivery report. `KAFKA_TOPIC_OUT` trống → bỏ qua produce, log một lần (deploy được trước khi SYS cấp topic) |
+| Producer ✅ (7.5) | `kafka/producer.{hpp,cpp}` | librdkafka, idempotent, key = `staff_id`, chờ delivery report. `KAFKA_TOPIC_OUT` trống → bỏ qua produce, log một lần (deploy được trước khi SYS cấp topic) |
 | Tính + phát ✅ (7.3) | `adapter/publish.{hpp,cpp}` | Một hàm dùng chung cho T1 và T2: `plan()` → ghi route cache → produce OUT. Không đặt trong `plan`/`dp` |
 | Worker ✅ (7.3) | `kafka/main.cpp` | Thêm `--redis HOST:PORT`, `--redis-prefix`; luồng T1 |
 | Gateway ✅ (7.4) | `gateway/server.*`, `gateway/main.cpp` | Endpoint `route` + `replan`; link thêm `ktv`; thêm `--rules/--osrm/--at` (`--env` + `kafka` ở 7.5) |
@@ -654,7 +654,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.2 ✅ | Redis: state + route có version (Lua) + loc + dedup (kết quả bên dưới) | test trên Redis thật: ghi cũ không đè mới, TTL đúng |
 | 7.3 ✅ | Worker T1: IN → state → `plan()` → route cache (kết quả bên dưới) | E2E: đẩy IN → đọc được route trong Redis; IN cũ không đè IN mới |
 | 7.4 ✅ | Gateway: `GET route` + `GET replan` (kết quả bên dưới) | HTTP test: replan trả route mới; gọi lại cùng vị trí → HIT; đổi vị trí → MISS; không có state → 404 |
-| 7.5 | Producer OUT, nối vào T1 và T2 | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
+| 7.5 ✅ | Producer OUT, nối vào T1 và T2 (kết quả bên dưới) | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
 | 7.6 | Vận hành: compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
 | sau | JWT thay token tĩnh, rate limit, OUT thêm `location`/`latlng` mỗi TASK (cần OA đồng ý) | |
 
@@ -675,6 +675,24 @@ Authorization: Bearer <token>       Cache-Control: no-store
 Còn mở (không chặn code): tên topic OUT + quyền WRITE (SYS); envelope thật của OA (chờ message đầu tiên);
 key của message IN (nếu OA không key theo `staff_id`, hai message của cùng KTV có thể nằm khác partition —
 version của state xử lý được thứ tự đến).
+
+**Kết quả 7.5 — produce OUT (2026-10-01):** `kafka/producer.{hpp,cpp}`: `KafkaProducer` (`send` không chờ, không
+ném — lỗi thì log + đếm `failed()`; `flush(timeout)` = mọi message tới nơi và không có lỗi mới). Cấu hình producer
+`rdkafka_properties(config, false)`: `acks=all`, `enable.idempotence=true`, `message.timeout.ms=10000`, `linger.ms=5`;
+`kafka_config_from_env(env, false)` cho gateway (không cần GROUP_ID/TOPIC_IN). `plan_and_store` nhận `SendOut`
+(`std::function`, publish không phụ thuộc librdkafka). `put_route` trả `Write::Stored/Same/Older` (Lua -1/0/1).
+Người dùng duyệt: **(1)** gửi OUT khi route là bản hiện hành (200/424/422); không gửi 400/500/STALE/route bị từ chối;
+**(2)** worker: OUT không được xác nhận trong 10 s → thoát, không commit; **(3)** đọc lại cùng IN (`Same`) → gửi lại
+OUT (OA có thể nhận trùng, upsert theo `run_code` hoặc `(staff, ngày)`); **(4)** gateway không chờ xác nhận, lỗi đếm
+`out_failed` ở `/healthz` (callback giao nhận chạy ở lần `send` kế tiếp nên số đếm có thể trễ một message);
+**(5)** gateway đọc `--env` như worker. Key OUT = `staff_id`, value = đúng chuỗi trong route cache. `KAFKA_TOPIC_OUT`
+trống → không OUT, log một lần. Khe hở thứ tự OUT giữa worker và gateway: người dùng chấp nhận, chưa thêm `based_on`.
+Kiểm: `test_publish` (gửi khi ghi mới / bằng, không gửi STALE / 400 / route bị từ chối, value = chuỗi trong Redis),
+`test_gateway_replan` (MISS gửi đúng body Mobix nhận, HIT / đọc / bị từ chối không gửi, `/healthz` `out_failed`),
+`test_kafka_config` (thuộc tính producer). Làm hỏng "gửi khi bằng" / "gửi cả bản cũ" → đỏ; nhánh 500 chưa có test
+chạm tới (không tạo được lỗi 500 từ `plan()` trong test). E2E `ktv-kafka`: IN → 1 OUT `DAY_START`; replan MISS → 1 OUT
+`MOBIX_REPLAN`, HIT → không; topic OUT sai tên → worker thoát 1, offset không commit; chạy lại với topic trống → đọc
+lại đúng message, commit. `ctest` 18/18.
 
 **Kết quả 7.4 — gateway route + replan (2026-10-01):** `gateway/server.*`: `GET /api/v1/staff/{id}/route` (thay
 `/worklist`, đã bỏ) và `GET /api/v1/staff/{id}/replan?latlng=&latlng_at=`; `make_gateway_server(store, options, redis)`,
