@@ -7,25 +7,26 @@ Không thuộc team routing: gán việc (Optimal Assign), vòng đời checklis
 ## Luồng giữa các hệ thống
 
 ```text
-Optimal Assign ──Kafka IN (task đã gán, 1 KTV/message)──▶ ktv_worker ──▶ state cache (Redis: IN mới nhất mỗi KTV)
-                                                                              │
-Mobix ──GET /api/v1/staff/{staff_id}/replan──▶ ktv_gateway (API của team) ────┤ lấy state + vị trí Mobix gửi
-                          ◀── 202 (không trả route) ──┘                       │ plan()
-                                                                              ▼
-                                        Kafka OUT ──▶ Optimal Assign (lưu Oracle), phía Mobix đọc route
+Optimal Assign ──Kafka IN (task đã gán, 1 KTV/message)──▶ ktv_worker ── tính ──▶ Redis: IN mới nhất + route mỗi KTV
+                                                                                   ▲  │
+Mobix ──GET /api/v1/staff/{id}/route──────▶ ktv_gateway (API của team) ── đọc ─────┘  │
+      ◀── 200 route | 202 chưa có ──────────┘                                          │
+Mobix ──GET /api/v1/staff/{id}/replan?latlng=…─▶ ktv_gateway ── IN mới nhất + vị trí ─ tính ─▶ Redis
+      ◀── 200 route (X-Cache MISS/HIT) ─────────┘
+                    (Phase 7.5: mỗi lần tính đẩy cùng JSON ra Kafka OUT ──▶ Optimal Assign lưu Oracle)
 ```
 
-Mobix chủ động gọi API của team khi cần xếp lại (KTV đổi vị trí, xong một việc…). Gateway lấy state mới nhất của KTV, tính lại rồi đẩy kết quả ra Kafka OUT; HTTP chỉ xác nhận đã nhận. Thiết kế chi tiết: [core/IMPLEMENTATION_SPEC.md](core/IMPLEMENTATION_SPEC.md) Phase 7.
+Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ gateway, hoặc gọi `replan` với vị trí mới để tính lại từ IN mới nhất. Thiết kế chi tiết: [core/IMPLEMENTATION_SPEC.md](core/IMPLEMENTATION_SPEC.md) Phase 7; API cho Mobix: [docs/MOBIX-REPLAN-API-DRAFT.md](docs/MOBIX-REPLAN-API-DRAFT.md).
 
-**Trạng thái hiện tại** (2026-09-30):
+**Trạng thái hiện tại** (2026-10-01):
 
 | Mảnh | Có chưa |
 |---|---|
 | Lõi `plan()`: parse → lọc → SLA → OSRM → QHĐ → cụm → response | ✅ |
-| `ktv_worker` đọc Kafka IN | ✅ (hiện tính luôn mỗi message và ghi response ra stdout/file) |
-| State cache + API `replan` + dedup | ⏳ Phase 7A |
-| Produce Kafka OUT | ⏸ tạm hoãn (chờ topic OUT + bàn sau) |
-| `ktv_gateway` `GET /worklist` + Redis | ✅ đồ nghề dev (đọc route đã tính từ file OUT) |
+| `ktv_worker` đọc Kafka IN → state + route vào Redis (`--redis`) | ✅ Phase 7.1–7.3 |
+| `ktv_gateway` `GET /staff/{id}/route` + `GET /staff/{id}/replan` (Redis) | ✅ Phase 7.4 |
+| Produce Kafka OUT | ⏳ Phase 7.5 (chờ topic OUT từ SYS) |
+| Compose chạy worker + gateway + Redis | ⏳ Phase 7.6 |
 
 ## Hợp đồng dữ liệu
 
@@ -72,7 +73,7 @@ Bản Python cũ (`src/ktv_routing`, `simulator/`, `research/`, `tests/`) đã x
 |---|---|
 | `ktv_core` | CLI local: `plan` (JSON/JSONL → response JSONL), `validate`, `print-rules` |
 | `ktv_worker` | Kafka worker: đọc topic IN → `plan()` → ghi response ra stdout/file, commit offset sau khi ghi xong; `/healthz` tùy chọn |
-| `ktv_gateway` | Gateway API của team. Hiện có `GET /api/v1/worklist/{staff_id}?date=YYYY-MM-DD`, `/healthz` (store RAM hoặc Redis, nạp từ file OUT) — đồ nghề dev; API `replan` là Phase 7A |
+| `ktv_gateway` | Gateway API của team: `GET /api/v1/staff/{staff_id}/route?date=`, `GET /api/v1/staff/{staff_id}/replan?latlng=&latlng_at=` (cần `--redis`), `/healthz` (store RAM hoặc Redis, nạp từ file OUT) — đồ nghề dev; API `replan` là Phase 7A |
 
 ## Build & test
 
@@ -85,10 +86,10 @@ sudo systemctl enable --now docker
 
 cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Release
 cmake --build core/build -j"$(nproc)"
-ctest --test-dir core/build --output-on-failure        # 17 test: api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants, gateway, kafka config, publish
+ctest --test-dir core/build --output-on-failure        # 18 test: api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants, gateway, kafka config, publish, gateway replan
 ```
 
-- `hiredis` và `librdkafka` là tùy chọn: thiếu hiredis thì `ktv_gateway` không có Redis store, `ktv_worker` cần cả hai; phần còn lại vẫn chạy (thiếu hiredis thì còn 15 test: mất gateway_redis + publish).
+- `hiredis` và `librdkafka` là tùy chọn: thiếu hiredis thì `ktv_gateway` không có Redis store, `ktv_worker` cần cả hai; phần còn lại vẫn chạy (thiếu hiredis thì còn 15 test: mất gateway_redis, publish, gateway_replan).
 - Test `invariants` chạy thêm benchmark 5.332 message nếu có `artifacts/fake/messages.jsonl`. File này **không nằm trong git** (`artifacts/` bị ignore) và tool sinh nó là bản Python đã xóa (lấy lại từ tag `python-legacy-2026-09-30`); không có thì test chỉ chạy 3.000 message sinh ngẫu nhiên.
 - Test `kafka_config` đọc biến môi trường thật: chạy `ctest` trong shell đang export `KAFKA_*` có thể làm test fail.
 - Thư mục build tạo trong container (đường dẫn `/workspace/...`) không dùng lại được ngoài container: `rm -rf core/build` rồi build lại.
@@ -114,11 +115,12 @@ core/build/ktv_core plan request.json --out response.jsonl
 core/build/ktv_core print-rules > rules.json          # in rule đang dùng (sửa trọng số trong file rồi --rules)
 core/build/ktv_core validate request.json             # chỉ kiểm tra contract, strict (plan thì nới lỏng + in bảng cảnh báo)
 
-# Gateway (sinh OUT trước rồi seed, không tính lại khi đọc)
-core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/responses_v2.jsonl
-core/build/ktv_gateway --port 8080 --seed artifacts/fake/responses_v2.jsonl --token secret
-# → GET http://127.0.0.1:8080/api/v1/worklist/{staff_id}?date=YYYY-MM-DD
-# Redis (nhiều replica, sống qua restart): thêm --redis 127.0.0.1:6379 --redis-prefix ktv:
+# Gateway + Redis (worker ghi state/route vào cùng Redis, xem mục Kafka worker)
+core/build/ktv_gateway --port 8080 --token secret --redis 127.0.0.1:6379 --redis-prefix ktv:
+# → GET http://127.0.0.1:8080/api/v1/staff/{staff_id}/route?date=YYYY-MM-DD
+# → GET http://127.0.0.1:8080/api/v1/staff/{staff_id}/replan?latlng=21.02,105.79&latlng_at=2026-10-01%2009:20:00
+# thêm --osrm URL, --rules rules.json như ktv_core; --at để cố định giờ khi test
+# Không Redis (đồ nghề dev): --seed file OUT, chỉ đọc route; replan trả 503
 ```
 
 Service local bằng Docker (`compose.yaml` chỉ bind vào localhost):
@@ -258,7 +260,7 @@ Lịch sử: bản Python đầy đủ trong tag `python-legacy-2026-09-30`; b�
 | 3b, 4 | dp | ⏳ nhiều khung giờ (OT); rule 4 giữ tuyến cũ khi reoptimize |
 | 5.x | travel, adapter, cluster | ✅ OSRM tự host, hardening CLI |
 | 6.x | gateway | ✅ store + HTTP + Redis (đồ nghề dev) |
-| 7 | kafka, gateway | 🟡 đọc IN + hardening + `/healthz` ✅; 7A state cache + API `replan` ⏳; produce OUT ⏸ tạm hoãn |
+| 7 | kafka, gateway | 🟡 7.1–7.4 ✅ (đọc IN, Redis state/route, worker ghi Redis, gateway route + replan); 7.5 produce OUT ⏳; 7.6 compose ⏳ |
 | — | vận hành | ✅ Dockerfile, CI |
 | 8 | service | ⏳ reoptimize theo yêu cầu KTV |
 | 9 | binding | ❌ đã bỏ: Python legacy xóa 2026-09-30; chỉ làm pybind11 nếu cần chạy lại backtest/mô phỏng |

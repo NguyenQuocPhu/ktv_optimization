@@ -1,110 +1,95 @@
-# API Mobix yêu cầu Core AI sắp xếp lại — DRAFT để viết ticket
+# API cho Mobix: đọc route + yêu cầu xếp lại — DRAFT để viết ticket
 
-> **Trạng thái:** draft, chờ Mobix/OA/Gateway xác nhận. Dựa format của `IVR-API.xlsx`,
-> nhưng đây là API routing riêng, không phải endpoint IVR `/onebot/run-task`.
-> Không chép client secret/token từ tài liệu mẫu vào ticket.
+> **Trạng thái:** draft theo code Phase 7.4 (2026-10-01), chờ Mobix/OA xác nhận. Thay bản 2026-09-30
+> ("HTTP chỉ trả 202, route đi Kafka OUT"): giờ **Mobix nhận route ngay trong HTTP response**.
+> Không chép client secret/token vào ticket.
 
 ## 1. Mục đích và luồng
 
-Mobix gọi API khi KTV muốn yêu cầu sắp xếp lại, có thể kèm tọa độ mới. Core AI lấy
-snapshot công việc mới nhất đã nhận từ Kafka IN, cập nhật tọa độ cho lần tính này,
-chạy pipeline plan hiện có rồi **produce kết quả vào Kafka OUT**. HTTP chỉ xác nhận
-đã nhận/yêu cầu xử lý, không trả route.
+Mobix gọi API của team routing (`ktv_gateway`) để (1) đọc route đã tính cho KTV, (2) yêu cầu xếp lại khi có
+tọa độ mới. Route nằm trong Redis: worker tính sẵn mỗi khi OA gửi message IN mới; `replan` tính lại từ IN mới
+nhất + tọa độ Mobix gửi.
 
 ```text
-Mobix ──GET replan──▶ Gateway/API
-                         │ lấy latest worklist snapshot (đã materialize từ Kafka IN)
-                         │ áp location Mobix gửi (nếu có) → plan()
-                         └──produce Kafka OUT
+OA ──Kafka IN──▶ ktv_worker ──▶ Redis (IN mới nhất + route)
+Mobix ──GET route──▶ ktv_gateway ── đọc Redis ──▶ 200 route | 202 chưa có
+Mobix ──GET replan─▶ ktv_gateway ── IN mới nhất + latlng ─ plan() ─▶ Redis ──▶ 200 route
+                                                            (Phase 7.5: đồng thời đẩy Kafka OUT cho OA)
 ```
 
-- `task_status_id`/trạng thái task lấy từ snapshot IN; API không nhận `type` hay `task_id` hoàn tất.
-- Không phân biệt location đổi hay task vừa hoàn tất: GET nghĩa là "replan KTV này"; state trong snapshot quyết định task nào còn xếp được.
-- `REOPTIMIZE` chọn mode là use case/phase riêng, không thuộc API draft này.
+- Danh sách việc và trạng thái task lấy từ message IN mới nhất của OA. API không nhận `task_id` hoàn tất.
+- `replan` chỉ đổi điểm xuất phát và giờ bắt đầu (= giờ gọi); thứ tự có thể đổi theo vị trí/giờ mới.
+- Chọn mode tối ưu (`REOPTIMIZE`) là Phase 8, không thuộc API này.
 
 ## 2. Configuration
 
-| Thuộc tính | Giá trị draft | Ghi chú |
+| Thuộc tính | Giá trị | Ghi chú |
 |---|---|---|
-| Method | `GET` | Theo hướng Mobix/Gateway đang bàn; có tác dụng trigger computation nên phải tắt cache HTTP |
-| URL | `https://{GATEWAY_URL}/api/v1/staff/{staff_id}/replan` | Base URL STAG/PROD do Gateway/Infra cấp; chưa điền domain |
-| Content Type | Không có request body | Tham số nằm trên path/query; URL phải encode đúng |
-| Authorization | `Bearer <KTV token>` | Chỉ KTV sở hữu `staff_id` được gửi yêu cầu; điều hành theo policy hệ thống |
-| Response | JSON acknowledgment | Route kết quả chỉ đi Kafka OUT |
-| Cache | `Cache-Control: no-store` | Không để proxy/app cache GET có tác dụng phụ |
+| Method | `GET` | Cả hai endpoint |
+| URL đọc | `https://{GATEWAY_URL}/api/v1/staff/{staff_id}/route` | Base URL STAG/PROD do Infra cấp |
+| URL xếp lại | `https://{GATEWAY_URL}/api/v1/staff/{staff_id}/replan` | Có tác dụng phụ (tính lại, ghi Redis, Phase 7.5 đẩy OUT) |
+| Content Type | Không có request body | Tham số trên path/query, encode URL đúng |
+| Authorization | `Bearer <token>` | Hiện là token tĩnh cấu hình ở gateway; JWT theo KTV để sau |
+| Response | JSON route (cùng nội dung Kafka OUT) | Header `Cache-Control: no-store` |
 
 ## 3. Request — Input
 
-Không có request body. `staff_id` ở path; tọa độ và metadata ở query/header.
+### GET route
 
 | Tên trường | Vị trí | Bắt buộc | Kiểu | Mô tả |
 |---|---|---:|---|---|
-| `staff_id` | path | Y | string | ID KTV, giữ leading zero; ví dụ `00201964` |
-| `latlng` | query | Y | string | Tọa độ mới Mobix biết, format `lat,lng`, WGS84; override vị trí trong snapshot cho lần replan này |
-| `latlng_at` | query | Y | string | Thời điểm ghi nhận tọa độ, giờ VN: `YYYY-MM-DD HH:mm:ss`; dùng để so độ mới/dedup |
-| `date` | query | N | string | Ngày tuyến `YYYY-MM-DD`; bỏ trống = ngày hiện hành theo giờ VN |
-| `X-Request-ID` | header | N | string | ID do Mobix sinh để trace/retry; nếu thiếu server tự sinh; retry nên dùng lại cùng ID |
+| `staff_id` | path | Y | string | ID KTV, giữ số 0 đầu; VD `00201964` |
+| `date` | query | N | string | `YYYY-MM-DD`; bỏ trống = route mới nhất |
 
-Gateway dedup theo `X-Request-ID` nếu có; nếu không, dùng fingerprint từ staff + snapshot IN + tọa độ/thời điểm.
+### GET replan
 
-### Request example
+| Tên trường | Vị trí | Bắt buộc | Kiểu | Mô tả |
+|---|---|---:|---|---|
+| `staff_id` | path | Y | string | ID KTV |
+| `latlng` | query | Y | string | Tọa độ hiện tại `lat,lng` (WGS84, trong Việt Nam) |
+| `latlng_at` | query | N | string | Giờ ghi nhận tọa độ, giờ VN `YYYY-MM-DD HH:mm:ss`; bỏ trống = giờ gọi. Cũ hơn 60 phút so với giờ gọi thì không dùng (tuyến xuất phát từ vị trí trong IN) |
+
+Gọi lại cùng chỗ (lệch dưới ~11 m) với cùng message IN → trả route đang có, không tính lại (`X-Cache: HIT`).
 
 ```bash
-curl --get \
-  --url "https://{GATEWAY_URL}/api/v1/staff/00201964/replan" \
-  --header "Authorization: Bearer ${KTV_TOKEN}" \
-  --header "X-Request-ID: 01J..." \
-  --data-urlencode "latlng=10.7538419,106.7404162" \
-  --data-urlencode "latlng_at=2026-09-10 09:20:00" \
-  --data-urlencode "date=2026-09-10"
+curl --get --url "https://{GATEWAY_URL}/api/v1/staff/00201964/replan" \
+  --header "Authorization: Bearer ${TOKEN}" \
+  --data-urlencode "latlng=21.0285,105.8542" \
+  --data-urlencode "latlng_at=2026-10-01 09:20:00"
 ```
 
 ## 4. Response — Output HTTP
 
-HTTP chỉ trả acknowledgment. **Không chứa clusters/schedule/route**; kết quả tính đi Kafka OUT.
+`200`: body là route đầy đủ, đúng JSON đẩy vào Kafka OUT (envelope + `data.clusters` + `data.metrics`, sheet 03/04
+của `API-Goi-y-cong-viec.xlsx`). Envelope:
 
-### Đã nhận yêu cầu
-
-```json
-{
-  "success": true,
-  "statuscode": "202",
-  "message": "Replan accepted",
-  "request_id": "01J...",
-  "trace_id": "01J..."
-}
-```
-
-### Mã trạng thái draft
-
-| HTTP / statuscode | Ý nghĩa | Client xử lý |
+| Field | Route từ IN (worker) | Route từ replan |
 |---|---|---|
-| `202` | Đã nhận replan; kết quả sẽ được publish vào Kafka OUT | Không coi đây là route; route lấy theo flow Mobix đã thống nhất |
-| `400` | Sai format `staff_id`, `latlng`, `latlng_at`, `date` | Không retry nguyên request |
-| `401` | Token thiếu/hết hạn/sai | Refresh token rồi gửi lại |
-| `403` | Token không có quyền yêu cầu cho KTV này | Không retry |
-| `404` | Chưa có snapshot Kafka IN cho staff/ngày | Retry sau hoặc báo trạng thái chưa sẵn sàng (cần chốt với Mobix) |
-| `429` | Gateway rate limit (nếu policy được bật) | Chờ theo `Retry-After` |
-| `5xx` | Gateway/Kafka/planner lỗi trước khi nhận lệnh | Retry với cùng request ID |
+| `message_id` | `message_id` của IN | `message_id` của IN đã dùng |
+| `run_code` | = `message_id` | `<message_id>-r<latlng_at yyyymmddHHMMSS>`, VD `m-123-r20261001092000` |
+| `trigger` | `trigger` của IN (VD `DAY_START`) | `MOBIX_REPLAN` |
+| `planned_at` | `planned_at` của IN | giờ gọi replan |
+| `statuscode` | `200`/`424`/`422` như lõi | như lõi (`422` = KTV off / hết việc) |
 
-## 5. Kafka/state behavior (phần backend của ticket)
+Header `X-Cache` (chỉ replan): `MISS` = vừa tính; `HIT` = trả route đang có (trùng lần trước, hoặc vừa có route
+mới hơn từ IN mới của OA).
 
-### State cần có
+| HTTP | Khi nào | Client xử lý |
+|---|---|---|
+| `200` | Có route | Hiển thị |
+| `202` `{"retry_after":5}` | (route) Chưa có route cho KTV/ngày | Thử lại sau `retry_after` giây |
+| `400` | (replan) `latlng`/`latlng_at` sai dạng | Không retry nguyên request |
+| `401` | Thiếu/sai token | Lấy token rồi gửi lại |
+| `404` | (replan) Chưa có message IN nào của KTV | Báo "chưa có việc"; thử lại sau |
+| `503` `{"retry_after":5}` | Redis lỗi / gateway chạy không Redis | Thử lại sau |
 
-Kafka IN là log, không phải query API để tìm trực tiếp "message của staff X". Gateway/Core
-cần consumer chạy nền giữ **snapshot IN mới nhất mỗi `(staff_id, date)`** trong state store.
-GET handler đọc snapshot đó; không poll/tìm offset ngẫu nhiên trên Kafka theo từng HTTP request.
+## 5. Backend (để đối chiếu)
 
-### Khi nhận GET
-
-1. Auth và kiểm tra path/query.
-2. Đọc latest IN snapshot theo staff/date.
-3. Overlay `latlng/latlng_at` Mobix gửi vào `staff` cho lần tính này.
-4. Chạy normalization + `plan()`; current/completed/status filtering vẫn theo snapshot IN.
-5. Produce route/error result vào Kafka OUT, gắn correlation tới `request_id`/`trace_id`.
-6. Trả HTTP `202`; không trả route.
-
-API không tự xác nhận task hoàn tất vì request không có `task_id/type`; trạng thái đó phải có trong Kafka IN. Quy ước MVP: OA publish snapshot đã cập nhật **trước khi Mobix gọi GET**; gateway consumer chạy nền và handler dùng snapshot mới nhất đã consume. Không thêm `state_version` vào API lúc này. Thiết kế chấp nhận consumer có độ trễ nhỏ; nếu sau này cần bảo đảm causal ordering chặt, bổ sung version/ack riêng.
+1. Worker consume Kafka IN → giữ IN mới nhất mỗi KTV (`ktv:state:{staff}`, version theo timestamp Kafka + offset)
+   → tính → ghi route (`ktv:route:{staff}:{date}`, TTL 2 ngày).
+2. `replan`: đọc IN mới nhất → ghi vị trí (`ktv:loc`) → tính với vị trí + giờ gọi → ghi route nếu mới hơn bản đang có
+   → trả route. Route chỉ ghi đè khi tính trên IN mới hơn, hoặc cùng IN nhưng vị trí mới hơn.
+3. Phase 7.5: mỗi lần route được ghi thì đẩy cùng JSON vào Kafka OUT cho OA.
 
 ## 6. Yêu cầu Kafka OUT liên quan Mobix
 
@@ -121,17 +106,16 @@ thay đổi OUT contract, không phải HTTP response body.
 
 ## 7. Giới hạn/bảo mật cần ghi trong ticket
 
-- GET này có tác dụng phụ (trigger replan); phải có `Cache-Control: no-store`, không log query chứa tọa độ nguyên văn.
-- Query string có thể xuất hiện trong access log. Nếu security policy không cho tọa độ trong URL,
-  đổi sang `POST` cùng path/payload trước khi phát hành contract.
-- API request không tự xác nhận task hoàn tất; snapshot Kafka IN mới là nguồn trạng thái task.
-- Gateway service của ta consume IN chạy nền và giữ latest snapshot theo staff/date; host/triển khai service do team/Infra chốt.
-- Token/secret lấy từ secret manager/config môi trường; không ghi credential thật vào Excel/ticket.
+- `replan` là GET có tác dụng phụ: `Cache-Control: no-store`; không log query chứa tọa độ nguyên văn.
+- Query string có thể xuất hiện trong access log. Nếu policy không cho tọa độ trong URL, đổi sang `POST` cùng path.
+- Trạng thái task chỉ đến từ message IN của OA; API không tự xác nhận task hoàn tất.
+- Token lấy từ secret manager/config môi trường; không ghi credential thật vào Excel/ticket.
 
-## 8. Các quyết định còn cần xác nhận trước khi đóng ticket
+## 8. Còn cần xác nhận
 
-1. Mobix gọi sau khi task hoàn tất: contract yêu cầu OA publish snapshot IN trước khi GET; xác nhận hệ thống thực hiện được thứ tự này.
-2. `404` khi chưa có snapshot có đúng UX không, hay muốn `202 + retry_after`?
-3. Tên host STAG/PROD và token scope.
-4. Policy log/retention cho `latlng` (không log tọa độ thô trong access log).
-5. API này không nhận `type`/mode. Chọn mode `DEFAULT/SLA/DISTANCE` thuộc Reoptimize Phase 8, không gộp vào event replan này.
+1. OA có gửi IN mới mỗi khi task đổi trạng thái (check-in, hoàn tất, gán thêm, đổi hẹn) không? Nếu không, việc KTV
+   đã làm xong vẫn còn trong route cho tới IN kế tiếp (xem `docs/DATA_QUESTIONS.md`).
+2. `404` khi chưa có IN có đúng UX không, hay muốn `202 + retry_after` như GET route?
+3. Host STAG/PROD, cách cấp token (token tĩnh hiện tại hay JWT theo KTV).
+4. Policy log/retention cho `latlng`.
+5. Mobix gọi `replan` khi nào (mỗi lần mở app, theo chu kỳ, khi di chuyển xa…) — bàn ở phase sau.

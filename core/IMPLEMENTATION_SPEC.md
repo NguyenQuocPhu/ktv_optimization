@@ -333,7 +333,7 @@ Gateway replan (Phase 7A) ─────┴─> parse_message (api)
 | 6.3 Redis store | `gateway/redis_store.*`: `RedisRouteStore`, key `{prefix}route|latest:...`, TTL 7 ngày, hiredis optional; CLI `--redis` | test trên Redis thật + demo xem key bằng `redis-cli` |
 | 7. Mobix gọi API, trả từ cache | IN mới → worker tính → route cache Redis + Kafka OUT; Mobix `GET route` đọc cache, `GET replan` (vị trí mới) tính lại → cache + OUT → trả route | Xem 7.1–7.6 |
 | 7.1 Đọc IN ✅ | `kafka/*`, `ktv_worker`: consume IN → `plan()` → stdout/file; hardening + `/healthz` `/readyz` | E2E Kafka local |
-| 7.2–7.4 Cache + API | Redis state/route có version/loc/dedup; worker ghi cache; gateway `route` + `replan` | ghi cũ không đè mới; replan HIT/MISS đúng |
+| 7.2–7.4 Cache + API ✅ | Redis state/route có version/loc/dedup; worker ghi cache; gateway `route` + `replan` | ghi cũ không đè mới; replan HIT/MISS đúng |
 | 7.5–7.6 OUT + vận hành | Producer OUT cho cả worker và gateway (topic trống = bỏ qua); compose + README | mỗi lần tính đúng một OUT; worker commit sau delivery |
 | Vận hành ✅ | `Dockerfile` (build kèm ctest), CI GitHub Actions, `/healthz` worker | image build được, CI xanh |
 | 8. Reoptimize use case | Sau khi Kafka đã nối; chốt request/context và policy riêng cho thao tác KTV | Có input phân biệt với replan thường; kết quả/compare semantics được business duyệt |
@@ -644,7 +644,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | Producer | `kafka/producer.{hpp,cpp}` | librdkafka, idempotent, key = `staff_id`, chờ delivery report. `KAFKA_TOPIC_OUT` trống → bỏ qua produce, log một lần (deploy được trước khi SYS cấp topic) |
 | Tính + phát ✅ (7.3) | `adapter/publish.{hpp,cpp}` | Một hàm dùng chung cho T1 và T2: `plan()` → ghi route cache → produce OUT. Không đặt trong `plan`/`dp` |
 | Worker ✅ (7.3) | `kafka/main.cpp` | Thêm `--redis HOST:PORT`, `--redis-prefix`; luồng T1 |
-| Gateway | `gateway/server.*`, `gateway/main.cpp` | Endpoint `route` + `replan`; link thêm `ktv` + `kafka`; thêm `--env/--rules/--osrm` |
+| Gateway ✅ (7.4) | `gateway/server.*`, `gateway/main.cpp` | Endpoint `route` + `replan`; link thêm `ktv`; thêm `--rules/--osrm/--at` (`--env` + `kafka` ở 7.5) |
 
 #### Sub-phase
 
@@ -653,7 +653,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.1 ✅ | `ktv_worker` đọc IN + hardening + `/healthz` `/readyz` (kết quả bên dưới) | E2E Kafka local |
 | 7.2 ✅ | Redis: state + route có version (Lua) + loc + dedup (kết quả bên dưới) | test trên Redis thật: ghi cũ không đè mới, TTL đúng |
 | 7.3 ✅ | Worker T1: IN → state → `plan()` → route cache (kết quả bên dưới) | E2E: đẩy IN → đọc được route trong Redis; IN cũ không đè IN mới |
-| 7.4 | Gateway: `GET route` + `GET replan` | HTTP test: replan trả route mới; gọi lại cùng vị trí → HIT; đổi vị trí → MISS; không có state → 404 |
+| 7.4 ✅ | Gateway: `GET route` + `GET replan` (kết quả bên dưới) | HTTP test: replan trả route mới; gọi lại cùng vị trí → HIT; đổi vị trí → MISS; không có state → 404 |
 | 7.5 | Producer OUT, nối vào T1 và T2 | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
 | 7.6 | Vận hành: compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
 | sau | JWT thay token tĩnh, rate limit, OUT thêm `location`/`latlng` mỗi TASK (cần OA đồng ý) | |
@@ -675,6 +675,22 @@ Authorization: Bearer <token>       Cache-Control: no-store
 Còn mở (không chặn code): tên topic OUT + quyền WRITE (SYS); envelope thật của OA (chờ message đầu tiên);
 key của message IN (nếu OA không key theo `staff_id`, hai message của cùng KTV có thể nằm khác partition —
 version của state xử lý được thứ tự đến).
+
+**Kết quả 7.4 — gateway route + replan (2026-10-01):** `gateway/server.*`: `GET /api/v1/staff/{id}/route` (thay
+`/worklist`, đã bỏ) và `GET /api/v1/staff/{id}/replan?latlng=&latlng_at=`; `make_gateway_server(store, options, redis)`,
+`GatewayOptions` thêm `rules`, `osrm_url`, `fixed_now`; `ktv_gateway` thêm `--rules --osrm --at`. Người dùng duyệt:
+**(1)** replan tính từ giờ gọi; **(2)** route replan giữ `message_id` của IN, `run_code = <message_id>-r<latlng_at>`,
+`trigger = MOBIX_REPLAN` (`Envelope.run_code`); **(3)** `latlng_at` trống = giờ gọi, cũ hơn 60 phút theo luật 7.3;
+**(4)** route bị từ chối (đã có bản mới hơn) → trả bản mới nhất trong cache; **(5)** không Redis → replan 503;
+**(6)** Redis lỗi → 503 `retry_after`, gateway sống. Luồng replan: `get_state` (404) → `put_loc` → fingerprint
+(version state | latlng làm tròn 4 số) trùng `dedup` → HIT; không thì `plan_and_store` (dùng lại 7.3) → ghi được →
+`put_dedup`, MISS. Ghi chú: gọi lại cùng `latlng_at` thì version `based_on` bằng nhau nên Redis tự từ chối ghi — dedup
+chỉ thực sự cần khi Mobix gửi cùng chỗ với `latlng_at` mới hơn. `RedisStore` tự nối lại khi kết nối hỏng (hiredis
+không tự làm), đọc lỗi kết nối giờ ném thay vì coi là "không có". Kiểm: `test_gateway_replan` qua HTTP + Redis thật
+(401/404/400, MISS → HIT, GPS rung + `latlng_at` mới → HIT, đổi vị trí → MISS, IN mới → MISS, route worker mới hơn
+thắng, Redis cắt kết nối → request sau 200); làm hỏng dedup / làm tròn / `planned_at` / nối lại / trả bản bị từ chối
+→ test đỏ. E2E: Kafka IN → worker → `curl route` → `curl replan` MISS → gọi lại HIT → `curl route` ra bản replan;
+KTV lạ 404. `docs/MOBIX-REPLAN-API-DRAFT.md` viết lại theo 7.4. `ctest` 18/18.
 
 **Kết quả 7.3 — worker T1 (2026-10-01):** `adapter/publish.{hpp,cpp}`: `plan_and_store(payload, fallback_id, now,
 version, rules, osrm, store)` = parse → `put_state` → vị trí Mobix → `plan()` → `put_route`; gateway T2 (7.4) gọi

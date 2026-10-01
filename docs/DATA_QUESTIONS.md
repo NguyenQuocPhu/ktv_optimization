@@ -35,7 +35,8 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 
 - Envelope thật của OA: `message_id`, `planned_at`, `trigger` nằm trong body hay header Kafka? Key message là gì? (Worker đang log header để soi khi có message đầu tiên.)
 - Ý nghĩa `task_status_id` ngoài 6/10 (staging có 0 và 97): có status nào khác cần xếp tuyến không? Hiện chỉ status 6 được xếp.
-- Message IN đầu ngày có cần tự tính tuyến không, hay chỉ tính khi Mobix gọi `replan`? (IMPLEMENTATION_SPEC Phase 7)
+- OA có gửi message IN mới cho KTV **mỗi khi task đổi trạng thái** (check-in, hoàn tất, gán thêm, đổi hẹn) không, hay chỉ khi gán việc? Route (worker lẫn `replan`) chỉ biết danh sách việc trong IN mới nhất: nếu OA không gửi lại, việc KTV đã làm xong vẫn nằm trong tuyến tới IN kế tiếp. (Đã chốt 2026-10-01: IN mới thì worker tính luôn — IMPLEMENTATION_SPEC Phase 7.)
+- Kafka timestamp của topic IN là `CreateTime` (giờ OA gửi) hay `LogAppendTime`? Version của state dùng timestamp này (Phase 7.3).
 - Các câu nghiệp vụ Q1–Q26 ở [BUSINESS_RULES.md](BUSINESS_RULES.md) mục 11.
 
 ## Nhật ký trả lời
