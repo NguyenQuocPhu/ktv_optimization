@@ -26,7 +26,7 @@ Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ ga
 | `ktv_worker` đọc Kafka IN → state + route vào Redis (`--redis`) | ✅ Phase 7.1–7.3 |
 | `ktv_gateway` `GET /staff/{id}/route` + `GET /staff/{id}/replan` (Redis) | ✅ Phase 7.4 |
 | Produce Kafka OUT (worker + gateway) | ✅ Phase 7.5 (chờ SYS cấp topic OUT thật) |
-| Compose chạy worker + gateway + Redis | ⏳ Phase 7.6 |
+| Compose chạy worker + gateway + Redis + Kafka local | ✅ Phase 7.6 |
 
 ## Hợp đồng dữ liệu
 
@@ -131,6 +131,35 @@ sudo docker compose up -d redis kafka
 sudo docker compose ps
 redis-cli -h 127.0.0.1 ping
 ```
+
+### Chạy cả cụm local (Phase 7.6)
+
+Profile `app` thêm `kafka-init` (tạo topic `ktv-local-in` / `ktv-local-out`), `ktv-worker` (`/healthz` `/readyz` ở 8081) và `ktv-gateway` (API ở 8080). Cấu hình Kafka/Redis **local** khai thẳng trong `compose.yaml`, không đọc `.env` gốc (cấu hình cluster thật). `--env-file /dev/null` để compose không đọc `.env` gốc khi thay biến.
+
+```bash
+docker compose --env-file /dev/null --profile app up -d --build
+curl -s localhost:8080/readyz; curl -s localhost:8081/readyz           # {"ready":true...}
+
+# Đẩy một IN mẫu (KTV DEMO01, 3 việc)
+docker exec -i ktv-kafka /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 --topic ktv-local-in < data/sample/in_demo.json
+
+H='Authorization: Bearer dev-token'                                   # đổi bằng KTV_GATEWAY_TOKEN khi up
+curl -s -H "$H" localhost:8080/api/v1/staff/DEMO01/route              # route worker tính từ IN (202 nếu chưa xong)
+curl -si -H "$H" 'localhost:8080/api/v1/staff/DEMO01/replan?latlng=21.0450,105.8000'   # X-Cache: MISS
+curl -si -H "$H" 'localhost:8080/api/v1/staff/DEMO01/replan?latlng=21.0450,105.8000'   # X-Cache: HIT
+
+# Kafka OUT: 1 bản DAY_START (worker) + 1 bản MOBIX_REPLAN (replan MISS)
+docker exec ktv-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic ktv-local-out --from-beginning --timeout-ms 5000 --property print.key=true
+
+docker compose --env-file /dev/null --profile app down               # SIGTERM: gateway đẩy nốt OUT rồi thoát
+```
+
+- Container nối Kafka qua `kafka:19092` (listener nội bộ); công cụ trên máy vẫn dùng `localhost:9092`.
+- `docker build` báo `429 Too Many Requests` khi kéo `ubuntu:22.04`: Docker Hub giới hạn lượt kéo ẩn danh → `docker login` rồi build lại.
+- Mạng công ty (ra Internet qua proxy): `apt-get` trong lúc build không có proxy → truyền build-arg, proxy không lưu vào image:
+  `docker compose --env-file /dev/null --profile app build --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_proxy`
 
 Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi: chim bay p95 dưới 1 ms, chậm nhất 122 ms (12 việc giải chính xác); OSRM tự host p50 3 ms, p95 10 ms, chậm nhất 54 ms. Tổng km đường bộ gấp 1,54 lần chim bay và 19% số lần ra thứ tự khác.
 
@@ -262,7 +291,7 @@ Lịch sử: bản Python đầy đủ trong tag `python-legacy-2026-09-30`; b�
 | 3b, 4 | dp | ⏳ nhiều khung giờ (OT); rule 4 giữ tuyến cũ khi reoptimize |
 | 5.x | travel, adapter, cluster | ✅ OSRM tự host, hardening CLI |
 | 6.x | gateway | ✅ store + HTTP + Redis (đồ nghề dev) |
-| 7 | kafka, gateway | 🟡 7.1–7.4 ✅ (đọc IN, Redis state/route, worker ghi Redis, gateway route + replan); 7.5 produce OUT ✅; 7.6 compose ⏳ |
+| 7 | kafka, gateway | ✅ 7.1–7.4 ✅ (đọc IN, Redis state/route, worker ghi Redis, gateway route + replan); 7.5 produce OUT ✅; 7.6 compose ✅ |
 | — | vận hành | ✅ Dockerfile, CI |
 | 8 | service | ⏳ reoptimize theo yêu cầu KTV |
 | 9 | binding | ❌ đã bỏ: Python legacy xóa 2026-09-30; chỉ làm pybind11 nếu cần chạy lại backtest/mô phỏng |

@@ -655,7 +655,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.3 ✅ | Worker T1: IN → state → `plan()` → route cache (kết quả bên dưới) | E2E: đẩy IN → đọc được route trong Redis; IN cũ không đè IN mới |
 | 7.4 ✅ | Gateway: `GET route` + `GET replan` (kết quả bên dưới) | HTTP test: replan trả route mới; gọi lại cùng vị trí → HIT; đổi vị trí → MISS; không có state → 404 |
 | 7.5 ✅ | Producer OUT, nối vào T1 và T2 (kết quả bên dưới) | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
-| 7.6 | Vận hành: compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
+| 7.6 ✅ | Vận hành (kết quả bên dưới): compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
 | sau | JWT thay token tĩnh, rate limit, OUT thêm `location`/`latlng` mỗi TASK (cần OA đồng ý) | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -675,6 +675,22 @@ Authorization: Bearer <token>       Cache-Control: no-store
 Còn mở (không chặn code): tên topic OUT + quyền WRITE (SYS); envelope thật của OA (chờ message đầu tiên);
 key của message IN (nếu OA không key theo `staff_id`, hai message của cùng KTV có thể nằm khác partition —
 version của state xử lý được thứ tự đến).
+
+**Kết quả 7.6 — vận hành (2026-10-01):** `compose.yaml`: Kafka thêm listener `INTERNAL`
+(`kafka:19092`) cho container, host giữ `localhost:9092`; profile `app` gồm `kafka-init` (tạo `ktv-local-in/out`),
+`worker` (`--redis redis:6379 --health-port 8081`), `gateway` (`--redis --env /dev/null --token
+${KTV_GATEWAY_TOKEN:-dev-token}`), Kafka local khai thẳng trong compose, không đọc `.env` gốc. Gateway: `/readyz`
+= `RedisStore::ping()` (nối lại + thử thêm 1 lần, vì kết nối rớt chỉ lộ ra ở lệnh đầu tiên — test bắt được `/readyz` báo
+503 sai), `/healthz` giữ "process sống"; SIGINT/SIGTERM: chặn tín hiệu ở mọi thread, luồng chính `sigwait` → dừng
+server → producer đẩy nốt OUT (≤ 5 s). `data/sample/in_demo.json` (KTV `DEMO01`, 3 việc, không `planned_at`, ca
+06:00–22:00, `validate` strict qua) + mục README "Chạy cả cụm local". Người dùng duyệt A–D. Kiểm: `ctest` 18/18
+(`/readyz` có/không Redis, sau khi bị cắt kết nối); `kafka-init` tạo topic qua `kafka:19092` (listener nội bộ chạy);
+các bước demo trong README chạy bằng binary trên host (route 200, replan MISS → HIT, OUT đúng 2 bản, SIGTERM thoát sạch).
+Compose đầy đủ (sau `docker login`; mạng công ty build qua `--build-arg http_proxy/https_proxy`): image `ktv-core:local`
+131 MB, `ctest` trong image 18/18 (test Redis SKIP lúc build); `--profile app up` → `/readyz` worker + gateway 200; đẩy
+`in_demo.json` → route 200 thứ tự `[2, 1, 3]`; replan tại vị trí việc 3 → MISS, thứ tự `[3, 1, 2]`; gọi lại → HIT;
+thiếu token → 401; OUT có `DAY_START` + `MOBIX_REPLAN`; `/healthz` gateway `out_failed: 0`; `compose stop` → worker
+và gateway thoát mã 0, gateway log "đẩy nốt OUT".
 
 **Kết quả 7.5 — produce OUT (2026-10-01):** `kafka/producer.{hpp,cpp}`: `KafkaProducer` (`send` không chờ, không
 ném — lỗi thì log + đếm `failed()`; `flush(timeout)` = mọi message tới nơi và không có lỗi mới). Cấu hình producer
