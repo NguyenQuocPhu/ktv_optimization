@@ -9,6 +9,7 @@
 
 #include <hiredis/hiredis.h>
 
+#include "ktv/adapter/file.hpp"
 #include "ktv/adapter/publish.hpp"
 
 static int failures = 0;
@@ -84,7 +85,7 @@ int main() {
     const ktv::Minutes now = *ktv::parse_datetime("2026-10-01 09:00:00");
     const std::string home = "21.02,105.80";
     const auto run = [&](const json& payload, const ktv::Version& version, ktv::RedisStore* target) {
-        return ktv::plan_and_store(payload.dump(), "t-0-1", now, version, rules, "", target);
+        return ktv::plan_and_store(payload, ktv::local_envelope(payload, "t-0-1", now), now, version, rules, "", target);
     };
 
     try {

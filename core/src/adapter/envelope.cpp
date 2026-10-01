@@ -10,7 +10,7 @@ nlohmann::ordered_json wrap_response(const Envelope& envelope, const nlohmann::o
     };
     nlohmann::ordered_json out;
     out["message_id"] = envelope.message_id;
-    out["run_code"] = envelope.message_id;  // prototype: mỗi lần tính một run_code riêng.
+    out["run_code"] = envelope.run_code.empty() ? envelope.message_id : envelope.run_code;
     out["trigger"] = envelope.trigger;
     out["planned_at"] = format_datetime(envelope.planned_at);
     out["schema_version"] = "1";

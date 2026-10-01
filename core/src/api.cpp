@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <regex>
 #include <set>
 
@@ -76,6 +77,8 @@ void civil_from_days(long long z, int& y, unsigned& m, unsigned& d) {
 }
 
 }  // namespace
+
+Minutes vietnam_now() { return static_cast<Minutes>(std::time(nullptr) / 60) + 7 * 60; }
 
 std::optional<Point> parse_latlng(const std::string& text) {
     static const std::regex pattern(R"(^(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)$)");

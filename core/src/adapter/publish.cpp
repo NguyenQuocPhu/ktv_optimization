@@ -25,15 +25,20 @@ std::optional<std::int64_t> apply_mobix_loc(const Versioned& loc, Minutes now, S
 
 }  // namespace
 
-Published plan_and_store(const std::string& payload, const std::string& fallback_id, Minutes now,
-                         const Version& version, const Rules& rules, const std::string& osrm_url, RedisStore* store) {
+std::int64_t stamp(Minutes value) {
+    std::string digits;
+    for (char c : format_datetime(value))
+        if (c >= '0' && c <= '9') digits += c;
+    return std::stoll(digits);
+}
+
+Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, const Version& version,
+                         const Rules& rules, const std::string& osrm_url, RedisStore* store) {
     Published result;
-    const json value = json::parse(payload, nullptr, false);
-    const Envelope envelope = local_envelope(value, fallback_id, now);
     result.message_id = envelope.message_id;
 
     std::vector<Error> errors;
-    Message message = parse_record(value, envelope, errors, &result.warnings);
+    Message message = parse_record(in, envelope, errors, &result.warnings);
     if (!errors.empty()) {
         result.status = "400";
         result.out = wrap_response(envelope, bad_request(errors, envelope.message_id, now));
@@ -43,7 +48,7 @@ Published plan_and_store(const std::string& payload, const std::string& fallback
     const std::string& staff_id = message.staff.staff_id;
     Version based_on = version;
     if (store) {
-        if (!store->put_state(staff_id, payload, version)) {
+        if (!store->put_state(staff_id, in.dump(), version)) {
             const std::optional<Versioned> current = store->get_state(staff_id);
             if (!current || current->version != version) {
                 result.status = "STALE";

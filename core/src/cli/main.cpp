@@ -18,7 +18,6 @@
 
 namespace {
 
-ktv::Minutes vietnam_now() { return static_cast<ktv::Minutes>(std::time(nullptr) / 60) + 7 * 60; }
 
 int usage() {
     std::cerr << "cách dùng:\n  ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"] [--out responses.jsonl]\n"
@@ -63,7 +62,7 @@ int main(int argc, char** argv) {
     const std::vector<ktv::json> records = ktv::read_records(in);
 
     // --at giúp test xác định giờ. Sai format phải báo lỗi, không âm thầm dùng giờ máy.
-    ktv::Minutes server_now = vietnam_now();
+    ktv::Minutes server_now = ktv::vietnam_now();
     if (!at.empty()) {
         if (auto parsed = ktv::parse_datetime(at)) {
             server_now = *parsed;

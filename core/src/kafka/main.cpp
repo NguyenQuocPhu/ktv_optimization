@@ -31,6 +31,7 @@
 #include <thread>
 #include <vector>
 
+#include "ktv/adapter/file.hpp"
 #include "ktv/adapter/http.hpp"
 #include "ktv/adapter/publish.hpp"
 #include "ktv/kafka/config.hpp"
@@ -42,7 +43,6 @@ namespace {
 volatile std::sig_atomic_t g_stop = 0;  // Ctrl-C / SIGTERM: xong message đang xử lý rồi thoát, đóng consumer đàng hoàng.
 void request_stop(int) { g_stop = 1; }
 
-ktv::Minutes vietnam_now() { return static_cast<ktv::Minutes>(std::time(nullptr) / 60) + 7 * 60; }
 
 int usage() {
     std::cerr << "cách dùng:\n"
@@ -264,13 +264,15 @@ int main(int argc, char** argv) {
             health.last_broker_ok = health.last_poll.load();  // nhận được message = broker đang nối
             ++processed;
 
-            const ktv::Minutes now = fixed_now.value_or(vietnam_now());
+            const ktv::Minutes now = fixed_now.value_or(ktv::vietnam_now());
             // Thiếu message_id: lấy vị trí Kafka làm ID — không trùng giữa các lần chạy / replica.
             const std::string position =
                 record->topic + "-" + std::to_string(record->partition) + "-" + std::to_string(record->offset);
             // Lỗi Redis ném ra vòng ngoài: thoát, KHÔNG commit. Lỗi tính tuyến đã thành 500 bên trong.
-            const ktv::Published published = ktv::plan_and_store(
-                record->payload, position, now, {record->timestamp_ms, record->offset}, rules, osrm_url, store.get());
+            const ktv::json in = ktv::json::parse(record->payload, nullptr, false);
+            const ktv::Published published =
+                ktv::plan_and_store(in, ktv::local_envelope(in, position, now), now, {record->timestamp_ms, record->offset},
+                                    rules, osrm_url, store.get());
             const std::string& status = published.status;
             const std::vector<ktv::Error>& warnings = published.warnings;
             const std::string line =
@@ -286,7 +288,7 @@ int main(int argc, char** argv) {
                 std::lock_guard<std::mutex> lock(health.mutex);
                 ++health.processed;
                 ++health.by_status[status];
-                health.last_message_at = ktv::format_datetime(vietnam_now());
+                health.last_message_at = ktv::format_datetime(ktv::vietnam_now());
             }
 
             std::cerr << "#" << processed << " " << position << " key=" << record->key << " status=" << status;

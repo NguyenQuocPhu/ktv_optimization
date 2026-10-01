@@ -2,8 +2,9 @@
 // adapter/publish — TÍNH TUYẾN + GHI REDIS cho một message IN (dùng chung worker T1, gateway T2)
 // ============================================================================
 // Hiểu nhanh:
-//   Vào: payload IN (chuỗi JSON nguyên văn) + version của nó. Ra: response đã gói (= OUT), đồng thời
-//   state và route nằm trong Redis để Mobix đọc.
+//   Vào: message IN (JSON) + envelope do bên gọi dựng + version của IN. Ra: response đã gói (= OUT), đồng thời
+//   state và route nằm trong Redis để Mobix đọc. Worker: envelope lấy từ IN (local_envelope). Gateway replan:
+//   cùng message_id, run_code riêng, trigger MOBIX_REPLAN, planned_at = giờ gọi.
 //     1. parse nới lỏng; 400 (staff hỏng, không biết KTV nào) → trả luôn, không đụng Redis
 //     2. put_state; IN cũ hơn cái đang có → bỏ qua, không tính (status "STALE")
 //        bằng version = Kafka giao lại cùng IN (lần trước chết giữa chừng) → vẫn tính, ghi route lại
@@ -15,13 +16,15 @@
 //   Lỗi Redis → ném ra ngoài (worker thoát, không commit, đọc lại message sau khi restart).
 //
 // Dùng thế nào:
-//   Published r = plan_and_store(record.payload, "topic-0-123", now, {record.timestamp_ms, record.offset},
-//                                rules, osrm_url, &store);      // store = nullptr: không Redis
+//   json in = json::parse(record.payload, nullptr, false);
+//   Published r = plan_and_store(in, local_envelope(in, "topic-0-123", now), now,
+//                                {record.timestamp_ms, record.offset}, rules, osrm_url, &store);  // nullptr: không Redis
 //   if (r.out) write(r.out->dump());                            // không có = IN cũ, đã bỏ qua
 //
 // Trong file này có:
 //   Published        kết quả một lần tính
 //   plan_and_store   HÀM CHÍNH
+//   stamp            Minutes → số yyyymmddHHMMSS (dùng trong version)
 //
 // Phụ thuộc: adapter/file (envelope, parse_record), plan, gateway/redis_store (chỉ build khi có hiredis).
 // ============================================================================
@@ -31,6 +34,7 @@
 #include <string>
 #include <vector>
 
+#include "ktv/adapter/envelope.hpp"
 #include "ktv/api.hpp"
 #include "ktv/gateway/redis_store.hpp"
 #include "ktv/rules.hpp"
@@ -49,8 +53,12 @@ struct Published {
     bool used_mobix_loc = false;                // true = đã thay vị trí IN bằng vị trí Mobix.
 };
 
-// HÀM CHÍNH. version: version của state, VD {timestamp Kafka ms, offset}. now: giờ VN lúc tính.
-Published plan_and_store(const std::string& payload, const std::string& fallback_id, Minutes now,
-                         const Version& version, const Rules& rules, const std::string& osrm_url, RedisStore* store);
+// HÀM CHÍNH. in: message IN (JSON hỏng = discarded → 400). version: version của state, VD {timestamp Kafka ms,
+// offset}. now: giờ VN lúc tính. State lưu lại = in.dump().
+Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, const Version& version,
+                         const Rules& rules, const std::string& osrm_url, RedisStore* store);
+
+// 2026-10-01 09:20 → 20261001092000.
+std::int64_t stamp(Minutes value);
 
 }  // namespace ktv
