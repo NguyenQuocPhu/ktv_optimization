@@ -2,6 +2,7 @@
 
 #include <hiredis/hiredis.h>
 
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -31,9 +32,58 @@ struct Reply {
     bool ok() const { return value && value->type != REDIS_REPLY_ERROR; }
 };
 
+// Ghi hash {json, v} khi version mới hơn hẳn version đang có (so từ trái sang, thiếu = 0).
+// KEYS[1] hash, KEYS[2] latest (tùy chọn). ARGV: ttl, json, có version? ("1"/"0"), version "n1 n2 ..", date.
+// Khóa cũ không phải hash (dạng chuỗi trước Phase 7.2) → xóa rồi ghi.
+const char* const kSetIfNewer = R"lua(
+if redis.call('TYPE', KEYS[1]).ok ~= 'hash' then redis.call('DEL', KEYS[1]) end
+if ARGV[3] == '1' then
+  local old = redis.call('HGET', KEYS[1], 'v')
+  if old then
+    local a, b = {}, {}
+    for x in string.gmatch(ARGV[4], '%S+') do a[#a + 1] = tonumber(x) end
+    for x in string.gmatch(old, '%S+') do b[#b + 1] = tonumber(x) end
+    local newer = false
+    for i = 1, math.max(#a, #b) do
+      local x, y = a[i] or 0, b[i] or 0
+      if x ~= y then newer = x > y break end
+    end
+    if not newer then return 0 end
+  end
+end
+redis.call('HSET', KEYS[1], 'json', ARGV[2], 'v', ARGV[4])
+redis.call('EXPIRE', KEYS[1], ARGV[1])
+if #KEYS > 1 then
+  local latest = redis.call('GET', KEYS[2])
+  if (not latest) or ARGV[5] >= latest then redis.call('SET', KEYS[2], ARGV[5], 'EX', ARGV[1]) end
+end
+return 1
+)lua";
+
+std::string join(const Version& version) {
+    std::string out;
+    for (std::int64_t number : version) {
+        if (!out.empty()) out += ' ';
+        out += std::to_string(number);
+    }
+    return out;
+}
+
+Version split(const std::string& text) {
+    Version out;
+    std::istringstream in(text);
+    for (std::int64_t number; in >> number;) out.push_back(number);
+    return out;
+}
+
+std::string reply_error(redisContext* context, const Reply& reply) {
+    if (reply.value && reply.value->type == REDIS_REPLY_ERROR) return std::string(reply.value->str, reply.value->len);
+    return context->err ? context->errstr : "không có reply";
+}
+
 }  // namespace
 
-RedisRouteStore::RedisRouteStore(const Config& config) : config_(config) {
+RedisStore::RedisStore(const Config& config) : config_(config) {
     const timeval timeout{1, 500000};  // 1.5 giây
     context_ = redisConnectWithTimeout(config_.host.c_str(), config_.port, timeout);
     const auto fail = [&](const std::string& reason) -> void {
@@ -69,19 +119,41 @@ RedisRouteStore::RedisRouteStore(const Config& config) : config_(config) {
     }
 }
 
-RedisRouteStore::~RedisRouteStore() {
+RedisStore::~RedisStore() {
     if (context_) redisFree(context_);
 }
 
-std::string RedisRouteStore::route_key(const std::string& staff_id, const std::string& date) const {
-    return config_.prefix + "route:" + staff_id + ":" + date;
+std::string RedisStore::key(const std::string& kind, const std::string& staff_id) const {
+    return config_.prefix + kind + ":" + staff_id;
 }
 
-std::string RedisRouteStore::latest_key(const std::string& staff_id) const {
-    return config_.prefix + "latest:" + staff_id;
+bool RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, const std::string& json,
+                              const std::optional<Version>& version, const std::string& latest_key,
+                              const std::string& date) {
+    std::vector<std::string> arguments{"EVAL", kSetIfNewer, latest_key.empty() ? "1" : "2", hash_key};
+    if (!latest_key.empty()) arguments.push_back(latest_key);
+    arguments.insert(arguments.end(), {std::to_string(ttl_seconds), json, version ? "1" : "0",
+                                       version ? join(*version) : "", date});
+    std::lock_guard<std::mutex> lock(mutex_);
+    Reply reply(context_, arguments);
+    if (!reply.ok() || reply.value->type != REDIS_REPLY_INTEGER)
+        throw std::runtime_error("redis: ghi " + hash_key + " thất bại (" + reply_error(context_, reply) + ")");
+    return reply.value->integer == 1;
 }
 
-std::optional<std::string> RedisRouteStore::get_value(const std::string& key) const {
+std::optional<Versioned> RedisStore::get_hash(const std::string& hash_key) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    Reply reply(context_, {"HMGET", hash_key, "json", "v"});
+    if (!reply.ok() || reply.value->type != REDIS_REPLY_ARRAY || reply.value->elements != 2) return std::nullopt;
+    const redisReply* json = reply.value->element[0];
+    const redisReply* version = reply.value->element[1];
+    if (json->type != REDIS_REPLY_STRING) return std::nullopt;
+    Versioned out{std::string(json->str, json->len), {}};
+    if (version->type == REDIS_REPLY_STRING) out.version = split(std::string(version->str, version->len));
+    return out;
+}
+
+std::optional<std::string> RedisStore::get_value(const std::string& key) const {
     std::lock_guard<std::mutex> lock(mutex_);
     Reply reply(context_, {"GET", key});
     if (reply.value && reply.value->type == REDIS_REPLY_STRING)
@@ -89,29 +161,38 @@ std::optional<std::string> RedisRouteStore::get_value(const std::string& key) co
     return std::nullopt;
 }
 
-bool RedisRouteStore::set_value(const std::string& key, const std::string& value) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(context_, {"SET", key, value, "EX", std::to_string(config_.ttl_seconds)});
-    return reply.ok();
+bool RedisStore::put_state(const std::string& staff_id, const std::string& json, const Version& version) {
+    return set_if_newer(key("state", staff_id), config_.state_ttl_seconds, json, version);
 }
 
-void RedisRouteStore::put(const std::string& staff_id, const std::string& date, std::string json) {
-    if (!set_value(route_key(staff_id, date), json)) throw std::runtime_error("redis: SET route thất bại");
-    const std::optional<std::string> latest = get_value(latest_key(staff_id));
-    if (!latest || date >= *latest) set_value(latest_key(staff_id), date);
+std::optional<Versioned> RedisStore::get_state(const std::string& staff_id) const {
+    return get_hash(key("state", staff_id));
 }
 
-std::optional<std::string> RedisRouteStore::get(const std::string& staff_id, const std::string& date) const {
-    return get_value(route_key(staff_id, date));
+bool RedisStore::put_route(const std::string& staff_id, const std::string& date, const std::string& json,
+                           const Version& based_on) {
+    return set_if_newer(key("route", staff_id + ":" + date), config_.route_ttl_seconds, json, based_on,
+                        key("latest", staff_id), date);
 }
 
-std::optional<std::string> RedisRouteStore::get_latest(const std::string& staff_id) const {
-    const std::optional<std::string> date = get_value(latest_key(staff_id));
+void RedisStore::put(const std::string& staff_id, const std::string& date, std::string json) {
+    set_if_newer(key("route", staff_id + ":" + date), config_.route_ttl_seconds, json, std::nullopt,
+                 key("latest", staff_id), date);
+}
+
+std::optional<std::string> RedisStore::get(const std::string& staff_id, const std::string& date) const {
+    const std::optional<Versioned> route = get_hash(key("route", staff_id + ":" + date));
+    if (!route) return std::nullopt;
+    return route->json;
+}
+
+std::optional<std::string> RedisStore::get_latest(const std::string& staff_id) const {
+    const std::optional<std::string> date = get_value(key("latest", staff_id));
     if (!date) return std::nullopt;
     return get(staff_id, *date);
 }
 
-std::size_t RedisRouteStore::size() const {
+std::size_t RedisStore::size() const {
     std::lock_guard<std::mutex> lock(mutex_);
     std::size_t count = 0;
     std::string cursor = "0";
@@ -124,6 +205,25 @@ std::size_t RedisRouteStore::size() const {
         if (keys->type == REDIS_REPLY_ARRAY) count += keys->elements;
     } while (cursor != "0");
     return count;
+}
+
+bool RedisStore::put_loc(const std::string& staff_id, const std::string& json, const Version& version) {
+    return set_if_newer(key("loc", staff_id), config_.loc_ttl_seconds, json, version);
+}
+
+std::optional<Versioned> RedisStore::get_loc(const std::string& staff_id) const {
+    return get_hash(key("loc", staff_id));
+}
+
+void RedisStore::put_dedup(const std::string& staff_id, const std::string& fingerprint) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    Reply reply(context_,
+                {"SET", key("dedup", staff_id), fingerprint, "EX", std::to_string(config_.dedup_ttl_seconds)});
+    if (!reply.ok()) throw std::runtime_error("redis: ghi dedup thất bại (" + reply_error(context_, reply) + ")");
+}
+
+std::optional<std::string> RedisStore::get_dedup(const std::string& staff_id) const {
+    return get_value(key("dedup", staff_id));
 }
 
 }  // namespace ktv

@@ -55,11 +55,12 @@ core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/resp
 core/build/ktv_gateway --port 8080 --seed artifacts/fake/responses_v2.jsonl --token secret
 # → GET http://127.0.0.1:8080/api/v1/worklist/{staff_id}?date=YYYY-MM-DD  ·  /healthz
 
-# Gateway + Redis (nhiều replica, sống qua restart). Key: {prefix}route|latest:{...}
+# Gateway + Redis (nhiều replica, sống qua restart). Khóa: {prefix}state|route|latest|loc|dedup:{...} (gateway/redis_store.hpp)
 core/build/ktv_gateway --port 8080 --token secret \
   --redis 127.0.0.1:6379 --redis-prefix ktv: --seed artifacts/fake/responses_v2.jsonl
 redis-cli --scan --pattern 'ktv:*' | head          # xem key
-redis-cli TTL ktv:route:00201964:2026-06-08        # ~604800 giây (7 ngày)
+redis-cli TTL ktv:route:00201964:2026-06-08        # ~172800 giây (2 ngày)
+redis-cli HGET ktv:route:00201964:2026-06-08 json  # route là hash {json, v}; v = based_on
 ```
 
 Kafka worker cần `librdkafka`; thiếu thì binary tự tắt, phần còn lại vẫn build.
@@ -99,7 +100,7 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 | ✅ 5.2 | cluster | Tách `summarize_clusters`; plan chỉ còn điều phối |
 | ✅ 6.1 | gateway/store, gateway/seed | `RouteStore` + `MemoryRouteStore`, loader OUT JSONL |
 | ✅ 6.2 | gateway/server, gateway/main | `ktv_gateway`: `GET /worklist/{staff_id}`, `/healthz` |
-| ✅ 6.3 | gateway/redis_store | `RedisRouteStore` (hiredis optional), `--redis HOST:PORT` |
+| ✅ 6.3 | gateway/redis_store | `RedisRouteStore` (hiredis optional), `--redis HOST:PORT` — đổi tên `RedisStore` ở 7.2 |
 | 🟡 7 | kafka, gateway | Đọc IN + hardening + `/healthz` ✅; 7A state cache + API `replan` (Mobix gọi, kết quả ra OUT); produce OUT ⏸ tạm hoãn |
 | 8 | service | Reoptimize do KTV yêu cầu: chốt mode + owner snapshot/baseline rồi làm (sau Kafka) |
 | 9 | binding | (đã bỏ) Python legacy xóa 2026-09-30 (tag `python-legacy-2026-09-30`); chỉ làm pybind11 nếu cần chạy lại backtest/mô phỏng |

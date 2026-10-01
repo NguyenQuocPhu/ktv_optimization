@@ -255,7 +255,7 @@ Gateway replan (Phase 7A) ─────┴─> parse_message (api)
 | `cli` | binary thật: object/JSONL/`--at`/lỗi | end-to-end |
 | `invariants` | 3.000 message sinh ngẫu nhiên (seeded) + benchmark 5.332 message (chỉ khi có `artifacts/fake/messages.jsonl`, không nằm trong git), kiểm bất biến và tất định | ~380.000 kiểm, 2,8 s |
 | `gateway_store`, `gateway_seed`, `gateway_server` | store RAM, nạp file OUT, HTTP `worklist`/`healthz`/token | nhỏ |
-| `gateway_redis` | `RedisRouteStore` trên Redis thật (chỉ build khi có hiredis; không kết nối được thì bỏ qua) | nhỏ |
+| `gateway_redis` | `RedisStore` trên Redis thật (route, state/route/loc có version, dedup, TTL) (chỉ build khi có hiredis; không kết nối được thì bỏ qua) | nhỏ |
 | `kafka_config` | đọc `.env`, env đè file, `KAFKA_USE_SASL`, validate | nhỏ; đọc cả biến môi trường thật |
 
 `ktv_worker` chưa có test tự động (cần broker): kiểm bằng E2E Kafka local, xem kết quả Phase 7.
@@ -614,7 +614,7 @@ Mobix ── GET route ──▶ ktv_gateway ── đọc route cache ──▶
 | Khóa | Giá trị | Ai ghi | TTL |
 |---|---|---|---|
 | `ktv:state:{staff}` | message IN mới nhất + `version` (`planned_at`, rồi offset) | worker | 2 ngày |
-| `ktv:route:{staff}:{date}`, `ktv:latest:{staff}` (đã có, Phase 6.3) | response đã gói (giống OUT) + `based_on` {state version, `latlng_at`} | worker, gateway | 7 ngày |
+| `ktv:route:{staff}:{date}`, `ktv:latest:{staff}` (đã có, Phase 6.3) | response đã gói (giống OUT) + `based_on` {state version, `latlng_at`} | worker, gateway | 2 ngày |
 | `ktv:loc:{staff}` | vị trí Mobix gửi gần nhất {`latlng`, `latlng_at`} | gateway | 1 ngày |
 | `ktv:dedup:{staff}` | fingerprint lần tính cuối = state version + `latlng` làm tròn 4 chữ số (~11 m) | gateway | 1 ngày |
 
@@ -640,7 +640,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 
 | Phần | File | Ghi chú |
 |---|---|---|
-| Redis | `gateway/redis_store.*` | Thêm state / route có version (Lua) / loc / dedup vào `RedisRouteStore` hiện có (đổi tên thành `RedisStore`), không tạo class mới |
+| Redis ✅ | `gateway/redis_store.*` | `RedisRouteStore` đổi tên `RedisStore`, thêm state / route có version (Lua) / loc / dedup, không tạo class mới |
 | Producer | `kafka/producer.{hpp,cpp}` | librdkafka, idempotent, key = `staff_id`, chờ delivery report. `KAFKA_TOPIC_OUT` trống → bỏ qua produce, log một lần (deploy được trước khi SYS cấp topic) |
 | Tính + phát | `adapter/publish.{hpp,cpp}` | Một hàm dùng chung cho T1 và T2: `plan()` → ghi route cache → produce OUT. Không đặt trong `plan`/`dp` |
 | Worker | `kafka/main.cpp` | Thêm `--redis HOST:PORT`, `--redis-prefix`; luồng T1 |
@@ -651,7 +651,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | Phase | Nội dung | Gate |
 |---|---|---|
 | 7.1 ✅ | `ktv_worker` đọc IN + hardening + `/healthz` `/readyz` (kết quả bên dưới) | E2E Kafka local |
-| 7.2 | Redis: state + route có version (Lua) + loc + dedup | test trên Redis thật: ghi cũ không đè mới, TTL đúng |
+| 7.2 ✅ | Redis: state + route có version (Lua) + loc + dedup (kết quả bên dưới) | test trên Redis thật: ghi cũ không đè mới, TTL đúng |
 | 7.3 | Worker T1: IN → state → `plan()` → route cache | E2E: đẩy IN → đọc được route trong Redis; IN cũ không đè IN mới |
 | 7.4 | Gateway: `GET route` + `GET replan` | HTTP test: replan trả route mới; gọi lại cùng vị trí → HIT; đổi vị trí → MISS; không có state → 404 |
 | 7.5 | Producer OUT, nối vào T1 và T2 | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
@@ -661,7 +661,8 @@ Authorization: Bearer <token>       Cache-Control: no-store
 #### Quyết định cần chốt (đang theo đề xuất)
 
 1. **IN mới thì tính luôn** (T1) — đề xuất **có**, để cache luôn có route khi Mobix đọc và OA có OUT từ đầu ngày.
-2. **State theo `staff`** (ngày nằm trong payload) — đề xuất **có**; route vẫn theo `(staff, date)` như Phase 6.3.
+2. **State theo `staff`** (ngày nằm trong payload) — **đã chốt 2026-10-01**; route vẫn theo `(staff, date)` như Phase 6.3.
+   Hệ quả đã biết: IN của ngày mai đến khi KTV còn đang chạy hôm nay sẽ thay state; `replan` sau đó tính trên IN mới.
 3. **Nhớ vị trí Mobix gửi** để lần tính từ IN sau dùng lại nếu `latlng_at` trong 60 phút gần đây — đề xuất **có**
    [giả định 60 phút]; không thì tuyến tính từ IN quay về vị trí cũ trong payload.
 4. **Đường đọc**: `GET /api/v1/staff/{id}/route` thay `GET /api/v1/worklist/{id}` (cùng họ với `replan`; Mobix
@@ -674,6 +675,19 @@ Authorization: Bearer <token>       Cache-Control: no-store
 Còn mở (không chặn code): tên topic OUT + quyền WRITE (SYS); envelope thật của OA (chờ message đầu tiên);
 key của message IN (nếu OA không key theo `staff_id`, hai message của cùng KTV có thể nằm khác partition —
 version của state xử lý được thứ tự đến).
+
+**Kết quả 7.2 — Redis (2026-10-01):** `RedisRouteStore` → `RedisStore` (`gateway/redis_store.*`), vẫn là
+`RouteStore` nên seed/GET cũ chạy y nguyên. State, route, vị trí lưu dạng **hash** `{json, v}`; `v` = version
+là dãy số nguyên cách nhau dấu cách, so từ trái sang (thiếu = 0, mỗi số < 2^53). Một Lua script
+(`EVAL`, nguyên tử) chỉ ghi khi version **mới hơn hẳn** — bằng nhau không ghi — và cập nhật `latest` trong cùng
+script (trước đây `GET` rồi `SET` riêng, hai replica có thể kéo `latest` lùi). Khóa route dạng chuỗi từ trước 7.2
+bị xóa rồi ghi lại (không lỗi WRONGTYPE); đọc khóa cũ trả "chưa có". `put()` không version (seed) luôn ghi đè.
+Version do bên gọi dựng (7.3/7.4), đề xuất: state `{planned_at yyyymmddHHMMSS, offset}`, route
+`{state..., latlng_at yyyymmddHHMMSS hoặc 0}`, vị trí `{latlng_at}`; dedup là chuỗi ghi đè thẳng. TTL: state
+2 ngày, route/latest 2 ngày (người dùng chốt 2026-10-01, trước là 7), loc/dedup 1 ngày (`Config`). Kiểm: `test_gateway_redis` trên Redis thật 7.4 (Docker `ktv-redis`) và 6.0 (apt) — IN đến
+trễ/bằng không đè, route chậm trên state cũ không đè, `latest` không lùi, khóa dạng cũ, loc, dedup, TTL từng
+loại, hai kết nối ghi song song 400 version → còn bản lớn nhất; làm hỏng phép so trong Lua → 8 chỗ FAIL. Test
+không còn nuốt ngoại lệ thành SKIP (chỉ lỗi kết nối mới SKIP). `ctest` 16/16.
 
 **Kết quả bước 1 — đọc IN (2026-09-30):** `core/include/ktv/kafka/{config,consumer}.hpp`,
 `core/src/kafka/{config,consumer,main}.cpp`, `tests/test_kafka_config.cpp`; binary `ktv_worker`
@@ -900,8 +914,7 @@ không làm state lùi — dùng Lua script `if new > old then SET`.
 gọi OSRM, `MGET` các cặp; thiếu mới gọi `/table` phần thiếu. Chỉ đáng làm nếu OSRM là nút cổ chai (đo trước).
 
 **D3. Route cache cho Mobix (nếu sau này cần).** Kết quả `plan()` mới nhất: `ktv:route:{staff}:{date}`
-— đã có `RedisRouteStore` ở Phase 6.3, chỉ cần gateway ghi vào sau khi tính. Hiện không phục vụ Mobix
-(hướng đã chốt là OUT), nhưng hữu ích để A6 và để debug "lần trước trả gì".
+— đã có `RedisStore` (Phase 6.3, 7.2). Theo hướng 2026-10-01 đây **là** nguồn trả route cho Mobix (Phase 7), nhưng hữu ích để A6 và để debug "lần trước trả gì".
 
 **D4. Vận hành Redis.** Bật AOF (`appendonly yes` như compose), `maxmemory` + `volatile-lru` (mọi khóa đều
 có TTL). Kích thước ước lượng: message IN ~5–20 KB × vài nghìn KTV → vài chục MB. Dùng Redis công ty nếu có

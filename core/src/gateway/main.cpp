@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
             std::cerr << "--redis cần dạng HOST:PORT\n";
             return 2;
         }
-        ktv::RedisRouteStore::Config config;
+        ktv::RedisStore::Config config;
         try {
             config.host = redis_addr.substr(0, colon);
             config.port = std::stoi(redis_addr.substr(colon + 1));
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
         config.password = redis_password;
         config.prefix = redis_prefix;
         try {
-            store = std::make_unique<ktv::RedisRouteStore>(config);
+            store = std::make_unique<ktv::RedisStore>(config);
         } catch (const std::exception& error) {
             std::cerr << error.what() << "\n";
             return 2;
