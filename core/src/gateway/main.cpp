@@ -1,5 +1,7 @@
-// CLI gateway read model: ktv_gateway --port 8080 [--host H] [--seed out.jsonl] [--token T]
-//                                    [--redis HOST:PORT [--redis-password P] [--redis-prefix KTV:]]
+// ktv_gateway: API của team cho Mobix — GET /api/v1/staff/{id}/route, GET /api/v1/staff/{id}/replan (cần Redis).
+//   ktv_gateway --port 8080 [--host H] [--seed out.jsonl] [--token T]
+//               [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]
+//               [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"]
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -17,7 +19,8 @@ namespace {
 
 int usage() {
     std::cerr << "cách dùng: ktv_gateway [--host H] [--port N] [--seed out.jsonl] [--token T]\n"
-                 "                   [--redis HOST:PORT [--redis-password P] [--redis-prefix KTV:]]\n";
+                 "                   [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]\n"
+                 "                   [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"]\n";
     return 2;
 }
 
@@ -25,7 +28,7 @@ int usage() {
 
 int main(int argc, char** argv) {
     ktv::GatewayOptions options;
-    std::string seed_path, redis_addr, redis_password, redis_prefix = "ktv:";
+    std::string seed_path, redis_addr, redis_password, redis_prefix = "ktv:", rules_path, at;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         try {
@@ -36,13 +39,31 @@ int main(int argc, char** argv) {
             else if (arg == "--redis" && i + 1 < argc) redis_addr = argv[++i];
             else if (arg == "--redis-password" && i + 1 < argc) redis_password = argv[++i];
             else if (arg == "--redis-prefix" && i + 1 < argc) redis_prefix = argv[++i];
+            else if (arg == "--rules" && i + 1 < argc) rules_path = argv[++i];
+            else if (arg == "--osrm" && i + 1 < argc) options.osrm_url = argv[++i];
+            else if (arg == "--at" && i + 1 < argc) at = argv[++i];
             else return usage();
         } catch (const std::exception&) {
             return usage();
         }
     }
 
+    try {
+        options.rules = rules_path.empty() ? ktv::default_rules() : ktv::load_rules(rules_path);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << "\n";
+        return 2;
+    }
+    if (!at.empty()) {
+        options.fixed_now = ktv::parse_datetime(at);
+        if (!options.fixed_now) {
+            std::cerr << "--at cần \"YYYY-MM-DD HH:mm:ss\": " << at << "\n";
+            return 2;
+        }
+    }
+
     std::unique_ptr<ktv::RouteStore> store;
+    ktv::RedisStore* redis = nullptr;
 #ifdef KTV_WITH_REDIS
     if (!redis_addr.empty()) {
         std::optional<ktv::RedisStore::Config> parsed = ktv::redis_config(redis_addr);
@@ -54,7 +75,9 @@ int main(int argc, char** argv) {
         config.password = redis_password;
         config.prefix = redis_prefix;
         try {
-            store = std::make_unique<ktv::RedisStore>(config);
+            auto redis_store = std::make_unique<ktv::RedisStore>(config);
+            redis = redis_store.get();
+            store = std::move(redis_store);
         } catch (const std::exception& error) {
             std::cerr << error.what() << "\n";
             return 2;
@@ -84,7 +107,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    auto server = ktv::make_gateway_server(*store, options);
+    auto server = ktv::make_gateway_server(*store, options, redis);
+    if (!redis) std::cerr << "ktv_gateway: không có --redis → /replan trả 503\n";
     std::cerr << "ktv_gateway nghe " << options.host << ":" << options.port
               << (options.token.empty() ? " (không token)" : " (có token)") << "\n";
     if (!server->listen(options.host, options.port)) {

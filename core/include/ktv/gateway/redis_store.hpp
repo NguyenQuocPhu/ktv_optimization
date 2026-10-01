@@ -74,7 +74,8 @@ public:
         int dedup_ttl_seconds = 24 * 3600;        // fingerprint: 1 ngày
     };
 
-    // Ném std::runtime_error nếu không kết nối / AUTH / SELECT được.
+    // Ném std::runtime_error nếu không kết nối / AUTH / SELECT được. Kết nối rớt sau đó: tự nối lại ở lệnh kế
+    // tiếp; lệnh gặp lúc rớt thì ném (đọc/ghi đều ném khi lỗi kết nối, không coi là "không có").
     explicit RedisStore(const Config& config);
     ~RedisStore() override;
 
@@ -111,9 +112,11 @@ private:
                       const std::string& date = "");
     std::optional<Versioned> get_hash(const std::string& hash_key) const;  // khóa mutex_ bên trong
     std::optional<std::string> get_value(const std::string& key) const;   // khóa mutex_ bên trong
+    void connect() const;                    // (nối lại) + PING/AUTH/SELECT; lỗi → ném
+    redisContext* live() const;              // context đang dùng được; hỏng thì connect() lại (gọi khi giữ mutex_)
 
     Config config_;
-    redisContext* context_ = nullptr;
+    mutable redisContext* context_ = nullptr;
     mutable std::mutex mutex_;  // hiredis context không thread-safe; khóa chung, tách pool nếu cần throughput
 };
 

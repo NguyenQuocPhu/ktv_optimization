@@ -1,4 +1,4 @@
-// HTTP gateway: 200/202/401, healthz, có/không token. Chạy trên cổng tạm.
+// HTTP gateway: /staff/{id}/route 200/202/401, healthz, có/không token, replan không Redis → 503. Chạy trên cổng tạm.
 #include <iostream>
 #include <string>
 #include <thread>
@@ -56,18 +56,24 @@ int main() {
         CHECK(health && health->status == 200);
         if (health) CHECK(nlohmann::json::parse(health->body)["entries"] == 2);
 
-        auto latest = running.client.Get("/api/v1/worklist/A");
+        auto latest = running.client.Get("/api/v1/staff/A/route");
         CHECK(latest && latest->status == 200 && latest->body == route_a);
 
-        auto by_date = running.client.Get("/api/v1/worklist/A?date=2026-09-10");
+        auto by_date = running.client.Get("/api/v1/staff/A/route?date=2026-09-10");
         CHECK(by_date && by_date->status == 200 && by_date->body == route_a_old);
 
-        auto missing = running.client.Get("/api/v1/worklist/Z");
+        auto missing = running.client.Get("/api/v1/staff/Z/route");
         CHECK(missing && missing->status == 202);
         if (missing) CHECK(nlohmann::json::parse(missing->body)["retry_after"] == 5);
 
-        auto missing_date = running.client.Get("/api/v1/worklist/A?date=2020-01-01");
+        auto missing_date = running.client.Get("/api/v1/staff/A/route?date=2020-01-01");
         CHECK(missing_date && missing_date->status == 202);
+
+        auto old_path = running.client.Get("/api/v1/worklist/A");  // đường cũ đã bỏ (Phase 7.4)
+        CHECK(old_path && old_path->status == 404);
+
+        auto replan = running.client.Get("/api/v1/staff/A/replan?latlng=21.02,105.79");  // không Redis
+        CHECK(replan && replan->status == 503);
     }
 
     {  // có token
@@ -75,13 +81,13 @@ int main() {
         options.token = "secret";
         Running running(ktv::make_gateway_server(store, options));
 
-        auto open = running.client.Get("/api/v1/worklist/A");
+        auto open = running.client.Get("/api/v1/staff/A/route");
         CHECK(open && open->status == 401);
 
-        auto wrong = running.client.Get("/api/v1/worklist/A", {{"Authorization", "Bearer sai"}});
+        auto wrong = running.client.Get("/api/v1/staff/A/route", {{"Authorization", "Bearer sai"}});
         CHECK(wrong && wrong->status == 401);
 
-        auto ok = running.client.Get("/api/v1/worklist/A", {{"Authorization", "Bearer secret"}});
+        auto ok = running.client.Get("/api/v1/staff/A/route", {{"Authorization", "Bearer secret"}});
         CHECK(ok && ok->status == 200 && ok->body == route_a);
 
         auto health = running.client.Get("/healthz");  // healthz không cần token

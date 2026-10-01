@@ -27,11 +27,10 @@ endif()
 
 add_library(gateway STATIC src/gateway/store.cpp src/gateway/seed.cpp src/gateway/server.cpp)
 target_include_directories(gateway PUBLIC include third_party)
-target_link_libraries(gateway PUBLIC Threads::Threads)
+target_link_libraries(gateway PUBLIC Threads::Threads ktv)  # ktv: Rules cho replan
 if(HIREDIS_FOUND)
-  # publish = plan() + ghi Redis (worker T1, gateway T2) → gateway cần cả lõi ktv.
+  # publish = plan() + ghi Redis (worker T1, gateway T2).
   target_sources(gateway PRIVATE src/gateway/redis_store.cpp src/adapter/publish.cpp)
-  target_link_libraries(gateway PUBLIC ktv)
   target_include_directories(gateway PRIVATE ${HIREDIS_INCLUDE_DIRS})
   target_link_libraries(gateway PRIVATE ${HIREDIS_LIBRARIES})
   target_compile_definitions(gateway PUBLIC KTV_WITH_REDIS=1)
@@ -101,6 +100,11 @@ if(HIREDIS_FOUND)
   target_link_libraries(test_publish gateway ${HIREDIS_LIBRARIES})
   add_test(NAME publish COMMAND test_publish)
   set_tests_properties(publish PROPERTIES ENVIRONMENT "KTV_TEST_REDIS=127.0.0.1:6379")
+  add_executable(test_gateway_replan tests/test_gateway_replan.cpp)
+  target_include_directories(test_gateway_replan PRIVATE ${HIREDIS_INCLUDE_DIRS})
+  target_link_libraries(test_gateway_replan gateway ${HIREDIS_LIBRARIES})
+  add_test(NAME gateway_replan COMMAND test_gateway_replan)
+  set_tests_properties(gateway_replan PROPERTIES ENVIRONMENT "KTV_TEST_REDIS=127.0.0.1:6379")
 endif()
 
 # Bất biến trên diện rộng; tùy chọn chạy thêm benchmark thật.

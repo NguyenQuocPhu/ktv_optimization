@@ -83,7 +83,10 @@ std::string reply_error(redisContext* context, const Reply& reply) {
 
 }  // namespace
 
-RedisStore::RedisStore(const Config& config) : config_(config) {
+RedisStore::RedisStore(const Config& config) : config_(config) { connect(); }
+
+void RedisStore::connect() const {
+    if (context_) redisFree(context_);
     const timeval timeout{1, 500000};  // 1.5 giây
     context_ = redisConnectWithTimeout(config_.host.c_str(), config_.port, timeout);
     const auto fail = [&](const std::string& reason) -> void {
@@ -119,6 +122,13 @@ RedisStore::RedisStore(const Config& config) : config_(config) {
     }
 }
 
+// hiredis không tự nối lại: kết nối đã hỏng (Redis restart, mạng rớt) thì nối lại trước lệnh kế tiếp.
+// Lệnh đang chạy lúc rớt vẫn lỗi (ném); worker thoát, gateway trả 503 rồi request sau chạy bình thường.
+redisContext* RedisStore::live() const {
+    if (!context_ || context_->err) connect();
+    return context_;
+}
+
 RedisStore::~RedisStore() {
     if (context_) redisFree(context_);
 }
@@ -135,7 +145,7 @@ bool RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, cons
     arguments.insert(arguments.end(), {std::to_string(ttl_seconds), json, version ? "1" : "0",
                                        version ? join(*version) : "", date});
     std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(context_, arguments);
+    Reply reply(live(), arguments);
     if (!reply.ok() || reply.value->type != REDIS_REPLY_INTEGER)
         throw std::runtime_error("redis: ghi " + hash_key + " thất bại (" + reply_error(context_, reply) + ")");
     return reply.value->integer == 1;
@@ -143,7 +153,8 @@ bool RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, cons
 
 std::optional<Versioned> RedisStore::get_hash(const std::string& hash_key) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(context_, {"HMGET", hash_key, "json", "v"});
+    Reply reply(live(), {"HMGET", hash_key, "json", "v"});
+    if (!reply.value) throw std::runtime_error("redis: đọc " + hash_key + " thất bại (" + reply_error(context_, reply) + ")");
     if (!reply.ok() || reply.value->type != REDIS_REPLY_ARRAY || reply.value->elements != 2) return std::nullopt;
     const redisReply* json = reply.value->element[0];
     const redisReply* version = reply.value->element[1];
@@ -155,8 +166,9 @@ std::optional<Versioned> RedisStore::get_hash(const std::string& hash_key) const
 
 std::optional<std::string> RedisStore::get_value(const std::string& key) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(context_, {"GET", key});
-    if (reply.value && reply.value->type == REDIS_REPLY_STRING)
+    Reply reply(live(), {"GET", key});
+    if (!reply.value) throw std::runtime_error("redis: đọc " + key + " thất bại (" + reply_error(context_, reply) + ")");
+    if (reply.value->type == REDIS_REPLY_STRING)
         return std::string(reply.value->str, reply.value->len);
     return std::nullopt;
 }
@@ -198,7 +210,7 @@ std::size_t RedisStore::size() const {
     std::string cursor = "0";
     const std::string pattern = config_.prefix + "route:*";
     do {
-        Reply reply(context_, {"SCAN", cursor, "MATCH", pattern, "COUNT", "1000"});
+        Reply reply(live(), {"SCAN", cursor, "MATCH", pattern, "COUNT", "1000"});
         if (!reply.ok() || reply.value->type != REDIS_REPLY_ARRAY || reply.value->elements != 2) break;
         cursor.assign(reply.value->element[0]->str, reply.value->element[0]->len);
         const redisReply* keys = reply.value->element[1];
@@ -217,7 +229,7 @@ std::optional<Versioned> RedisStore::get_loc(const std::string& staff_id) const 
 
 void RedisStore::put_dedup(const std::string& staff_id, const std::string& fingerprint) {
     std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(context_,
+    Reply reply(live(),
                 {"SET", key("dedup", staff_id), fingerprint, "EX", std::to_string(config_.dedup_ttl_seconds)});
     if (!reply.ok()) throw std::runtime_error("redis: ghi dedup thất bại (" + reply_error(context_, reply) + ")");
 }
