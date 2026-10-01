@@ -42,6 +42,7 @@ public:
         std::string topic;
         int partition = -1;
         long long offset = -1;
+        long long timestamp_ms = -1;  // giờ Kafka ghi nhận message (CreateTime của OA), -1 = không có
         std::string key;
         std::string payload;
         std::vector<std::pair<std::string, std::string>> headers;  // để soi envelope nằm header hay body

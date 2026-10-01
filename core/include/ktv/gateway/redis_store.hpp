@@ -32,6 +32,7 @@
 //   Versioned          {json, version} đọc ra từ state/vị trí
 //   RedisStore         HÀM CHÍNH: put_state/get_state, put_route (+ RouteStore put/get/get_latest/size),
 //                      put_loc/get_loc, put_dedup/get_dedup
+//   redis_config       "HOST:PORT" → Config (CLI worker + gateway)
 //
 // Ẩn trong redis_store.cpp: Lua script "ghi khi mới hơn", RAII cho reply hiredis.
 // Phụ thuộc: hiredis.
@@ -115,5 +116,8 @@ private:
     redisContext* context_ = nullptr;
     mutable std::mutex mutex_;  // hiredis context không thread-safe; khóa chung, tách pool nếu cần throughput
 };
+
+// "127.0.0.1:6379" → Config (host, port; còn lại mặc định). Sai dạng / cổng ngoài 1–65535 → không có.
+std::optional<RedisStore::Config> redis_config(const std::string& host_port);
 
 }  // namespace ktv

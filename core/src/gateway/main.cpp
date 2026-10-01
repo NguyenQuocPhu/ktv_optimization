@@ -45,19 +45,12 @@ int main(int argc, char** argv) {
     std::unique_ptr<ktv::RouteStore> store;
 #ifdef KTV_WITH_REDIS
     if (!redis_addr.empty()) {
-        const auto colon = redis_addr.rfind(':');
-        if (colon == std::string::npos) {
+        std::optional<ktv::RedisStore::Config> parsed = ktv::redis_config(redis_addr);
+        if (!parsed) {
             std::cerr << "--redis cần dạng HOST:PORT\n";
             return 2;
         }
-        ktv::RedisStore::Config config;
-        try {
-            config.host = redis_addr.substr(0, colon);
-            config.port = std::stoi(redis_addr.substr(colon + 1));
-        } catch (const std::exception&) {
-            std::cerr << "--redis cần dạng HOST:PORT\n";
-            return 2;
-        }
+        ktv::RedisStore::Config config = *parsed;
         config.password = redis_password;
         config.prefix = redis_prefix;
         try {

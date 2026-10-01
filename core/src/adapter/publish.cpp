@@ -1,0 +1,78 @@
+#include "ktv/adapter/publish.hpp"
+
+#include <cstdlib>
+
+#include "ktv/adapter/file.hpp"
+#include "ktv/plan.hpp"
+
+namespace ktv {
+
+namespace {
+
+// Vị trí Mobix {"latlng":"21.02,105.79","latlng_at":"2026-10-01 08:40:00"} còn dùng được thì thay vào staff.
+// Hỏng / quá cũ → bỏ qua (tuyến xuất phát từ vị trí trong IN). Trả latlng_at đã ghi trong version của loc.
+std::optional<std::int64_t> apply_mobix_loc(const Versioned& loc, Minutes now, Staff& staff) {
+    const json value = json::parse(loc.json, nullptr, false);
+    if (!value.is_object() || !value.contains("latlng") || !value["latlng"].is_string() ||
+        !value.contains("latlng_at") || !value["latlng_at"].is_string())
+        return std::nullopt;
+    const std::optional<Point> point = parse_latlng(value["latlng"].get<std::string>());
+    const std::optional<Minutes> at = parse_datetime(value["latlng_at"].get<std::string>());
+    if (!point || !at || std::llabs(now - *at) > kLocMaxAgeMinutes) return std::nullopt;
+    staff.latlng = *point;
+    return loc.version.empty() ? 0 : loc.version.front();
+}
+
+}  // namespace
+
+Published plan_and_store(const std::string& payload, const std::string& fallback_id, Minutes now,
+                         const Version& version, const Rules& rules, const std::string& osrm_url, RedisStore* store) {
+    Published result;
+    const json value = json::parse(payload, nullptr, false);
+    const Envelope envelope = local_envelope(value, fallback_id, now);
+    result.message_id = envelope.message_id;
+
+    std::vector<Error> errors;
+    Message message = parse_record(value, envelope, errors, &result.warnings);
+    if (!errors.empty()) {
+        result.status = "400";
+        result.out = wrap_response(envelope, bad_request(errors, envelope.message_id, now));
+        return result;
+    }
+
+    const std::string& staff_id = message.staff.staff_id;
+    Version based_on = version;
+    if (store) {
+        if (!store->put_state(staff_id, payload, version)) {
+            const std::optional<Versioned> current = store->get_state(staff_id);
+            if (!current || current->version != version) {
+                result.status = "STALE";
+                return result;
+            }
+        }
+        const std::optional<Versioned> loc = store->get_loc(staff_id);
+        const std::optional<std::int64_t> loc_at = loc ? apply_mobix_loc(*loc, now, message.staff) : std::nullopt;
+        result.used_mobix_loc = loc_at.has_value();
+        based_on.push_back(loc_at.value_or(0));
+    }
+
+    nlohmann::ordered_json response;
+    try {
+        response = plan(message, rules, now, osrm_url).response;
+    } catch (const std::exception& error) {
+        // Lỗi của MỘT message không được làm chết worker (chết → đọc lại → chết tiếp → kẹt partition).
+        response = error_response("500", std::string("Lỗi xử lý: ") + error.what(), envelope.message_id, now);
+    }
+    result.status = response["statuscode"].get<std::string>();
+    result.out = wrap_response(envelope, response);
+
+    // 422 (KTV off / hết việc) vẫn ghi: Mobix không được đọc tuyến cũ còn việc đã gỡ. 500 thì giữ route cũ.
+    if (store && result.status != "500") {
+        const std::string date = format_datetime(envelope.planned_at).substr(0, 10);
+        const std::string json_text = result.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+        result.route_stored = store->put_route(staff_id, date, json_text, based_on);
+    }
+    return result;
+}
+
+}  // namespace ktv

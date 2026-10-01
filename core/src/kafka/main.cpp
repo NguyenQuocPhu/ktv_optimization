@@ -1,13 +1,16 @@
 // ktv_worker — adapter Kafka của lõi: đọc topic IN → plan() → trả response.
-// Bước hiện tại: đọc IN, xếp tuyến, ghi response ra stdout (hoặc --out file, ghi nối).
-// Produce OUT: tạm hoãn (xem IMPLEMENTATION_SPEC Phase 7).
+// Bước hiện tại: đọc IN, xếp tuyến, ghi response ra stdout (hoặc --out file, ghi nối);
+// có --redis thì ghi thêm state + route vào Redis cho gateway trả Mobix (Phase 7.3, adapter/publish).
+// Produce OUT: Phase 7.5.
 //
 //   ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"]
 //              [--out responses.jsonl] [--max N] [--health-port N]
+//              [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]
 //
 // --max N: dừng sau N message (test nhanh); bỏ qua = chạy tới khi bị dừng (Ctrl-C / SIGTERM).
 // --health-port N: mở GET /healthz (worker còn chạy + bộ đếm) và GET /readyz (nối được broker) cho
 //   k8s/giám sát; bỏ qua = không mở.
+// --redis: version của state = {timestamp Kafka ms, offset}. Redis lỗi → thoát, không commit (restart đọc lại).
 // Cấu hình KAFKA_* xem .env.example; biến môi trường thật đè giá trị trong file .env.
 #include <httplib.h>
 
@@ -28,8 +31,8 @@
 #include <thread>
 #include <vector>
 
-#include "ktv/adapter/file.hpp"
 #include "ktv/adapter/http.hpp"
+#include "ktv/adapter/publish.hpp"
 #include "ktv/kafka/config.hpp"
 #include "ktv/kafka/consumer.hpp"
 #include "ktv/plan.hpp"
@@ -44,7 +47,8 @@ ktv::Minutes vietnam_now() { return static_cast<ktv::Minutes>(std::time(nullptr)
 int usage() {
     std::cerr << "cách dùng:\n"
                  "  ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"]\n"
-                 "             [--out responses.jsonl] [--max N] [--health-port N]\n";
+                 "             [--out responses.jsonl] [--max N] [--health-port N]\n"
+                 "             [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]\n";
     return 2;
 }
 
@@ -131,20 +135,11 @@ std::unique_ptr<HealthServer> start_health(Health& health, int port) {
     return hs;
 }
 
-// Một message → response nghiệp vụ. Parse nới lỏng: chỉ 400 khi không xếp được; lệch hợp đồng khác
-// → `warnings` (ghi log + /healthz, không đưa vào OUT).
-nlohmann::ordered_json respond(const ktv::json& value, const ktv::Envelope& envelope, const ktv::Rules& rules,
-                               ktv::Minutes now, const std::string& osrm_url, std::vector<ktv::Error>& warnings) {
-    std::vector<ktv::Error> errors;
-    const ktv::Message message = ktv::parse_record(value, envelope, errors, &warnings);
-    if (!errors.empty()) return ktv::bad_request(errors, envelope.message_id, now);
-    return ktv::plan(message, rules, now, osrm_url).response;
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
     std::string env_path = ".env", rules_path, out_path, osrm_url, at, max_text, port_text;
+    std::string redis_addr, redis_password, redis_prefix = "ktv:";
     long long max_messages = 0;
     int health_port = 0;
     for (int i = 1; i < argc; ++i) {
@@ -156,6 +151,9 @@ int main(int argc, char** argv) {
         else if (arg == "--at" && i + 1 < argc) at = argv[++i];
         else if (arg == "--max" && i + 1 < argc) max_text = argv[++i];
         else if (arg == "--health-port" && i + 1 < argc) port_text = argv[++i];
+        else if (arg == "--redis" && i + 1 < argc) redis_addr = argv[++i];
+        else if (arg == "--redis-password" && i + 1 < argc) redis_password = argv[++i];
+        else if (arg == "--redis-prefix" && i + 1 < argc) redis_prefix = argv[++i];
         else return usage();
     }
     // Gõ nhầm (VD "8O81") không được âm thầm thành 0 = tắt health / chạy vô hạn.
@@ -206,6 +204,24 @@ int main(int argc, char** argv) {
     if (!config.topic_out.empty())
         std::cerr << "ktv_worker: KAFKA_TOPIC_OUT chưa được dùng ở bước này (produce OUT tạm hoãn)\n";
 
+    std::unique_ptr<ktv::RedisStore> store;
+    if (!redis_addr.empty()) {
+        std::optional<ktv::RedisStore::Config> redis = ktv::redis_config(redis_addr);
+        if (!redis) {
+            std::cerr << "--redis cần dạng HOST:PORT: " << redis_addr << "\n";
+            return 2;
+        }
+        redis->password = redis_password;
+        redis->prefix = redis_prefix;
+        try {
+            store = std::make_unique<ktv::RedisStore>(*redis);
+        } catch (const std::exception& error) {
+            std::cerr << error.what() << "\n";
+            return 2;
+        }
+        std::cerr << "ktv_worker: Redis " << redis_addr << " prefix=" << redis_prefix << "\n";
+    }
+
     // Ghi nối: chạy lại cùng file không xóa response của các message đã commit.
     std::ofstream file;
     if (!out_path.empty()) {
@@ -252,25 +268,15 @@ int main(int argc, char** argv) {
             // Thiếu message_id: lấy vị trí Kafka làm ID — không trùng giữa các lần chạy / replica.
             const std::string position =
                 record->topic + "-" + std::to_string(record->partition) + "-" + std::to_string(record->offset);
-            const ktv::json value = ktv::json::parse(record->payload, nullptr, false);
-            const ktv::Envelope envelope = ktv::local_envelope(value, position, now);
+            // Lỗi Redis ném ra vòng ngoài: thoát, KHÔNG commit. Lỗi tính tuyến đã thành 500 bên trong.
+            const ktv::Published published = ktv::plan_and_store(
+                record->payload, position, now, {record->timestamp_ms, record->offset}, rules, osrm_url, store.get());
+            const std::string& status = published.status;
+            const std::vector<ktv::Error>& warnings = published.warnings;
+            const std::string line =
+                published.out ? published.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "";
 
-            std::string line, status;
-            std::vector<ktv::Error> warnings;
-            try {
-                nlohmann::ordered_json response = respond(value, envelope, rules, now, osrm_url, warnings);
-                status = response["statuscode"].get<std::string>();
-                line = ktv::wrap_response(envelope, response).dump();
-            } catch (const std::exception& error) {
-                // Lỗi của MỘT message không được làm chết worker: chết thì restart đọc lại đúng message đó
-                // và chết tiếp → kẹt cả partition. Trả response 500 rồi commit như bình thường.
-                status = "500";
-                line = ktv::wrap_response(envelope, ktv::error_response("500", std::string("Lỗi xử lý: ") + error.what(),
-                                                                        envelope.message_id, now))
-                           .dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
-            }
-
-            *out << line << "\n";
+            if (published.out) *out << line << "\n";  // IN cũ (STALE): không có response, chỉ commit
             out->flush();
             if (!*out) throw std::runtime_error("ghi response thất bại, không commit " + position);
             // Chỉ commit sau khi đã ghi xong response. false = đang rebalance (đã log): message sẽ được giao
@@ -284,11 +290,12 @@ int main(int argc, char** argv) {
             }
 
             std::cerr << "#" << processed << " " << position << " key=" << record->key << " status=" << status;
+            if (store) std::cerr << " route=" << (published.route_stored ? "ghi" : "giữ") << (published.used_mobix_loc ? " vị_trí=mobix" : "");
             if (!warnings.empty()) std::cerr << " cảnh_báo=" << warnings.size();
             for (const auto& [name, value_text] : record->headers) std::cerr << " header." << name << "=" << value_text;
             std::cerr << "\n";
             for (const std::string& key : record_issues(health, warnings))  // chỉ log loại mới; đếm xem /healthz
-                std::cerr << "  cảnh báo dữ liệu mới (" << envelope.message_id << "): " << key << "\n";
+                std::cerr << "  cảnh báo dữ liệu mới (" << published.message_id << "): " << key << "\n";
         }
     } catch (const std::exception& error) {
         std::cerr << error.what() << "\n";

@@ -76,6 +76,7 @@ std::optional<KafkaConsumer::Record> KafkaConsumer::poll(int timeout_ms) {
     record.topic = rd_kafka_topic_name(message->rkt);
     record.partition = message->partition;
     record.offset = message->offset;
+    record.timestamp_ms = rd_kafka_message_timestamp(message, nullptr);
     if (message->key != nullptr && message->key_len > 0)
         record.key.assign(static_cast<const char*>(message->key), message->key_len);
     if (message->payload != nullptr && message->len > 0)

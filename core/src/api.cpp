@@ -75,6 +75,8 @@ void civil_from_days(long long z, int& y, unsigned& m, unsigned& d) {
     y = static_cast<int>(yoe + era * 400 + (m <= 2));
 }
 
+}  // namespace
+
 std::optional<Point> parse_latlng(const std::string& text) {
     static const std::regex pattern(R"(^(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)$)");
     std::smatch match;
@@ -83,6 +85,8 @@ std::optional<Point> parse_latlng(const std::string& text) {
     if (point.lat < 8 || point.lat > 24 || point.lng < 102 || point.lng > 110) return std::nullopt;  // Khung Việt Nam.
     return point;
 }
+
+namespace {
 
 std::optional<std::vector<std::pair<int, int>>> parse_available(const std::string& text) {
     static const std::regex part(R"((\d{2}):(\d{2})-(\d{2}):(\d{2}))");

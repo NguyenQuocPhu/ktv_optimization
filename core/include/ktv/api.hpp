@@ -28,6 +28,7 @@
 //   kind_or_default      – như find_kind, nhưng loại ngoài danh mục thì trả loại mặc định
 //   parse_message        – HÀM CHÍNH: JSON → Message (+ danh sách lỗi, + cảnh báo nếu nới lỏng)
 //   parse_datetime, format_datetime – "2026-09-10 14:00:00" ↔ Minutes
+//   parse_latlng         – "21.02,105.79" → Point (khung Việt Nam)
 //
 // Ẩn trong api.cpp: bảng loại việc cụ thể, cách đọc tọa độ / khung giờ, đổi ngày ↔ số ngày.
 // Phụ thuộc: không module nào (chỉ thư viện JSON).
@@ -144,5 +145,6 @@ std::string issue_key(const Error& warning);
 
 std::optional<Minutes> parse_datetime(const std::string& text);  // "2026-09-10 14:00:00" → Minutes; sai dạng → không có.
 std::string format_datetime(Minutes value);                      // Minutes → "2026-09-10 14:00:00".
+std::optional<Point> parse_latlng(const std::string& text);      // "21.02,105.79" → Point; sai dạng/ngoài VN → không có.
 
 }  // namespace ktv

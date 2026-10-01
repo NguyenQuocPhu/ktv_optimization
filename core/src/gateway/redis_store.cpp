@@ -222,6 +222,18 @@ void RedisStore::put_dedup(const std::string& staff_id, const std::string& finge
     if (!reply.ok()) throw std::runtime_error("redis: ghi dedup thất bại (" + reply_error(context_, reply) + ")");
 }
 
+std::optional<RedisStore::Config> redis_config(const std::string& host_port) {
+    const auto colon = host_port.rfind(':');
+    if (colon == std::string::npos || colon == 0) return std::nullopt;
+    const std::string port = host_port.substr(colon + 1);
+    if (port.empty() || port.size() > 5 || port.find_first_not_of("0123456789") != std::string::npos) return std::nullopt;
+    RedisStore::Config config;
+    config.host = host_port.substr(0, colon);
+    config.port = std::stoi(port);
+    if (config.port < 1 || config.port > 65535) return std::nullopt;
+    return config;
+}
+
 std::optional<std::string> RedisStore::get_dedup(const std::string& staff_id) const {
     return get_value(key("dedup", staff_id));
 }
