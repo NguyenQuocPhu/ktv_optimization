@@ -122,7 +122,7 @@ Quy ước retry/DLQ và format lỗi cuối cùng sẽ chốt cùng Infra. Hai 
 ### Chờ dependency ngoài repo
 
 8. **Phase 6 — Gateway read model (gateway của ta):** binary `ktv_gateway`, thư mục riêng `core/include/ktv/gateway/` + `core/src/gateway/`. **6.1 (đã xong)** `store` + `seed`; **6.2 (đã xong)** `server` + `main` (`GET /api/v1/worklist/{staff_id}`, `/healthz`); **6.3 (đã xong)** `RedisRouteStore` (hiredis optional, key `{prefix}route|latest:...`, TTL 7 ngày, CLI `--redis`). `ctest` 15/15; demo Redis: restart gateway không seed vẫn đọc được. Feeder tạm là file OUT; khi có Kafka chỉ thay bằng consumer.
-9. **Phase 7 — Kafka worker:** chỉ làm khi có broker/auth/client library, group/partition/key, envelope contract, retry/DLQ. Flow: consume IN → pipeline → produce OUT → commit offset; gateway đổi feeder `--seed` sang consume OUT.
+9. **Phase 7 — Mobix kích hoạt replan:** Core expose `GET /api/v1/staff/{staff_id}/replan?latlng=&recorded_at=` (tái dùng gateway). Consumer nền giữ **message IN mới nhất mỗi staff** (state cache) + **dedup** (fingerprint) để không plan lại khi không đổi; `plan()` → **produce Kafka OUT**, HTTP chỉ trả `202` (không trả route cho Mobix). **7A** chạy được ngay với broker giả bằng file; **7B** thay bằng Kafka thật khi có broker. Không phân biệt trigger, không mode (mode là Phase 8).
 10. **Phase 8 — Reoptimize do KTV yêu cầu:** bàn sau khi nối Kafka. Đã chốt KTV chọn mode và route mới hợp lệ thay route đang xem dù metrics không tốt hơn. Chưa chốt ai cung cấp/lấy snapshot mới nhất và route baseline; không mặc định Gateway/OA/Core. Không đồng nhất với replan tự động.
 11. **Phase 9 — feedback/AI learning:** sau khi OA/Gateway chốt nguồn kết quả thật, version rule/model và guardrail backtest.
 
