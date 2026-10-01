@@ -32,7 +32,7 @@
 //   Versioned          {json, version} đọc ra từ state/vị trí
 //   Write              kết quả put_route: Stored / Same / Older
 //   RedisStore         HÀM CHÍNH: put_state/get_state, put_route (+ RouteStore put/get/get_latest/size),
-//                      put_loc/get_loc, put_dedup/get_dedup
+//                      put_loc/get_loc, put_dedup/get_dedup, ping
 //   redis_config       "HOST:PORT" → Config (CLI worker + gateway)
 //
 // Ẩn trong redis_store.cpp: Lua script "ghi khi mới hơn", RAII cho reply hiredis.
@@ -103,6 +103,9 @@ public:
     // Vị trí Mobix gửi gần nhất. version thường = {latlng_at dạng yyyymmddHHMMSS}.
     bool put_loc(const std::string& staff_id, const std::string& json, const Version& version);
     std::optional<Versioned> get_loc(const std::string& staff_id) const;
+
+    // Redis có trả lời PING không (nối lại nếu kết nối hỏng). Không ném: dùng cho /readyz.
+    bool ping() const;
 
     // Fingerprint lần tính cuối (VD "20261001080500,123|21.0285,105.8542"). Ghi đè thẳng.
     void put_dedup(const std::string& staff_id, const std::string& fingerprint);

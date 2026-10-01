@@ -74,6 +74,9 @@ int main() {
 
         auto replan = running.client.Get("/api/v1/staff/A/replan?latlng=21.02,105.79");  // không Redis
         CHECK(replan && replan->status == 503);
+
+        auto ready = running.client.Get("/readyz");  // không Redis: store RAM luôn sẵn sàng
+        CHECK(ready && ready->status == 200);
     }
 
     {  // có token

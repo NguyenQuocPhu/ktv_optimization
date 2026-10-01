@@ -236,6 +236,19 @@ void RedisStore::put_dedup(const std::string& staff_id, const std::string& finge
     if (!reply.ok()) throw std::runtime_error("redis: ghi dedup thất bại (" + reply_error(context_, reply) + ")");
 }
 
+bool RedisStore::ping() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+        for (int attempt = 0; attempt < 2; ++attempt) {  // kết nối rớt chỉ lộ ra ở lệnh đầu tiên → nối lại, thử 1 lần nữa
+            Reply reply(live(), {"PING"});
+            if (reply.ok()) return true;
+        }
+        return false;
+    } catch (const std::exception&) {
+        return false;  // nối lại thất bại
+    }
+}
+
 std::optional<RedisStore::Config> redis_config(const std::string& host_port) {
     const auto colon = host_port.rfind(':');
     if (colon == std::string::npos || colon == 0) return std::nullopt;

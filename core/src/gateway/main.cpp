@@ -4,10 +4,12 @@
 //               [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"] [--env .env]
 // --env: đọc KAFKA_* (như worker, không cần GROUP_ID/TOPIC_IN); KAFKA_TOPIC_OUT có giá trị thì route replan
 //        được đẩy ra Kafka OUT (Phase 7.5). Không --env: không đẩy OUT.
+#include <csignal>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include "ktv/gateway/seed.hpp"
 #include "ktv/gateway/server.hpp"
@@ -34,6 +36,14 @@ int usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // SIGINT/SIGTERM (Ctrl-C, docker stop): chặn ở mọi thread (kể cả thread librdkafka/httplib tạo sau), luồng chính
+    // sigwait rồi dừng server; producer đẩy nốt OUT trong hàng đợi (tối đa 5 giây, ~KafkaProducer) trước khi thoát.
+    sigset_t stop_signals;
+    sigemptyset(&stop_signals);
+    sigaddset(&stop_signals, SIGINT);
+    sigaddset(&stop_signals, SIGTERM);
+    pthread_sigmask(SIG_BLOCK, &stop_signals, nullptr);
+
     ktv::GatewayOptions options;
     std::string seed_path, redis_addr, redis_password, redis_prefix = "ktv:", rules_path, at, env_path;
     for (int i = 1; i < argc; ++i) {
@@ -146,9 +156,16 @@ int main(int argc, char** argv) {
     if (!redis) std::cerr << "ktv_gateway: không có --redis → /replan trả 503\n";
     std::cerr << "ktv_gateway nghe " << options.host << ":" << options.port
               << (options.token.empty() ? " (không token)" : " (có token)") << "\n";
-    if (!server->listen(options.host, options.port)) {
+    if (!server->bind_to_port(options.host, options.port)) {
         std::cerr << "không listen được " << options.host << ":" << options.port << "\n";
         return 1;
     }
+    std::thread listener([&server] { server->listen_after_bind(); });
+    server->wait_until_ready();  // stop() chỉ tác dụng khi server đã chạy
+    int signal_number = 0;
+    sigwait(&stop_signals, &signal_number);
+    std::cerr << "ktv_gateway: nhận tín hiệu " << signal_number << ", dừng (đẩy nốt OUT nếu có)\n";
+    server->stop();
+    listener.join();
     return 0;
 }

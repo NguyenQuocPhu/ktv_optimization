@@ -24,10 +24,12 @@ services:
       CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # PLAINTEXT (localhost:9092) cho công cụ trên máy host; INTERNAL (kafka:19092) cho worker/gateway trong compose.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,INTERNAL://:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:19092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
@@ -36,6 +38,57 @@ services:
       KAFKA_NUM_PARTITIONS: "3"
     volumes:
       - kafka-data:/var/lib/kafka/data
+
+  # ---- Cụm routing local (Phase 7.6): docker compose --profile app up -d --build ----
+  # Kafka/Redis LOCAL, cấu hình khai thẳng ở đây — không đọc .env gốc (cluster thật), tránh demo bắn sang Kafka công ty.
+  kafka-init:  # tạo topic IN/OUT local rồi thoát (consumer librdkafka không tự tạo topic)
+    image: apache/kafka:4.1.0
+    profiles: ["app"]
+    depends_on: [kafka]
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for topic in ktv-local-in ktv-local-out; do
+          until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic $$topic --partitions 3; do sleep 2; done
+        done
+
+  worker:
+    build: .
+    image: ktv-core:local
+    container_name: ktv-worker
+    profiles: ["app"]
+    restart: unless-stopped
+    depends_on:
+      redis: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+    environment: &kafka-local
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      KAFKA_USE_SASL: "false"
+      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+      KAFKA_CLIENT_ID: ktv-local
+      KAFKA_GROUP_ID: ktv-local-worker
+      KAFKA_TOPIC_IN: ktv-local-in
+      KAFKA_TOPIC_OUT: ktv-local-out
+      KAFKA_AUTO_OFFSET_RESET: earliest
+    command: ["ktv_worker", "--env", "/dev/null", "--health-port", "8081", "--redis", "redis:6379"]
+    ports:
+      - "127.0.0.1:8081:8081"   # /healthz, /readyz
+
+  gateway:
+    build: .
+    image: ktv-core:local
+    container_name: ktv-gateway
+    profiles: ["app"]
+    restart: unless-stopped
+    depends_on:
+      redis: {condition: service_healthy}
+      kafka-init: {condition: service_completed_successfully}
+    environment: *kafka-local   # gateway chỉ dùng phần producer (TOPIC_OUT); GROUP_ID/TOPIC_IN bỏ qua
+    command: ["ktv_gateway", "--port", "8080", "--redis", "redis:6379", "--env", "/dev/null",
+              "--token", "${KTV_GATEWAY_TOKEN:-dev-token}"]
+    ports:
+      - "127.0.0.1:8080:8080"   # /api/v1/staff/{id}/route|replan, /healthz, /readyz
 
 volumes:
   redis-data:

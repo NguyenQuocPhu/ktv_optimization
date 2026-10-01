@@ -166,6 +166,11 @@ int main() {
         CHECK(during && (during->status == 503 || during->status == 200));
         auto after = client.Get(replan + "21.0800,105.8800&latlng_at=2026-10-01 09:27:00", auth);
         CHECK(after && after->status == 200);
+
+        // /readyz: PING Redis; bị cắt kết nối thì tự nối lại → vẫn sẵn sàng.
+        redis_command(*config, "CLIENT KILL TYPE normal");
+        auto ready = client.Get("/readyz");
+        CHECK(ready && ready->status == 200 && json::parse(ready->body).value("ready", false));
     } catch (const std::exception& error) {
         std::cerr << "FAIL: ngoại lệ " << error.what() << "\n";
         ++failures;

@@ -11,7 +11,8 @@
 //       Route replan: message_id của IN, run_code "<message_id>-r<latlng_at yyyymmddHHMMSS>",
 //       trigger MOBIX_REPLAN, planned_at = giờ gọi. latlng_at bỏ trống = giờ gọi.
 //       Có options.send_out: route vừa ghi thì đẩy Kafka OUT, không chờ; lỗi chỉ log + đếm (Mobix vẫn nhận route).
-//   - GET /healthz                                  → 200 {"ok":true,"entries":N[,"out_failed":M]}
+//   - GET /healthz  (process còn sống)             → 200 {"ok":true,"entries":N[,"out_failed":M]}
+//   - GET /readyz   (Redis trả lời PING)            → 200 {"ready":true} / 503 {"ready":false}; không Redis → 200
 //
 // Dùng thế nào:
 //   RedisStore store(config);

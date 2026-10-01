@@ -105,6 +105,18 @@ std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const Ga
         send_json(response, 200, body);
     });
 
+    // Sẵn sàng phục vụ = Redis trả lời (Redis chết thì restart gateway không giúp gì, nên tách khỏi /healthz).
+    server->Get("/readyz", [redis](const httplib::Request&, httplib::Response& response) {
+#ifdef KTV_WITH_REDIS
+        if (redis) {
+            const bool ready = redis->ping();
+            return send_json(response, ready ? 200 : 503, {{"ready", ready}, {"redis", ready}});
+        }
+#endif
+        (void)redis;
+        send_json(response, 200, {{"ready", true}, {"redis", nullptr}});  // không Redis: store RAM luôn sẵn sàng
+    });
+
     server->Get(R"(/api/v1/staff/([^/]+)/route)",
                 [&store, &options](const httplib::Request& request, httplib::Response& response) {
                     if (!authorized(request, options.token)) return error(response, 401, "unauthorized");
