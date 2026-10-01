@@ -642,8 +642,8 @@ Authorization: Bearer <token>       Cache-Control: no-store
 |---|---|---|
 | Redis ✅ | `gateway/redis_store.*` | `RedisRouteStore` đổi tên `RedisStore`, thêm state / route có version (Lua) / loc / dedup, không tạo class mới |
 | Producer | `kafka/producer.{hpp,cpp}` | librdkafka, idempotent, key = `staff_id`, chờ delivery report. `KAFKA_TOPIC_OUT` trống → bỏ qua produce, log một lần (deploy được trước khi SYS cấp topic) |
-| Tính + phát | `adapter/publish.{hpp,cpp}` | Một hàm dùng chung cho T1 và T2: `plan()` → ghi route cache → produce OUT. Không đặt trong `plan`/`dp` |
-| Worker | `kafka/main.cpp` | Thêm `--redis HOST:PORT`, `--redis-prefix`; luồng T1 |
+| Tính + phát ✅ (7.3) | `adapter/publish.{hpp,cpp}` | Một hàm dùng chung cho T1 và T2: `plan()` → ghi route cache → produce OUT. Không đặt trong `plan`/`dp` |
+| Worker ✅ (7.3) | `kafka/main.cpp` | Thêm `--redis HOST:PORT`, `--redis-prefix`; luồng T1 |
 | Gateway | `gateway/server.*`, `gateway/main.cpp` | Endpoint `route` + `replan`; link thêm `ktv` + `kafka`; thêm `--env/--rules/--osrm` |
 
 #### Sub-phase
@@ -652,7 +652,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 |---|---|---|
 | 7.1 ✅ | `ktv_worker` đọc IN + hardening + `/healthz` `/readyz` (kết quả bên dưới) | E2E Kafka local |
 | 7.2 ✅ | Redis: state + route có version (Lua) + loc + dedup (kết quả bên dưới) | test trên Redis thật: ghi cũ không đè mới, TTL đúng |
-| 7.3 | Worker T1: IN → state → `plan()` → route cache | E2E: đẩy IN → đọc được route trong Redis; IN cũ không đè IN mới |
+| 7.3 ✅ | Worker T1: IN → state → `plan()` → route cache (kết quả bên dưới) | E2E: đẩy IN → đọc được route trong Redis; IN cũ không đè IN mới |
 | 7.4 | Gateway: `GET route` + `GET replan` | HTTP test: replan trả route mới; gọi lại cùng vị trí → HIT; đổi vị trí → MISS; không có state → 404 |
 | 7.5 | Producer OUT, nối vào T1 và T2 | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
 | 7.6 | Vận hành: compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
@@ -675,6 +675,22 @@ Authorization: Bearer <token>       Cache-Control: no-store
 Còn mở (không chặn code): tên topic OUT + quyền WRITE (SYS); envelope thật của OA (chờ message đầu tiên);
 key của message IN (nếu OA không key theo `staff_id`, hai message của cùng KTV có thể nằm khác partition —
 version của state xử lý được thứ tự đến).
+
+**Kết quả 7.3 — worker T1 (2026-10-01):** `adapter/publish.{hpp,cpp}`: `plan_and_store(payload, fallback_id, now,
+version, rules, osrm, store)` = parse → `put_state` → vị trí Mobix → `plan()` → `put_route`; gateway T2 (7.4) gọi
+lại, 7.5 chèn produce OUT vào đây. Người dùng chốt: **(A)** version state = `{timestamp Kafka ms, offset}`
+(`Record.timestamp_ms`) vì `planned_at` thiếu thì lùi về giờ xử lý, IN cũ đến trễ sẽ thắng; **(B)** 422 vẫn ghi route;
+**(C)** Redis lỗi → ném ra vòng ngoài, worker thoát mã 1, **không** commit; **(D)** vị trí Mobix có `latlng_at` cách
+giờ tính ≤ 60 phút thay vị trí IN, `based_on` = version state + latlng_at (0 = vị trí IN). IN cũ hơn state đang có →
+`STALE`: không tính, không in response, vẫn commit. Bằng version (Kafka giao lại sau khi chết giữa "ghi state" và
+"ghi route") → vẫn tính và ghi route. 400 không đụng Redis; 500 không ghi route (giữ bản cũ). `ktv_worker` thêm
+`--redis HOST:PORT --redis-password --redis-prefix` (không truyền = như cũ), giờ cần cả librdkafka + hiredis;
+`redis_config("HOST:PORT")` dùng chung với gateway; `parse_latlng` mở ra trong `api.hpp`. Kiểm: `test_publish`
+trên Redis thật (không Redis, IN đầu, IN cũ, giao lại sau khi mất route, vị trí 30/61 phút, 422, 400); làm hỏng
+từng nhánh (bỏ kiểm IN cũ, coi giao lại là cũ, bỏ vị trí, bỏ giới hạn 60 phút, không ghi 422) → test đều đỏ.
+E2E `ktv-kafka` + `ktv-redis`: IN → `state`/`route`/`latest` có version; IN mới hơn → route mới; group mới đọc lại
+từ đầu → IN cũ `STALE`, IN bằng tính lại, route giữ bản mới; ngắt kết nối Redis → worker thoát 1, group không có
+offset commit. `ctest` 17/17.
 
 **Kết quả 7.2 — Redis (2026-10-01):** `RedisRouteStore` → `RedisStore` (`gateway/redis_store.*`), vẫn là
 `RouteStore` nên seed/GET cũ chạy y nguyên. State, route, vị trí lưu dạng **hash** `{json, v}`; `v` = version

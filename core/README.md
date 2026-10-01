@@ -38,13 +38,14 @@ cluster    cắt cụm theo chặng > 2 km + tóm tắt (tâm, bán kính, km v�
 | adapter/file | `include/ktv/adapter/file.hpp`, `src/adapter/file.cpp` | Vỏ truyền tải local: đọc object/JSONL, sinh envelope |
 | (CLI) | `src/cli/main.cpp` | `ktv_core`: `plan`, `validate`, `print-rules` |
 | (Gateway) | `src/gateway/main.cpp` | `ktv_gateway`: gateway API của team. Hiện: HTTP đọc + seed + Redis (đồ nghề dev); Phase 7A thêm `replan` |
-| (Worker) | `src/kafka/main.cpp`, `kafka/config.*`, `kafka/consumer.*` | `ktv_worker`: đọc topic IN → `plan()` → ghi response, `/healthz` tùy chọn (produce OUT tạm hoãn). Config qua `.env` |
+| adapter/publish | `include/ktv/adapter/publish.hpp`, `src/adapter/publish.cpp` | `plan_and_store`: IN → state Redis → `plan()` → route Redis (worker T1, gateway T2) |
+| (Worker) | `src/kafka/main.cpp`, `kafka/config.*`, `kafka/consumer.*` | `ktv_worker`: đọc topic IN → `plan_and_store` → ghi response (+ Redis nếu `--redis`), `/healthz` tùy chọn (produce OUT ở 7.5). Config qua `.env` |
 
 ## Chạy
 
 ```bash
 cmake -S core -B core/build && cmake --build core/build -j
-(cd core/build && ctest --output-on-failure)            # 16 test: api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants, gateway_*, kafka_config
+(cd core/build && ctest --output-on-failure)            # 17 test: api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants, gateway_*, kafka_config, publish
 
 core/build/ktv_core plan artifacts/fake/messages.jsonl --osrm http://127.0.0.1:5000 --out artifacts/fake/responses.jsonl
 # bỏ --osrm để dùng chim bay (không cần OSRM)
@@ -63,7 +64,7 @@ redis-cli TTL ktv:route:00201964:2026-06-08        # ~172800 giây (2 ngày)
 redis-cli HGET ktv:route:00201964:2026-06-08 json  # route là hash {json, v}; v = based_on
 ```
 
-Kafka worker cần `librdkafka`; thiếu thì binary tự tắt, phần còn lại vẫn build.
+Kafka worker cần `librdkafka` + `hiredis`; thiếu một trong hai thì binary tự tắt, phần còn lại vẫn build.
 **Lưu ý phiên bản**: queue dev cluster dùng SASL PLAIN nên `librdkafka` 1.8.0 từ apt Ubuntu 22.04 là đủ.
 Chỉ khi phải nối cluster chỉ-SCRAM mới cần build 2.x (công thức + cách trỏ `core` vào bản đó: xem mục
 "Kafka worker" trong README gốc).

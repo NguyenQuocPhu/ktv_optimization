@@ -85,10 +85,10 @@ sudo systemctl enable --now docker
 
 cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Release
 cmake --build core/build -j"$(nproc)"
-ctest --test-dir core/build --output-on-failure        # 16 test: api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants, gateway, kafka config
+ctest --test-dir core/build --output-on-failure        # 17 test: api, dp (so vét cạn), plan, travel, normalization, sla, cluster, adapter, pipeline, cli, invariants, gateway, kafka config, publish
 ```
 
-- `hiredis` và `librdkafka` là tùy chọn: thiếu thì `ktv_gateway` không có Redis store / `ktv_worker` không được build, phần còn lại vẫn chạy (thiếu hiredis thì còn 15 test).
+- `hiredis` và `librdkafka` là tùy chọn: thiếu hiredis thì `ktv_gateway` không có Redis store, `ktv_worker` cần cả hai; phần còn lại vẫn chạy (thiếu hiredis thì còn 15 test: mất gateway_redis + publish).
 - Test `invariants` chạy thêm benchmark 5.332 message nếu có `artifacts/fake/messages.jsonl`. File này **không nằm trong git** (`artifacts/` bị ignore) và tool sinh nó là bản Python đã xóa (lấy lại từ tag `python-legacy-2026-09-30`); không có thì test chỉ chạy 3.000 message sinh ngẫu nhiên.
 - Test `kafka_config` đọc biến môi trường thật: chạy `ctest` trong shell đang export `KAFKA_*` có thể làm test fail.
 - Thư mục build tạo trong container (đường dẫn `/workspace/...`) không dùng lại được ngoài container: `rm -rf core/build` rồi build lại.
@@ -151,9 +151,12 @@ Cấu hình qua `.env` (copy từ `.env.example`; biến môi trường thật �
 core/build/ktv_worker --env .env --max 1          # đọc 1 message → in response
 core/build/ktv_worker --env .env --out responses.jsonl --health-port 8081
 core/build/ktv_worker --env .env --osrm http://127.0.0.1:5000 --rules rules.json
+core/build/ktv_worker --env .env --redis 127.0.0.1:6379   # ghi thêm state + route vào Redis (Phase 7.3)
 ```
 
 Hành vi:
+
+- `--redis HOST:PORT` (thêm `--redis-password`, `--redis-prefix`, mặc định `ktv:`): mỗi IN ghi `state` rồi `route` vào Redis cho gateway trả Mobix. Version của state = `{timestamp Kafka, offset}`: IN cũ hơn cái đang có → bỏ qua (log `status=STALE`), không tính. Vị trí Mobix trong 60 phút thay vị trí trong IN. 422 vẫn ghi route. Redis lỗi → worker thoát mã 1, **không** commit (restart đọc lại message). Chi tiết khóa: `core/include/ktv/gateway/redis_store.hpp`.
 
 - Mỗi message lấy giờ lúc xử lý (hoặc `planned_at` của message); `--at` cố định giờ cho test.
 - Message thiếu `message_id` → dùng `topic-partition-offset` làm `message_id`/`run_code`.
