@@ -331,10 +331,10 @@ Gateway replan (Phase 7A) ─────┴─> parse_message (api)
 | 6.1 Dữ liệu vào | `gateway/store.*` + `gateway/seed.*`: `RouteStore`, `MemoryRouteStore`, loader OUT JSONL | unit test store + seed |
 | 6.2 HTTP + binary | `gateway/server.*` + `gateway/main.cpp`: `GET /worklist/{staff_id}`, `/healthz`, `ktv_gateway --port --seed --token` | HTTP test + E2E `ktv_core plan → seed → GET` |
 | 6.3 Redis store | `gateway/redis_store.*`: `RedisRouteStore`, key `{prefix}route|latest:...`, TTL 7 ngày, hiredis optional; CLI `--redis` | test trên Redis thật + demo xem key bằng `redis-cli` |
-| 7. Mobix kích hoạt replan | Consume IN nền → state cache Redis (IN mới nhất mỗi KTV); gateway API `GET /staff/{id}/replan` → dedup → `plan()` → Kafka OUT; không trả route cho Mobix | Xem 7.1/7A/7B |
-| 7.1 Đọc IN ✅ | `kafka/*`, `ktv_worker`: consume IN → `plan()` → stdout/file; hardening + `/healthz` | E2E Kafka local |
-| 7A. State cache + API | Consumer IN ghi state Redis; endpoint `replan` trên `ktv_gateway`; dedup; OUT tạm ghi file/stdout | dedup chặn tính trùng; location đổi thì tính lại; mỗi yêu cầu hợp lệ ra đúng một OUT |
-| 7B. Produce OUT ⏸ | Produce Kafka OUT thật: commit sau delivery report, key = `staff_id`, retry/DLQ | **Tạm hoãn, chưa bàn** — chờ topic OUT + chốt với OA/Mobix |
+| 7. Mobix gọi API, trả từ cache | IN mới → worker tính → route cache Redis + Kafka OUT; Mobix `GET route` đọc cache, `GET replan` (vị trí mới) tính lại → cache + OUT → trả route | Xem 7.1–7.6 |
+| 7.1 Đọc IN ✅ | `kafka/*`, `ktv_worker`: consume IN → `plan()` → stdout/file; hardening + `/healthz` `/readyz` | E2E Kafka local |
+| 7.2–7.4 Cache + API | Redis state/route có version/loc/dedup; worker ghi cache; gateway `route` + `replan` | ghi cũ không đè mới; replan HIT/MISS đúng |
+| 7.5–7.6 OUT + vận hành | Producer OUT cho cả worker và gateway (topic trống = bỏ qua); compose + README | mỗi lần tính đúng một OUT; worker commit sau delivery |
 | Vận hành ✅ | `Dockerfile` (build kèm ctest), CI GitHub Actions, `/healthz` worker | image build được, CI xanh |
 | 8. Reoptimize use case | Sau khi Kafka đã nối; chốt request/context và policy riêng cho thao tác KTV | Có input phân biệt với replan thường; kết quả/compare semantics được business duyệt |
 | 9. Feedback/AI learning | Chỉ sau khi chốt nguồn feedback, DB/topic và versioning | Có log gợi ý ↔ kết quả thật; backtest/guardrail trước khi phát hành model/rules |
@@ -576,86 +576,104 @@ core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/resp
 
 `artifacts/` không được git track nên không cần commit. In-memory: 1 instance, restart mất cache → seed lại.
 
-### Phase 7 — Mobix kích hoạt replan: API vào, Kafka OUT ra
+### Phase 7 — Mobix gọi API của team: trả route từ cache + đẩy Kafka OUT
 
-Chốt hướng 2026-09-30. API ticket draft (format tham khảo IVR): [`docs/MOBIX-REPLAN-API-DRAFT.md`](../docs/MOBIX-REPLAN-API-DRAFT.md).
+Cập nhật hướng **2026-10-01** (thay bản 2026-09-30 "HTTP không trả route"). API draft cũ
+[`docs/MOBIX-REPLAN-API-DRAFT.md`](../docs/MOBIX-REPLAN-API-DRAFT.md) còn ghi "202, không trả route" → sửa theo mục này khi chốt.
 
-#### Context (vì sao)
+#### Context
 
-- Bot Gateway là hệ thống **phía Mobix**. Gateway API của team là `ktv_gateway` (Phase 6): expose API + Redis cache.
-- Mobix cần lộ trình mới khi KTV **đổi vị trí**, khi **một task hoàn thành**, hoặc nói chung là "cần sắp xếp lại". Mobix chủ động gọi API của ta.
-- Ta **không phân biệt lý do**: không `type`, không tự suy trigger. Có yêu cầu → lấy state hiện tại của KTV → `plan()` lại.
-- Kết quả **chỉ đi ra Kafka OUT** (OA lưu Oracle, phía Mobix đọc). HTTP **không trả route** cho Mobix.
-- State của một KTV = **message IN mới nhất** của KTV đó (IN là snapshot trọn gói 1 KTV). Kafka là log, không query on-demand → cần **consumer nền** giữ bản mới nhất.
-- Quy ước MVP: Mobix chỉ gọi sau khi OA đã publish snapshot IN cập nhật; dùng latest snapshot consumer nền đã áp dụng, chấp nhận consumer lag nhỏ, không có `state_version`.
+- Bot Gateway là hệ thống phía Mobix. API của team là `ktv_gateway` (expose API + Redis).
+- Mobix gọi API của ta và **nhận route trong HTTP response, lấy từ cache Redis**.
+- Mỗi lần tính tuyến xong ra **hai nhánh**: (1) ghi **route cache** (Redis) để trả Mobix; (2) **produce Kafka OUT**
+  (Optimal Assign lưu Oracle, consumer khác).
+- State của KTV = message IN mới nhất (snapshot trọn gói 1 KTV). Kafka không tra on-demand → giữ trong Redis.
 
-#### Idea
+#### Luồng
 
-```
-Kafka IN ──consume nền (ktv_worker)──▶ state cache Redis (staff_id → message IN mới nhất)
-                                                   ▲
-Mobix ──GET /api/v1/staff/{staff_id}/replan?latlng=&latlng_at=──▶ ktv_gateway
-                                                   │ state + location Mobix gửi
-                                                   │ fingerprint đã tính? ── có ──▶ 202, bỏ qua
-                                                   │ chưa → plan()
-                                                   ├──▶ OUT (7A: file/stdout · 7B: Kafka OUT)
-                                                   └──▶ 202 accepted
-```
-
-#### API contract (draft)
-
-```
-GET /api/v1/staff/{staff_id}/replan
-    ?latlng=21.0248,105.7961          # bắt buộc: vị trí mới Mobix biết
-    &latlng_at=2026-09-10 09:20:00    # bắt buộc: thời điểm ghi nhận tọa độ
-Authorization: Bearer <token>
-
-202 { "accepted": true }              # đã nhận; KHÔNG trả route
-401/403 token/quyền; 404 chưa có state IN của KTV; 400 sai format
+```text
+           ┌──────────── T1: có IN mới (ktv_worker) ────────────┐
+Kafka IN ──┤ state ← IN · plan() · ghi route cache · produce OUT │──▶ commit IN (sau khi OUT xác nhận)
+           └────────────────────────────────────────────────────┘
+                     │ Redis: state / route / loc / dedup │
+           ┌──────────── T2: Mobix replan (ktv_gateway) ────────┐
+Mobix ─────┤ state + latlng Mobix · trùng dedup? → trả cache    │──▶ 200 route
+ replan    │ chưa: plan() · ghi route cache · produce OUT       │
+           └────────────────────────────────────────────────────┘
+Mobix ── GET route ──▶ ktv_gateway ── đọc route cache ──▶ 200 route | 202 chưa có
 ```
 
-GET có tác dụng phụ (đọc state + đẩy OUT) theo yêu cầu phía Mobix; muốn đúng REST thì đổi sang POST cùng đường dẫn, cùng tham số. Response phải `Cache-Control: no-store`.
+- **T1 (IN mới)**: worker ghi state, tính luôn (để lúc Mobix đọc đã có route), ghi route cache, produce OUT,
+  rồi mới commit IN. OUT lỗi → không commit → message được đọc lại, tính lại ra cùng kết quả (ghi cache idempotent).
+- **T2 (Mobix replan)**: gateway đọc state, thay vị trí KTV bằng `latlng` Mobix gửi, tính, ghi cache, produce OUT,
+  trả route. Trùng dedup (state và vị trí không đổi) → trả route đang cache, không tính, không OUT.
+- **Đọc**: chỉ đọc cache, không tính.
 
-#### Cache (Redis của gateway)
+#### Redis (một instance chung cho worker + gateway)
 
-| Cache | Chứa | Vì sao bắt buộc |
+| Khóa | Giá trị | Ai ghi | TTL |
+|---|---|---|---|
+| `ktv:state:{staff}` | message IN mới nhất + `version` (`planned_at`, rồi offset) | worker | 2 ngày |
+| `ktv:route:{staff}:{date}`, `ktv:latest:{staff}` (đã có, Phase 6.3) | response đã gói (giống OUT) + `based_on` {state version, `latlng_at`} | worker, gateway | 7 ngày |
+| `ktv:loc:{staff}` | vị trí Mobix gửi gần nhất {`latlng`, `latlng_at`} | gateway | 1 ngày |
+| `ktv:dedup:{staff}` | fingerprint lần tính cuối = state version + `latlng` làm tròn 4 chữ số (~11 m) | gateway | 1 ngày |
+
+**Tranh chấp** (worker và gateway, nhiều replica, cùng một KTV): route chỉ ghi đè khi `based_on` **mới hơn**
+(state version lớn hơn; bằng thì `latlng_at` mới hơn) — một Lua script trong Redis, không khóa. Nhờ vậy gateway
+tính chậm trên state cũ không ghi đè được route worker vừa tính từ IN mới. State cũng chỉ ghi đè khi version mới hơn.
+
+#### API (`ktv_gateway`)
+
+```
+GET /api/v1/staff/{staff_id}/route?date=YYYY-MM-DD      # đọc cache (date bỏ trống = mới nhất)
+  200 <route>  ·  202 {"retry_after":5} chưa có  ·  401
+
+GET /api/v1/staff/{staff_id}/replan?latlng=21.02,105.79&latlng_at=2026-10-01 09:20:00
+  200 <route mới>  (header X-Cache: HIT khi trùng dedup, MISS khi vừa tính)
+  404 chưa có state IN của KTV  ·  400 sai tham số  ·  401
+Authorization: Bearer <token>       Cache-Control: no-store
+```
+
+`<route>` = đúng JSON đẩy vào Kafka OUT (envelope + `data.clusters/metrics`), để Mobix và OA thấy cùng một thứ.
+
+#### Code (dự kiến)
+
+| Phần | File | Ghi chú |
 |---|---|---|
-| State cache | message IN mới nhất mỗi staff | Kafka không tra on-demand |
-| Dedup cache | `staff_id → fingerprint lần tính cuối` | không plan/produce lại khi không có gì đổi |
-
-- `fingerprint` = định danh snapshot IN (`message_id` nếu có, không thì hash `staff + tasks`) + location hiệu dụng (`latlng` + `latlng_at`).
-- Trùng fingerprint → 202, không `plan()`, không OUT. Restart mất dedup → tính lại một lần, vô hại.
-
-#### Không làm (phạm vi 7)
-
-- Không trả route cho Mobix; không cache route phục vụ Mobix.
-- Không phân biệt trigger, không mode (mode là Phase 8).
-- Không ngưỡng/rate-limit ở phạm vi này; thêm sau ở một chỗ nếu bị gọi dồn.
-- Không đưa Kafka code vào `plan`, `dp`, `rules`, `travel`.
+| Redis | `gateway/redis_store.*` | Thêm state / route có version (Lua) / loc / dedup vào `RedisRouteStore` hiện có (đổi tên thành `RedisStore`), không tạo class mới |
+| Producer | `kafka/producer.{hpp,cpp}` | librdkafka, idempotent, key = `staff_id`, chờ delivery report. `KAFKA_TOPIC_OUT` trống → bỏ qua produce, log một lần (deploy được trước khi SYS cấp topic) |
+| Tính + phát | `adapter/publish.{hpp,cpp}` | Một hàm dùng chung cho T1 và T2: `plan()` → ghi route cache → produce OUT. Không đặt trong `plan`/`dp` |
+| Worker | `kafka/main.cpp` | Thêm `--redis HOST:PORT`, `--redis-prefix`; luồng T1 |
+| Gateway | `gateway/server.*`, `gateway/main.cpp` | Endpoint `route` + `replan`; link thêm `ktv` + `kafka`; thêm `--env/--rules/--osrm` |
 
 #### Sub-phase
 
 | Phase | Nội dung | Gate |
 |---|---|---|
-| 7.1 ✅ | `ktv_worker` đọc IN (kết quả + hardening bên dưới) | E2E Kafka local |
-| 7A (tiếp theo) | Worker ghi IN mới nhất vào state cache thay vì tính luôn; endpoint `replan` trên `ktv_gateway` (tái dùng httplib + Redis); dedup; `plan()`; OUT tạm ghi file/stdout | dedup chặn tính trùng; location đổi → tính lại; mỗi yêu cầu hợp lệ ra đúng một OUT |
-| 7B ⏸ | Produce Kafka OUT thật | xem ghi chú tạm hoãn |
+| 7.1 ✅ | `ktv_worker` đọc IN + hardening + `/healthz` `/readyz` (kết quả bên dưới) | E2E Kafka local |
+| 7.2 | Redis: state + route có version (Lua) + loc + dedup | test trên Redis thật: ghi cũ không đè mới, TTL đúng |
+| 7.3 | Worker T1: IN → state → `plan()` → route cache | E2E: đẩy IN → đọc được route trong Redis; IN cũ không đè IN mới |
+| 7.4 | Gateway: `GET route` + `GET replan` | HTTP test: replan trả route mới; gọi lại cùng vị trí → HIT; đổi vị trí → MISS; không có state → 404 |
+| 7.5 | Producer OUT, nối vào T1 và T2 | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
+| 7.6 | Vận hành: compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
+| sau | JWT thay token tĩnh, rate limit, OUT thêm `location`/`latlng` mỗi TASK (cần OA đồng ý) | |
 
-#### ⏸ Produce OUT — tạm hoãn, chưa bàn (ghi lại để xem sau)
+#### Quyết định cần chốt (đang theo đề xuất)
 
-Chưa có topic OUT (chờ SYS cấp tên + quyền WRITE) và chưa bàn chi tiết với OA/Mobix. Khi quay lại cần chốt:
+1. **IN mới thì tính luôn** (T1) — đề xuất **có**, để cache luôn có route khi Mobix đọc và OA có OUT từ đầu ngày.
+2. **State theo `staff`** (ngày nằm trong payload) — đề xuất **có**; route vẫn theo `(staff, date)` như Phase 6.3.
+3. **Nhớ vị trí Mobix gửi** để lần tính từ IN sau dùng lại nếu `latlng_at` trong 60 phút gần đây — đề xuất **có**
+   [giả định 60 phút]; không thì tuyến tính từ IN quay về vị trí cũ trong payload.
+4. **Đường đọc**: `GET /api/v1/staff/{id}/route` thay `GET /api/v1/worklist/{id}` (cùng họ với `replan`; Mobix
+   chưa tích hợp nên đổi được) — đề xuất **đổi**, bỏ đường cũ.
+5. **`replan` trả route ngay trong response** (tính mất vài ms, OSRM tối đa ~3 s) — đề xuất **có**, thay vì 202 rồi đọc lại.
+6. **Produce OUT lỗi ở gateway**: vẫn trả route cho Mobix, log + đếm ở `/healthz` — đề xuất **có**. Ở worker thì
+   không commit IN để thử lại.
+7. **Nội dung OUT = nội dung route cache** — đề xuất **có**, một JSON cho cả hai nhánh.
 
-- Tên topic OUT, quyền WRITE, partition key (đề xuất `staff_id` để giữ thứ tự theo KTV).
-- Idempotent producer; commit IN / trả 202 chỉ sau khi nhận delivery report.
-- Retry/DLQ cho lỗi transport; lỗi dữ liệu vẫn là một OUT lỗi (`400/422/500`).
-- OUT bổ sung `location` + `latlng` cho mỗi TASK (Mobix cần hiển thị, xem draft API mục 6) — đổi OUT contract.
-- Dedup phía consumer OUT theo `run_code`.
-
-#### Câu hỏi mở của Phase 7
-
-- Batch đầu ngày: message IN đầu ngày có tự kích hoạt `plan()` (như `ktv_worker` đang làm) hay chỉ Mobix kích hoạt? Ảnh hưởng 7A: worker chỉ ghi state hay vừa ghi state vừa tính.
-- State theo `staff_id` hay `(staff_id, date)`; TTL state bao lâu.
-- Envelope thật của OA (header hay body, có `message_id/planned_at` không): chờ message đầu tiên trên topic dev.
+Còn mở (không chặn code): tên topic OUT + quyền WRITE (SYS); envelope thật của OA (chờ message đầu tiên);
+key của message IN (nếu OA không key theo `staff_id`, hai message của cùng KTV có thể nằm khác partition —
+version của state xử lý được thứ tự đến).
 
 **Kết quả bước 1 — đọc IN (2026-09-30):** `core/include/ktv/kafka/{config,consumer}.hpp`,
 `core/src/kafka/{config,consumer,main}.cpp`, `tests/test_kafka_config.cpp`; binary `ktv_worker`
