@@ -231,6 +231,14 @@ int main() {
             }
             CHECK(keys == expected);
         }
+        // 7.13: data = {staff_id, priority_type (luôn 0 = default), clusters, metrics}.
+        if (r) {
+            const ojson& data = r->response["data"];
+            std::vector<std::string> data_keys;
+            for (auto it = data.begin(); it != data.end(); ++it) data_keys.push_back(it.key());
+            CHECK(data["priority_type"] == 0);
+            CHECK(data_keys == (std::vector<std::string>{"staff_id", "priority_type", "clusters", "metrics"}));
+        }
         // Tâm cụm vẫn 4 chữ số.
         if (r) CHECK(r->response["data"]["clusters"][0]["center"].get<std::string>().size() == std::string("21.0301,105.8013").size());
     }

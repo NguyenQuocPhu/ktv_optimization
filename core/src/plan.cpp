@@ -232,7 +232,8 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
                        {"message", estimated ? "Không lấy được dữ liệu bản đồ, khoảng cách là ước lượng đường chim bay (" + travel_error + ")" : ""},
                        {"trace_id", message.message_id},
                        {"server_time", format_datetime(server_now)},
-                       {"data", {{"staff_id", staff.staff_id}, {"clusters", clusters}, {"metrics", metrics}}}};
+                       // priority_type (workbook (4)): 0 default · 1 SLA · 2 tuyến. Chưa có mode → luôn 0 (7.13).
+                       {"data", {{"staff_id", staff.staff_id}, {"priority_type", 0}, {"clusters", clusters}, {"metrics", metrics}}}};
     return result;
 }
 
