@@ -890,7 +890,7 @@ local file / Kafka record
 
 Số liệu gốc để so: benchmark 5.332 message, chim bay p95 < 1 ms, max ~130 ms (12 việc chính xác);
 OSRM tự host p50 3 ms, p95 10 ms. Topic IN 3 partition. `max_exact_tasks = 12`, `max_labels = 32`,
-2-opt chỉ tới 40 việc, `mask` 64 bit (tối đa 63 việc/KTV, hơn thì 422).
+heuristic or-opt + 2-opt tới 64 việc (2026-10-02, xem A3), `mask` 64 bit (tối đa 63 việc/KTV, hơn thì 422).
 
 ### 12.1 Scale thuật toán
 
@@ -905,7 +905,12 @@ nếu khóa tầng 1 hiện tại (số điểm trễ đã chắc chắn) đã l
 việc chưa làm có `due` < `clock + leg nhỏ nhất tới nó` thì chắc chắn trễ → cộng vào. Không đổi kết quả
 (chỉ bỏ nhãn không thể thắng), nên test vét cạn hiện có vẫn là cổng.
 
-**A3. Heuristic tốt hơn cho KTV nhiều việc (> 12).** Hiện: tham lam + 2-opt 2 vòng. Thêm Or-opt (dời đoạn
+**A3. Heuristic tốt hơn cho KTV nhiều việc (> 12).** ✅ **Đã làm 2026-10-02** (nhánh `feat/dp-local-search`): tham
+lam → `improve()` = or-opt (dời đoạn 1–3) + 2-opt lặp tới khi hết cải thiện (tối đa 100 vòng, không cắt theo đồng hồ để
+tất định), 4 điểm xuất phát (tham lam / tham lam + 2-opt 2 vòng × or-opt trước / 2-opt trước), lấy tốt nhất, áp dụng
+13–64 việc. Đo trên bài ngẫu nhiên kiểu `test_dp` (≈50% việc có hẹn): lệch tầng 1 so với tối ưu ở 13–15 việc
+3,3–4,6 → 0,4–1,5; 40 việc TB 114 ms (chậm nhất 156), 64 việc chậm nhất ~0,55 s (người dùng chấp nhận ≤ 2 s). Beam
+search đã thử, tệ hơn (so nhãn dở dang theo tầng rule bị dẫn sai) → bỏ. Bản cũ để tham chiếu: tham lam + 2-opt 2 vòng. Thêm Or-opt (dời đoạn
 1–3 việc sang chỗ khác) và relocate một việc, lặp tới khi không cải thiện hoặc hết ngân sách A1. Tùy chọn
 sau đó: LNS (xóa ngẫu nhiên k việc rồi chèn lại tốt nhất, seed cố định để tất định). Đo trên benchmark:
 số KTV `HEURISTIC` (126) có khóa tốt hơn bao nhiêu, thời gian p95.

@@ -15,7 +15,7 @@ normalize  lọc status 6/10/khác, complete_date, thiếu tọa độ ─► kh
    │  travel   ma trận km / phút: OSRM đường bộ (--osrm URL); lỗi → chim bay × 1,3, mã 424
    │  rules    tầng rule + trọng số (mặc định trong code, đè bằng --rules file.json)
    ▼
-dp         quy hoạch động → thứ tự tốt nhất (≤ 12 việc) · tham lam + 2-opt (nhiều hơn); có nghỉ trưa
+dp         quy hoạch động → thứ tự tốt nhất (≤ 12 việc) · tham lam + or-opt/2-opt (nhiều hơn); có nghỉ trưa
    ▼
 plan       đi lại theo thứ tự → dòng TASK / IDLE / BREAK, projected_sla, cụm, metrics ──► response 200
    ▼
