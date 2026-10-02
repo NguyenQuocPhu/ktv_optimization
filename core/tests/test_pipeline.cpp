@@ -167,6 +167,32 @@ int main() {
         m["staff"]["status"] = 3;
         CHECK(run(m, ktv::default_rules())->response["statuscode"] == "422");
     }
+    {  // Lô 0 lùi xuống block cho AREA_REENTRY. Thẳng hàng: xuất phát — X1 (1 km) — Y (2 km) — X2 (3 km).
+       // X1, X2 cùng block 5, Y block 6. Không tính block: X1→Y→X2 (3 km). Có: quay lại block 5 phạt 2 (≈ 2 km)
+       // → X1→X2→Y (4 km). Block 0 = không thuộc khu vực nào → giữ thứ tự ngắn nhất như trước.
+        auto order = [](const ojson& response) {
+            std::vector<long long> ids;
+            for (const auto& cluster : response["data"]["clusters"])
+                for (const auto& row : cluster["schedule"])
+                    if (row["entry_type"] == "TASK") ids.push_back(row["task_id"].get<long long>());
+            return ids;
+        };
+        auto line = [](long long id, const char* latlng, int block) {
+            json t = task(id, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", latlng, 30);  // không hẹn → không hạn
+            t["task_plots_id"] = 0;
+            t["staff_plots_id"] = 0;
+            t["block_id"] = block;
+            return t;
+        };
+        auto tasks = [&](int x, int y) {
+            return json::array({line(1, "21.029,105.80", x), line(2, "21.038,105.80", y), line(3, "21.047,105.80", x)});
+        };
+        auto with_block = run(message("2026-09-10 09:00:00", none, tasks(5, 6), none, none, none));
+        auto no_block = run(message("2026-09-10 09:00:00", none, tasks(0, 0), none, none, none));
+        CHECK(with_block && order(with_block->response) == (std::vector<long long>{1, 3, 2}));
+        CHECK(with_block && with_block->response["data"]["metrics"]["revisit_count"] == 0);
+        CHECK(no_block && order(no_block->response) == (std::vector<long long>{1, 2, 3}));
+    }
     {  // complete_date = ngày hoàn tất kỳ trước (workbook (3)): KHÔNG loại việc, không đổi giờ/định mức.
         json previous = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, "");
         previous["complete_date"] = "2026-09-01 10:00:00";

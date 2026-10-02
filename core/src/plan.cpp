@@ -77,11 +77,17 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         p.complete_by.push_back(relative(d.complete_by));
         p.weight.push_back(rules.priority_weight[task->priority_in_day]);
     }
+    // Khu vực cho rule "quay lại khu vực đã rời" (AREA_REENTRY): biết lô → theo lô; lô 0 → lùi xuống block
+    // (workbook (3): "không có lô thì tính ưu tiên xuống block_id"), chỉ so với task lô 0 khác; lô 0 + block 0 → không
+    // thuộc khu vực nào. Task biết lô không gộp với task lô 0 cùng block (thận trọng, giữ như trước 2026-10-02).
+    auto same_area = [](const Task& a, const Task& b) {
+        if (a.task_plots_id != 0 || b.task_plots_id != 0) return a.task_plots_id != 0 && a.task_plots_id == b.task_plots_id;
+        return a.block_id != 0 && a.block_id == b.block_id;
+    };
     for (size_t i = 0; i < tasks.size(); ++i) {
         uint64_t mask = 0;
         for (size_t j = 0; j < tasks.size(); ++j)
-            if (j != i && tasks[i]->task_plots_id != 0 && tasks[j]->task_plots_id == tasks[i]->task_plots_id)
-                mask |= uint64_t{1} << j;  // Lô 0 = chưa xác định, không tính là cùng khu vực.
+            if (j != i && same_area(*tasks[i], *tasks[j])) mask |= uint64_t{1} << j;
         p.same_area.push_back(mask);
     }
     p.shift_end = static_cast<double>(shift_end - start);
