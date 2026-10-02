@@ -42,8 +42,8 @@ Bảng dưới lấy nguyên từ sheet "#Bảng KPI, SLA Tác vụ" **[TÀI LI�
 | 8 | Thu hồi | Thu hồi thiết bị | N/A | Hoàn tất trong tháng | 4 | `complete_by` = cuối tháng |
 | 9 | Thu bill | Thu bill trả trước, sau | N/A | Hoàn tất trong tháng | 4 | `complete_by` = cuối tháng |
 | 10 | Onsite | Phiếu Onsite | 60 phút | **Check-in trước mốc hẹn cuối** (workbook API (4): "rule như bao_tri", từ 2026-10-02; trước: hoàn tất trong tháng) | 2 | `due_at` = hẹn + SLA input; không hẹn → không hạn |
-| 11 | CSKH chủ động | Ngưng kết nối 4H | N/A | Hoàn tất trong ngày tạo phiếu | 2 | `complete_by` = cuối ngày tạo |
-| 12 | CSKH chủ động | Mạng chập chờn, suy hao cao | N/A | Hoàn tất trong ngày tạo phiếu | 4 | `complete_by` = cuối ngày tạo |
+| 11 | CSKH chủ động (`cscd`, từ 2026-10-02; trước: `onsite`) | Ngưng kết nối 4H | N/A | Hoàn tất trong ngày tạo phiếu | 2 | `complete_by` = cuối ngày tạo |
+| 12 | CSKH chủ động (`cscd`) | Mạng chập chờn, suy hao cao | N/A | Hoàn tất trong ngày tạo phiếu | 4 | `complete_by` = cuối ngày tạo |
 
 - "Ưu tiên trong ngày": 1 là gấp nhất, 4 là thấp nhất. **[TÀI LIỆU]**
 - Export QOS **chỉ có `CASE_TYPE = MAINTENANCE`** (METADATA: "ca vụ: default MAINTENANCE"), không nói là Vật lý hay Logic. Simulator tạm cho MAINTENANCE **ưu tiên 2**. **[GIẢ ĐỊNH]** (Q1)

@@ -18,7 +18,7 @@
 | `current_task` | ✔ (null được) | `{task_id, task_status_id, task_type_id}` hoặc null | Staging có thể đồng thời gửi task đầy đủ trong `tasks`; ghép theo `task_id` để bổ sung dữ liệu cho current task, nhưng không đưa cùng task vào tuyến lần thứ hai |
 | `staff_location` | bỏ | Bản mới đã bỏ | Ignore nếu có gửi |
 
-## 2. Tasks (5 nhóm cố định: trien_khai, bao_tri, thu_hoi, hoa_don, onsite; rỗng = `[]`)
+## 2. Tasks (5 nhóm bắt buộc: trien_khai, bao_tri, thu_hoi, hoa_don, onsite + `cscd` không bắt buộc từ workbook API (4); rỗng = `[]`)
 
 | Field | Bắt buộc | Giá trị hợp lệ | Vi phạm thì sao |
 |---|---|---|---|

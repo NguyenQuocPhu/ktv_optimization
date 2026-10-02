@@ -664,6 +664,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.11 ✅ | Bảng trạng thái `hoa_don`/`onsite` theo workbook API (4) — chi tiết + kết quả bên dưới | hóa đơn đã thanh toán, onsite đã hoàn tất không còn bị xếp |
 | 7.15 ✅ | `onsite/phieu_onsite` theo luật mới "rule như bao_tri" (workbook API (4)) — chi tiết bên dưới | `phieu_onsite` có hẹn + SLA 60 → hạn check-in trước B, không cảnh báo |
 | 7.13 ✅ | Output `data.priority_type` (workbook API (4)), luôn `0` (default) — chi tiết bên dưới | mọi response có tuyến có `priority_type: 0` ngay sau `staff_id` |
+| 7.12 ✅ | Nhận nhóm thứ 6 `cscd` (CSKH chủ động, workbook API (4)), không bắt buộc; `onsite` chỉ còn `phieu_onsite`, 2 loại CSKH sang `cscd` (tra dự phòng) — chi tiết bên dưới | payload 6 khóa đọc được task `cscd`; payload 5 khóa không cảnh báo |
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
 | sau | JWT thay token tĩnh, rate limit | |
 
@@ -889,6 +890,34 @@ Workbook (4) sheet 05 bổ sung bảng trạng thái cho hai nhóm chưa có ở
 đủ loại trong `test_normalization` đổi task `hoa_don` 0 → mã 4 (vẫn ngoài bảng) để giữ kiểm luật "không có trong bảng". Kiểm:
 test mới trên code cũ fail 11 kiểm — `hoa_don` 1 và `onsite` 1 tên rỗng **bị xếp** (đúng lỗi cần sửa); code mới `ctest` 15/15;
 benchmark (status 6) + file staging thật giống hệt trước/sau.
+
+##### 7.12 — Nhóm `cscd` (người dùng duyệt 2026-10-02, phương án B)
+
+Workbook (4) sheet 05 thêm nhóm `6 · cscd · CSKH chủ động`; nhóm 5 đổi tên "onsite". Tài liệu chưa nhất quán: sheet 02 vẫn
+"5 khoá cố định", JSON mẫu không có `cscd`, `cscd` chưa có loại việc / bảng trạng thái.
+
+- Hiện tại: khóa `cscd` trong `tasks` → nới lỏng `UNKNOWN_FIELD` và **bỏ cả nhóm**; strict `400`.
+- Nhóm: `kGroups` thêm `cscd` (6 nhóm, `task_group_id` 6); 5 nhóm đầu bắt buộc như cũ, `cscd` **không bắt buộc** (thiếu thì
+  không cảnh báo). Thứ tự gộp task: `trien_khai → bao_tri → thu_hoi → hoa_don → onsite → cscd`.
+- Loại việc (người dùng chốt, thay (h) và (l) của 7.15): **`onsite` chỉ còn `phieu_onsite`**; `ngung_ket_noi_4h`,
+  `chap_chon_suy_hao` **chuyển sang `cscd`** (luật giữ nguyên: hoàn tất trong ngày tạo; P2 / 30 phút, P4 / 40 phút). Phương
+  án B — **tra dự phòng**: loại không có trong nhóm của task nhưng có cùng tên ở nhóm khác (VD OA còn gửi
+  `onsite/ngung_ket_noi_4h` theo hợp đồng cũ) → dùng luật của nhóm kia + cảnh báo `TASK_TYPE_OTHER_GROUP` (strict: lỗi). Không
+  có ở nhóm nào → loại mặc định + `UNKNOWN_TASK_TYPE` như cũ. Khi `/healthz` hết `TASK_TYPE_OTHER_GROUP` (OA đã gửi đúng nhóm)
+  có thể bỏ phần tra dự phòng.
+- Trạng thái `cscd`: chưa có bảng → luật 7.7 cho mã ngoài bảng (đoán theo `task_status_name`, có cảnh báo). Không thêm code.
+- Test: `test_api` (5 khóa không cảnh báo; 6 khóa đọc task `cscd`, `group_id` 6, cả strict lẫn nới lỏng; thiếu `onsite` vẫn
+  `TASK_GROUPS`; `onsite/ngung_ket_noi_4h` → luật cscd + `TASK_TYPE_OTHER_GROUP`; loại lạ → `UNKNOWN_TASK_TYPE`);
+  `test_normalization` (`cscd` mã lạ → xếp + `TASK_STATUS_UNKNOWN`); `test_sla` dùng `cscd/ngung_ket_noi_4h`; test mới fail
+  trên code cũ; benchmark (630 task 2 loại này dưới `onsite`) → tuyến giống hệt, thêm cảnh báo `TASK_TYPE_OTHER_GROUP`.
+- Rủi ro: OA đặt tên khóa khác `cscd` → vẫn bị bỏ, thấy qua `UNKNOWN_FIELD` ở `/healthz`.
+
+**Kết quả 7.12 (2026-10-02):** `api.hpp` `kGroups` 6 nhóm + `kGroupCount`/`kRequiredGroups`; `api.cpp` kiểm khóa (5 bắt buộc,
+`cscd` tùy chọn), danh mục chuyển 2 loại CSKH sang `cscd`, `kind_in_any_group` + tra dự phòng ở parser (`TASK_TYPE_OTHER_GROUP`)
+và `kind_or_default` (luật đúng khi plan). (Ghi chú: bản đầu của 7.12 đã làm thử khi chưa được duyệt, cất vào stash; người dùng
+chọn phương án B rồi mới làm tiếp.) Kiểm: `ctest` 18/18 (Redis riêng); `ktv_core` cũ trên payload có `cscd` bỏ cả nhóm, mới xếp
+task `cscd`; benchmark tuyến giống hệt, 630 cảnh báo `TASK_TYPE_OTHER_GROUP` (329 `chap_chon_suy_hao` + 301 `ngung_ket_noi_4h`
+còn dưới `onsite`). Thay chốt (l) của 7.15 (hai loại CSKH không còn dưới `onsite`).
 
 ##### 7.15 — Luật mới của `onsite`: "rule như bao_tri" (người dùng duyệt 2026-10-02)
 
