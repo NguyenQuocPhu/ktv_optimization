@@ -175,7 +175,7 @@ Cấu hình qua `.env` (copy từ `.env.example`; biến môi trường thật �
 | `KAFKA_SASL_MECHANISM` | `PLAIN` / `SCRAM-SHA-256` / `SCRAM-SHA-512` |
 | `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD` | tài khoản SASL |
 | `KAFKA_CLIENT_ID`, `KAFKA_GROUP_ID` | định danh client và consumer group (khác nhau) |
-| `KAFKA_TOPIC_IN` | topic "task đã gán cho KTV" do Optimal Assign phát |
+| `KAFKA_TOPIC_IN` | topic "task đã gán cho KTV" do Optimal Assign phát: prod `inside-par-assignment-optimal-assign-task-emp-assigned-queue`, staging `stag-inside-par-…`, dev `dev-inside-par-…` (workbook API (3) sheet 00) |
 | `KAFKA_TOPIC_OUT` | topic route trả ra cho OA (chờ SYS cấp tên + quyền WRITE). Trống = không đẩy OUT |
 | `KAFKA_AUTO_OFFSET_RESET` | `earliest` / `latest` |
 

@@ -659,8 +659,9 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.7 ✅ | `task_status_id` theo từng nhóm (sheet 05 workbook 3) — chi tiết + kết quả bên dưới | file staging thật `200`, xếp đúng 3 task; bảng (nhóm, status) |
 | 7.8 ✅ | `complete_date` đổi nghĩa: không còn loại task (kết quả bên dưới) | task XẾP có `complete_date` được xếp; benchmark giữ 5202/130 |
 | 7.9 ⏳ | Output TASK thêm `location`/`latlng`/`contract_id`/`contract_no` (sheet 03) | đủ 4 field, thứ tự tuyến không đổi |
-| 7.10 ⏳ | `staff_role = 0` hợp lệ, nhận `CreateDate`, tên topic, sổ câu hỏi | `validate` staging hết lỗi role |
-| sau | JWT thay token tĩnh, rate limit, lùi về `block_id` khi task không có lô (đổi thứ tự, trình bày riêng) | |
+| 7.10 ✅ | `staff_role = 0` hợp lệ, nhận `CreateDate`, tên topic, sổ câu hỏi (kết quả bên dưới) | `validate` staging hết lỗi role |
+| 7.10b ✅ | Task lô 0 lùi xuống `block_id` trong rule quay lại khu vực (`AREA_REENTRY`) (kết quả bên dưới) | test thẳng hàng X1–Y–X2 đổi thứ tự đúng |
+| sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
 
@@ -816,7 +817,22 @@ câu hỏi đã ghi ở `docs/DATA_QUESTIONS.md`.
   những gì workbook (3) đã trả lời.
 - Trước/sau: `ktv_core validate` file staging hết lỗi role (trước `400`).
 - Test: `test_api` role 0 không cảnh báo (cả hai chế độ); `CreateDate` đọc được; có cả hai tên mà lệch → cảnh báo.
-- **Không làm**: lùi về `block_id` khi task không có lô (đổi rule `AREA_REENTRY` → đổi thứ tự tuyến), trình bày riêng.
+- ~~Không làm: lùi về `block_id`~~ → người dùng duyệt làm luôn (7.10b, kết quả bên dưới).
+
+**Kết quả 7.10 (2026-10-02):** người dùng chốt (g): `create_date` và `CreateDate` là **một field**, tên nào cũng nhận; gửi
+cả hai mà khác giá trị → dùng `create_date` + cảnh báo `CREATE_DATE_CONFLICT` (strict: lỗi). `staff_role` 0–3 hợp lệ ở
+cả hai chế độ, ngoài 0–3 vẫn `STAFF_ROLE`. `.env.example` + README ghi tên topic IN prod/staging/dev; `DATA_QUESTIONS`
+cập nhật `STAFF_ROLE`, thêm `CREATE_DATE_CONFLICT`, điền "Nhật ký trả lời" theo workbook (3). Kiểm: `test_api` mới fail 8
+kiểm trên code cũ, pass trên code mới; `ktv_core validate` file staging thật `400` → `200`; `plan` hết 2 cảnh báo
+`STAFF_ROLE`; benchmark + staging tuyến giống hệt.
+
+**Kết quả 7.10b — lô 0 lùi xuống block (2026-10-02):** người dùng duyệt sau khi xem cách tính. `plan.cpp` dựng `same_area`:
+biết lô → theo lô (như cũ); lô 0 + `block_id ≠ 0` → cùng block với task lô 0 khác; lô 0 + block 0 → không thuộc khu vực
+nào. Thận trọng: task biết lô **không** gộp với task lô 0 cùng block. `dp.cpp` không đổi (vẫn phạt 2 ≈ 2 km mỗi lần quay lại).
+Kiểm: `test_pipeline` thẳng hàng xuất phát — X1 (1 km, block 5) — Y (2 km, block 6) — X2 (3 km, block 5): cũ X1→Y→X2
+(3 km), mới X1→X2→Y (4 km, không quay lại block 5); block 0 giữ thứ tự cũ; test fail trên code cũ. **Chưa đo được ảnh hưởng
+thật**: benchmark không có task lô 0, file staging có 2 task lô 0 nhưng khác block → cả hai giống hệt. Đo lại khi có dữ liệu
+thật (đếm tuyến đổi thứ tự, km tăng thêm).
 
 ##### Ghi chú — việc đang làm (`staff.current_task`), người dùng duyệt hướng 2026-10-02
 

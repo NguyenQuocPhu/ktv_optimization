@@ -19,7 +19,8 @@ Khi gặp team data: mở `/healthz`, lấy các loại gặp nhiều nhất, h�
 |---|---|---|---|---|
 | `UNKNOWN_FIELD` | Field không có trong file API (ở gốc, `staff`, lô, `current_task`, task, `sla`) hoặc nhóm task lạ trong `tasks` | Bỏ qua field | Field này là gì, có cần dùng khi xếp tuyến không? Khi nào thêm field mới thì báo trước được không? | mở |
 | `TASK_GROUPS` | `tasks` thiếu một trong 5 nhóm | Coi nhóm đó là `[]` | Payload có luôn gửi đủ 5 nhóm không? | mở |
-| `STAFF_ROLE` | `staff_role` không phải 1/2/3 (thực tế đã gặp **0**) hoặc thiếu | Giữ nguyên số, vẫn xếp task (`staff_role` không dùng khi xếp tuyến) | Role 0 nghĩa là gì? Mô tả cũ: `staff_plots_id = 0 && staff_role = 0` = KTV không thuộc lô của task — đúng không, có cần xử lý khác (VD không xếp, hay ưu tiên thấp) không? | mở |
+| `STAFF_ROLE` | `staff_role` ngoài 0–3 hoặc thiếu (**0 hợp lệ** từ 2026-10-02: workbook (3) "0 default" = không khớp lô nào của KTV) | Giữ nguyên số, vẫn xếp task (`staff_role` không dùng khi xếp tuyến) | Giá trị ngoài 0–3 nghĩa là gì? | mở |
+| `CREATE_DATE_CONFLICT` | Gửi cả `create_date` lẫn `CreateDate` mà khác giá trị (hai tên là một field, tên nào cũng nhận) | Dùng `create_date` | Tên field chính thức là gì? Vì sao gửi cả hai? | mở |
 | `CATALOG_MISMATCH` | `task_type_id` hoặc SLA/ưu tiên của task khác bảng sheet 05 | Dùng giá trị **input** (SLA, ưu tiên); định mức thời gian và kiểu hạn vẫn theo tên loại trong danh mục | Bảng số `task_type_id` + SLA chính thức là gì? Input hay danh mục là nguồn đúng? | mở |
 | `UNKNOWN_TASK_TYPE` | Tên loại việc không có trong danh mục sheet 05 (cảnh báo ghi `nhóm/tên`) | Vẫn xếp: SLA/ưu tiên theo input, xử lý **60 phút** nếu input không có `handle_minutes`, **không** có hạn hoàn tất theo loại (chỉ hạn check-in nếu có hẹn + SLA) | Loại này thuộc dòng nào của sheet 05 (yêu cầu đúng hẹn, định mức thời gian)? Còn thiếu: `thu_hoi`, `hoa_don`, `onsite`, subtype `trien_khai_box` | mở |
 | `TASK_GROUP` | Task nằm trong nhóm A nhưng `task_group_name`/`task_group_id` ghi nhóm khác | Vẫn xếp; **dùng nhóm chứa task** (sửa `task_group_name`/`task_group_id` theo nhóm đó) để tra danh mục | Nhóm nào đúng? | mở |
@@ -49,4 +50,9 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 
 | Ngày | Câu | Trả lời | Đã đổi gì |
 |---|---|---|---|
-| | | | |
+| 2026-10-02 | `staff_role = 0` | Workbook API (3) sheet 02: "0 default / 1 chính / 2 kiêm nhiệm / 3 hỗ trợ" | 0 hợp lệ, hết cảnh báo (Phase 7.10) |
+| 2026-10-02 | `staff_plots_id = 0` | Sheet 02: "không có default 0, tính ưu tiên xuống `block_id`" | Task lô 0 lùi xuống block trong rule quay lại khu vực |
+| 2026-10-02 | Ý nghĩa `task_status_id` | Sheet 05: bảng trạng thái theo nhóm `trien_khai`/`bao_tri`/`thu_hoi` (chưa có `hoa_don`/`onsite`) | Lọc theo (nhóm, status), Phase 7.7 |
+| 2026-10-02 | `complete_date` | Sheet 02: "ngày hoàn tất ca vụ trước đó (ngày thu bill trước)" | Không còn loại task, Phase 7.8 |
+| 2026-10-02 | Tên `create_date` | Sheet 02 ghi `CreateDate` | Nhận cả hai tên, Phase 7.10 |
+| 2026-10-02 | Tên topic IN | Sheet 00: prod `inside-par-…`, staging `stag-inside-par-…` | `.env.example`, README |

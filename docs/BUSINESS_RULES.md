@@ -241,7 +241,7 @@ So hai thứ tự bằng từng **tầng**. Tầng 1 quyết định trước; t
 | 3 | Quãng đường | Tổng km | 1 / km |
 | 3 | Số phút check-in trễ | Tổng phút trễ | 0,1 / phút (10 phút ≈ 1 km) |
 | 3 | Thời gian di chuyển | Tổng phút đi | 0,05 / phút (20 phút ≈ 1 km) |
-| 3 | Quay lại khu vực đã rời | Số lần | 2 / lần (≈ 2 km) |
+| 3 | Quay lại khu vực đã rời | Số lần. Khu vực = lô (`task_plots_id`); task lô 0 lùi xuống block (`block_id`, chỉ so với task lô 0 khác); lô 0 + block 0 không tính (2026-10-02) | 2 / lần (≈ 2 km) |
 | 3 | Job ưu tiên cao bị để muộn | Trọng số ưu tiên × số giờ từ lúc xuất phát tới check-in | 0,5 (job ưu tiên 1 muộn 1 giờ ≈ 2 km) |
 | 3 | Giờ xong job cuối | Phút từ lúc xuất phát tới lúc xong job cuối | 0,01 / phút (100 phút ≈ 1 km) |
 
