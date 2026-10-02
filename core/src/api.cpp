@@ -461,7 +461,10 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                     tr.fail(path + ".contract_id", "cần số nguyên");
                 }
             }
-            t.contract_no = tr.text(item, path, "contract_no", false);
+            if (item.contains("contract_no") && !item["contract_no"].is_null()) {  // null = không có, như contract_id
+                if (item["contract_no"].is_string()) t.contract_no = item["contract_no"].get<std::string>();
+                else tr.fail(path + ".contract_no", "cần chuỗi hoặc null");
+            }
             if (!item.contains("latlng")) {
                 tr.fail(path + ".latlng", "thiếu field bắt buộc");
             } else if (const json& value = item["latlng"]; !(value.is_string() && value.get_ref<const std::string&>().empty())) {

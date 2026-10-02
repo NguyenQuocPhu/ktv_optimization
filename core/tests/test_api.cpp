@@ -182,6 +182,15 @@ int main() {
         ktv::parse_message(data, errors);
         for (const auto& e : errors) std::cerr << "  lỗi không mong đợi: " << e.path << " " << e.problem << "\n";
         CHECK(errors.empty());
+        // 7.9: contract_no null = không có (trước đây lỗi → bỏ cả task); kiểu khác vẫn lỗi.
+        data["tasks"]["trien_khai"][0]["contract_no"] = nullptr;
+        errors.clear();
+        auto with_null = ktv::parse_message(data, errors);
+        CHECK(errors.empty() && !with_null.tasks[0].contract_no);
+        data["tasks"]["trien_khai"][0]["contract_no"] = 5;
+        errors.clear();
+        ktv::parse_message(data, errors);
+        CHECK(!errors.empty());
     }
     {  // Mẫu workbook mới: trien_khai_box + subtype gsafe.
         json data = sample();

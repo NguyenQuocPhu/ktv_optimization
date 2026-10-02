@@ -1,6 +1,7 @@
 // Pipeline end-to-end: nhiều kịch bản ETA/SLA, ca làm, current task, create_date, heuristic, biên.
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <string>
 
 #include "ktv/plan.hpp"
@@ -192,6 +193,46 @@ int main() {
         CHECK(with_block && order(with_block->response) == (std::vector<long long>{1, 3, 2}));
         CHECK(with_block && with_block->response["data"]["metrics"]["revisit_count"] == 0);
         CHECK(no_block && order(no_block->response) == (std::vector<long long>{1, 2, 3}));
+    }
+    {  // 7.9: dòng TASK có location, latlng (6 chữ số), contract_id / contract_no như input, đúng thứ tự sheet 03.
+        json a = task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0291234,105.8012345", "");
+        a["location"] = "Số 12 ngõ 45 Trần Duy Hưng";
+        a["contract_id"] = 1126569863;
+        a["contract_no"] = "SGABP0236";
+        json b = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0301,105.8013", "");
+        b["contract_id"] = nullptr;  // null → null; contract_no không gửi → null
+        json c = task(3, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0311,105.8014", "");
+        c["contract_no"] = "";       // "" giữ nguyên; contract_id không gửi → null
+        auto r = run(message("2026-09-10 09:00:00", none, json::array({a, b, c}), none, none, none));
+        CHECK(r && r->response["statuscode"] == "200");
+        std::map<long long, ojson> rows;
+        if (r)
+            for (const auto& cluster : r->response["data"]["clusters"])
+                for (const auto& row : cluster["schedule"])
+                    if (row["entry_type"] == "TASK") rows[row["task_id"].get<long long>()] = row;
+        CHECK(rows.size() == 3);
+        if (rows.size() == 3) {
+            const ojson& ra = rows[1];
+            CHECK(ra["location"] == "Số 12 ngõ 45 Trần Duy Hưng" && ra["latlng"] == "21.029123,105.801235");
+            CHECK(ra["contract_id"].is_number_integer() && ra["contract_id"] == 1126569863 && ra["contract_no"] == "SGABP0236");
+            CHECK(rows[2]["contract_id"].is_null() && rows[2]["contract_no"].is_null() && rows[2]["location"] == "");
+            CHECK(rows[3]["contract_id"].is_null() && rows[3]["contract_no"] == "");
+            std::vector<std::string> keys;  // thứ tự field theo sheet 03
+            for (auto it = ra.begin(); it != ra.end(); ++it) keys.push_back(it.key());
+            const std::vector<std::string> expected = {
+                "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_group_id",
+                "task_group_name", "task_type_id", "task_type_name", "task_sub_id", "task_sub_name", "checkindate",
+                "checkoutdate", "travel_minutes_before", "travel_km_before", "handle_minutes", "projected_sla",
+                "contract_id", "contract_no"};
+            if (keys != expected) {
+                std::cerr << "  thứ tự field TASK:";
+                for (const auto& k : keys) std::cerr << " " << k;
+                std::cerr << "\n";
+            }
+            CHECK(keys == expected);
+        }
+        // Tâm cụm vẫn 4 chữ số.
+        if (r) CHECK(r->response["data"]["clusters"][0]["center"].get<std::string>().size() == std::string("21.0301,105.8013").size());
     }
     {  // complete_date = ngày hoàn tất kỳ trước (workbook (3)): KHÔNG loại việc, không đổi giờ/định mức.
         json previous = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, "");

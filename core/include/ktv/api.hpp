@@ -95,8 +95,8 @@ struct Task {
     std::optional<Point> latlng;         // Không có = thiếu tọa độ → bị loại khỏi tuyến.
     std::optional<int> handle_minutes;   // Không có / 0 = dùng định mức theo loại việc.
     int task_plots_id = 0, staff_plots_id = 0, staff_role = 0, block_id = 0;  // staff_role 0 = không khớp lô nào của KTV.
-    std::optional<long long> contract_id;  // ObjID hợp đồng. Chỉ để truy vết.
-    std::string contract_no;               // Số hợp đồng. Chỉ để truy vết.
+    std::optional<long long> contract_id;    // ObjID hợp đồng. Không gửi / null = không có. Chỉ truy vết, ra output như input.
+    std::optional<std::string> contract_no;  // Số hợp đồng, VD "SGABP0236" ("" giữ nguyên). Không gửi / null = không có.
 };
 
 // Cả message = input của một lần gọi AI cho một KTV.

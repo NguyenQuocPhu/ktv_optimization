@@ -16,11 +16,14 @@ using ojson = nlohmann::ordered_json;
 
 std::string hhmm(Minutes t) { return format_datetime(t).substr(11, 5); }
 
-std::string latlng(Point p) {
-    char text[40];
-    std::snprintf(text, sizeof text, "%.4f,%.4f", p.lat, p.lng);
+// "lat,lng". Tâm cụm: 4 chữ số (~11 m). Tọa độ task: 6 chữ số (~0,1 m, marker trên map Mobix — người dùng chốt 7.9).
+std::string latlng(Point p, int digits = 4) {
+    char text[64];
+    std::snprintf(text, sizeof text, "%.*f,%.*f", digits, p.lat, digits, p.lng);
     return text;
 }
+ojson or_null(const std::optional<long long>& value) { return value ? ojson(*value) : ojson(nullptr); }
+ojson or_null(const std::optional<std::string>& value) { return value ? ojson(*value) : ojson(nullptr); }
 double round_to(double value, int digits) {
     double scale = std::pow(10, digits);
     return std::round(value * scale) / scale;
@@ -158,12 +161,16 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         stops.push_back({&task, v.km, p.service[v.task]});
         rows.push_back({{"entry_type", "TASK"}, {"at", hhmm(at(v.checkin))},
                         {"start_at", format_datetime(at(v.checkin))}, {"end_at", format_datetime(at(v.done))},
-                        {"task_id", task.task_id}, {"task_group_id", task.task_group_id},
+                        {"task_id", task.task_id}, {"location", task.location},
+                        {"latlng", latlng(*task.latlng, 6)},  // task đã qua lọc nên luôn có tọa độ
+                        {"task_group_id", task.task_group_id},
                         {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
                         {"task_type_name", task.task_type_name}, {"task_sub_id", task.task_sub_id},
                         {"task_sub_name", task.task_sub_name}, {"checkindate", ""}, {"checkoutdate", ""},
                         {"travel_minutes_before", std::llround(v.travel)}, {"travel_km_before", round_to(v.km, 1)},
-                        {"handle_minutes", std::llround(p.service[v.task])}, {"projected_sla", sla}});
+                        {"handle_minutes", std::llround(p.service[v.task])}, {"projected_sla", sla},
+                        // Như input (người dùng chốt 7.9): số vẫn là số, chuỗi giữ nguyên; không gửi / null → null.
+                        {"contract_id", or_null(task.contract_id)}, {"contract_no", or_null(task.contract_no)}});
         row_task.push_back(task_ordinal);
     }
 
