@@ -39,6 +39,7 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 
 - Envelope thật của OA: `message_id`, `planned_at`, `trigger` nằm trong body hay header Kafka? Key message là gì? (Worker đang log header để soi khi có message đầu tiên.)
 - Bảng trạng thái của `hoa_don` và `onsite` (workbook (3) sheet 05 chưa có): mã nào là còn mở / đã xong / đã hủy? Hiện mã lạ được đoán theo `task_status_name` (mã `TASK_STATUS_UNKNOWN*`). Staging đang gửi `task_status_name` rỗng → không đoán được, đều xếp.
+- `complete_date` (workbook (3): "ngày hoàn tất ca vụ trước đó, ngày thu bill trước"): có cần dùng để tính hạn không, VD hạn thu bill kỳ này = kỳ trước + 1 tháng? Hiện chỉ đọc vào, không dùng (IMPLEMENTATION_SPEC 7.8). Có nhóm nào vẫn dùng `complete_date` theo nghĩa cũ "task này đã xong" mà không đổi `task_status_id` không?
 - Việc đang làm: OA gửi được **giờ check-in** của `staff.current_task` không? Có thì tính được thời gian còn lại (định mức − đã làm) thay vì luôn 30 phút (IMPLEMENTATION_SPEC 7.7–7.10, ghi chú việc đang làm).
 - OA có gửi message IN mới cho KTV **mỗi khi task đổi trạng thái** (check-in, hoàn tất, gán thêm, đổi hẹn) không, hay chỉ khi gán việc? Route (worker lẫn `replan`) chỉ biết danh sách việc trong IN mới nhất: nếu OA không gửi lại, việc KTV đã làm xong vẫn nằm trong tuyến tới IN kế tiếp. (Đã chốt 2026-10-01: IN mới thì worker tính luôn — IMPLEMENTATION_SPEC Phase 7.)
 - Kafka timestamp của topic IN là `CreateTime` (giờ OA gửi) hay `LogAppendTime`? Version của state dùng timestamp này (Phase 7.3).

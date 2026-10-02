@@ -657,7 +657,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.5 ✅ | Producer OUT, nối vào T1 và T2 (kết quả bên dưới) | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
 | 7.6 ✅ | Vận hành (kết quả bên dưới): compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
 | 7.7 ✅ | `task_status_id` theo từng nhóm (sheet 05 workbook 3) — chi tiết + kết quả bên dưới | file staging thật `200`, xếp đúng 3 task; bảng (nhóm, status) |
-| 7.8 ⏳ | `complete_date` đổi nghĩa: không còn loại task | task XẾP có `complete_date` được xếp; benchmark giữ 5202/130 |
+| 7.8 ✅ | `complete_date` đổi nghĩa: không còn loại task (kết quả bên dưới) | task XẾP có `complete_date` được xếp; benchmark giữ 5202/130 |
 | 7.9 ⏳ | Output TASK thêm `location`/`latlng`/`contract_id`/`contract_no` (sheet 03) | đủ 4 field, thứ tự tuyến không đổi |
 | 7.10 ⏳ | `staff_role = 0` hợp lệ, nhận `CreateDate`, tên topic, sổ câu hỏi | `validate` staging hết lỗi role |
 | sau | JWT thay token tĩnh, rate limit, lùi về `block_id` khi task không có lô (đổi thứ tự, trình bày riêng) | |
@@ -779,6 +779,18 @@ Tên "đã xong/hủy" (`status_name_closed`, sau khi bỏ dấu + chữ thườ
   loại". Benchmark không có `complete_date` → giữ 5202/130.
 - **Cần chốt**: (d) dùng `complete_date` tính hạn thu bill (VD kỳ trước + 1 tháng)? Đề xuất **chưa**, ghi sổ câu hỏi;
   nếu làm thì trình bày riêng (đổi nghiệp vụ hạn).
+
+**Kết quả 7.8 (2026-10-02):** người dùng duyệt (d) **chưa** dùng `complete_date` tính hạn (ghi sổ câu hỏi). `normalization`:
+bỏ bước loại task có `complete_date` + bộ đếm `excluded_completed`; `api.hpp` comment field theo nghĩa mới (vẫn đọc vào,
+chưa dùng). Không đụng `sla.cpp` (`complete_by` là hạn ta tự tính, khác field này). Kiểm: `test_normalization` (task
+`bao_tri` 6 có `complete_date` vẫn xếp; thứ tự loại: trạng thái → tọa độ), `test_pipeline` (có/không `complete_date` →
+cụm giống hệt); test mới chạy trên code cũ → 6 kiểm fail, code mới 15/15. Benchmark 5.332 message + file staging thật:
+output giống hệt trước/sau (không message nào có `complete_date`).
+
+**Ghi chú rủi ro (chỉ ghi lại, không xử lý):** nếu thực tế OA vẫn dùng `complete_date` theo nghĩa cũ "task này đã xong" ở
+nhóm nào đó mà **không** cập nhật `task_status_id`, task đã xong sẽ bị xếp vào tuyến. Theo workbook (3) thì trạng thái mới
+là nguồn đúng. Cách phát hiện khi có dữ liệu thật: soát message có `complete_date` gần giờ lập tuyến mà status vẫn "xếp";
+câu hỏi đã ghi ở `docs/DATA_QUESTIONS.md`.
 
 ##### 7.9 — Output thêm 4 field (sheet 03)
 
