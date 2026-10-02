@@ -23,7 +23,7 @@ const std::vector<TaskKind>& task_kinds() {
         {"thu_hoi", 1, "thu_hoi_thiet_bi", std::nullopt, O::DoneWithinMonth, 4, 20},
         {"hoa_don", 1, "hoa_don_tra_truoc", std::nullopt, O::DoneWithinMonth, 4, 15},
         {"hoa_don", 2, "hoa_don_tra_sau", std::nullopt, O::DoneWithinMonth, 4, 15},
-        {"onsite", 1, "phieu_onsite", std::nullopt, O::DoneWithinMonth, 2, 45},
+        {"onsite", 1, "phieu_onsite", 60, O::CheckinBeforeB, 2, 45},  // Workbook (4): "rule như bao_tri" (7.15; trước: trong tháng)
         {"onsite", 2, "ngung_ket_noi_4h", std::nullopt, O::DoneSameCreatedDay, 2, 30},
         {"onsite", 3, "chap_chon_suy_hao", std::nullopt, O::DoneSameCreatedDay, 4, 40},
     };

@@ -57,7 +57,7 @@ static ktv::NormalizedWorklist one(const char* group, int status, const char* st
     struct Kind { const char* group; int gid; const char* type; int tid; json sla; int priority; };
     const Kind kinds[] = {{"trien_khai", 1, "trien_khai_net", 3, 120, 3}, {"bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1},
                           {"thu_hoi", 3, "thu_hoi_thiet_bi", 1, nullptr, 4}, {"hoa_don", 4, "hoa_don_tra_sau", 2, nullptr, 4},
-                          {"onsite", 5, "phieu_onsite", 1, nullptr, 2}};
+                          {"onsite", 5, "phieu_onsite", 1, 60, 2}};
     json groups[5] = {json::array(), json::array(), json::array(), json::array(), json::array()};
     for (int g = 0; g < 5; ++g)
         if (std::string(kinds[g].group) == group)

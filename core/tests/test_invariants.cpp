@@ -164,10 +164,12 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
     CHECK(metrics["generated_in_ms"].is_number());
 }
 
-static json parse_line(const std::string& line, std::vector<ktv::Error>& errors, ktv::Message& message) {
+// warnings = nullptr: strict; có: nới lỏng như worker/gateway (benchmark = dữ liệu kiểu thật, có thể lệch danh mục mới).
+static json parse_line(const std::string& line, std::vector<ktv::Error>& errors, ktv::Message& message,
+                       std::vector<ktv::Error>* warnings = nullptr) {
     json data = json::parse(line, nullptr, false);
     if (data.is_discarded()) errors.push_back({"", "JSON hỏng"});
-    else message = ktv::parse_message(data, errors);
+    else message = ktv::parse_message(data, errors, warnings);
     return data;
 }
 
@@ -208,9 +210,10 @@ int main(int argc, char** argv) {
         while (std::getline(in, line)) {
             if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
             ++total;
-            std::vector<ktv::Error> errors;
+            std::vector<ktv::Error> errors, warnings;
             ktv::Message message;
-            parse_line(line, errors, message);
+            // Nới lỏng như đường thật: benchmark sinh theo danh mục cũ (VD phieu_onsite SLA null trước 7.15) chỉ còn cảnh báo.
+            parse_line(line, errors, message, &warnings);
             if (!errors.empty()) {
                 ++errors_seen;
                 continue;

@@ -253,6 +253,22 @@ int main() {
         CHECK(warned("STAFF_ROLE", "tasks.trien_khai[0].staff_role"));
         CHECK(strict_fails(data));
     }
+    {  // 7.15: onsite/phieu_onsite theo bao_tri — SLA 60 / P2 khớp danh mục; SLA null → lệch danh mục (vẫn xếp).
+        json data = sample();
+        json t = data["tasks"]["hoa_don"][0];
+        t["task_group_id"] = 5;
+        t["task_group_name"] = "onsite";
+        t["task_type_id"] = 1;
+        t["task_type_name"] = "phieu_onsite";
+        t["sla"] = {{"sla_minutes", 60}, {"priority_in_day", 2}};
+        data["tasks"]["hoa_don"] = json::array();
+        data["tasks"]["onsite"] = json::array({t});
+        auto m = lenient(data);
+        CHECK(errors.empty() && warnings.empty() && !strict_fails(data));
+        data["tasks"]["onsite"][0]["sla"]["sla_minutes"] = nullptr;
+        m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2 && warned("CATALOG_MISMATCH", "tasks.onsite[0].sla"));
+    }
     {  // create_date / CreateDate là một field: tên nào cũng nhận; cả hai mà khác → dùng create_date + cảnh báo.
         json data = sample();
         json& t = data["tasks"]["trien_khai"][0];

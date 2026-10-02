@@ -59,6 +59,19 @@ int main() {
         Deadlines d = resolve_deadlines(t, *month, planned);
         CHECK(when(d.complete_by) == "2026-06-30 23:59:00");
     }
+    {  // 7.15: onsite/phieu_onsite "rule như bao_tri": hẹn + SLA 60 → check-in trước hẹn + 60; không hẹn → không hạn.
+        const TaskKind* onsite = find_kind("onsite", "phieu_onsite");
+        CHECK(onsite && onsite->on_time == OnTime::CheckinBeforeB && onsite->sla_minutes == 60 && onsite->priority == 2);
+        Task t;
+        t.appointment = parse_datetime("2026-09-10 14:00:00");
+        t.sla_minutes = 60;
+        Deadlines d = resolve_deadlines(t, *onsite, planned);
+        CHECK(when(d.due) == "2026-09-10 15:00:00" && !d.complete_by);
+        Task no_appointment;
+        no_appointment.create_date = parse_datetime("2026-06-03 08:30:00");
+        d = resolve_deadlines(no_appointment, *onsite, planned);
+        CHECK(!d.opens && !d.due && !d.complete_by);  // trước 7.15: hoàn tất cuối tháng 2026-06-30
+    }
     {  // Check-in trước B nhưng không hẹn: chưa có mốc nào.
         Task t;
         Deadlines d = resolve_deadlines(t, *checkin, planned);
