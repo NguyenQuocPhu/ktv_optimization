@@ -658,7 +658,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.6 ✅ | Vận hành (kết quả bên dưới): compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
 | 7.7 ✅ | `task_status_id` theo từng nhóm (sheet 05 workbook 3) — chi tiết + kết quả bên dưới | file staging thật `200`, xếp đúng 3 task; bảng (nhóm, status) |
 | 7.8 ✅ | `complete_date` đổi nghĩa: không còn loại task (kết quả bên dưới) | task XẾP có `complete_date` được xếp; benchmark giữ 5202/130 |
-| 7.9 ⏳ | Output TASK thêm `location`/`latlng`/`contract_id`/`contract_no` (sheet 03) | đủ 4 field, thứ tự tuyến không đổi |
+| 7.9 ✅ | Output TASK thêm `location`/`latlng`/`contract_id`/`contract_no` (sheet 03) — kết quả bên dưới | đủ 4 field, thứ tự tuyến không đổi |
 | 7.10 ✅ | `staff_role = 0` hợp lệ, nhận `CreateDate`, tên topic, sổ câu hỏi (kết quả bên dưới) | `validate` staging hết lỗi role |
 | 7.10b ✅ | Task lô 0 lùi xuống `block_id` trong rule quay lại khu vực (`AREA_REENTRY`) (kết quả bên dưới) | test thẳng hàng X1–Y–X2 đổi thứ tự đúng |
 | 7.11 ✅ | Bảng trạng thái `hoa_don`/`onsite` theo workbook API (4) — chi tiết + kết quả bên dưới | hóa đơn đã thanh toán, onsite đã hoàn tất không còn bị xếp |
@@ -809,9 +809,18 @@ câu hỏi đã ghi ở `docs/DATA_QUESTIONS.md`.
 - **Đã chốt (e) 2026-10-02: `contract_id` / `contract_no` ra như input** — trả lại đúng giá trị và kiểu JSON đã nhận
   (số vẫn là số, chuỗi vẫn là chuỗi, `null` vẫn `null`, `""` vẫn `""`); input không gửi field → ra `null`. Lưu ý: khác
   workbook sheet 03 ghi `contract_id` kiểu string — theo người dùng, giữ như input.
-- **(f) bàn sau** — độ chính xác `latlng` của task trong output: hàm `latlng()` sẵn có (dùng cho tâm cụm) làm tròn 4 chữ số
-  (~11 m), input có tới 7 chữ số. Lựa chọn: 4 chữ số như tâm cụm / 6 chữ số (~0,1 m) / trả đúng chuỗi input. Chưa chốt;
-  khi làm 7.9 tạm dùng 4 chữ số? → **hỏi lại người dùng trước khi code 7.9**.
+- **Đã chốt (f) 2026-10-02**: `latlng` của task trong output **6 chữ số thập phân** (~0,1 m, đủ cho marker Mobix; input có
+  tới 7 chữ số). Tâm cụm (`center`) giữ 4 chữ số như cũ.
+- Hiện thực "như input": `contract_id` nhận số nguyên / `null` / không gửi (chuỗi hay kiểu khác → lỗi task như trước) → ra số
+  nguyên hoặc `null`. `contract_no` đổi sang `optional`: chuỗi (kể cả `""`) → ra đúng chuỗi; không gửi hoặc `null` → `null`
+  (trước 7.9 `contract_no: null` làm bỏ cả task — quá chặt cho field chỉ để truy vết).
+
+**Kết quả 7.9 (2026-10-02):** `plan.cpp` dòng TASK thêm `location`, `latlng` (`latlng(p, 6)`; tâm cụm vẫn `latlng(p)` 4 chữ
+số), `contract_id` / `contract_no` (`or_null`: có → giá trị như input, không → `null`), thứ tự đúng sheet 03.
+`Task.contract_no` → `std::optional<std::string>`; parser nhận `contract_no: null` (trước đây lỗi → bỏ cả task), kiểu khác
+vẫn lỗi. Kiểm: `test_pipeline` (giá trị, kiểu số/null/`""`, 22 key đúng thứ tự, tâm cụm 4 chữ số) fail 5 kiểm trên
+`plan.cpp` cũ; `test_api` (`contract_no` null hợp lệ, số → lỗi); `ctest` 15/15. Benchmark: bỏ 4 field mới thì output giống
+hệt; OUT lớn thêm ~19% (18,3 → 21,8 MB / 5.332 message, chủ yếu do địa chỉ). `docs/MOBIX-REPLAN-API-DRAFT.md` mục 6 viết lại.
 
 ##### 7.10 — Field input + docs
 

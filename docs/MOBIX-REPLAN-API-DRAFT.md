@@ -91,18 +91,21 @@ mới hơn từ IN mới của OA).
    → trả route. Route chỉ ghi đè khi tính trên IN mới hơn, hoặc cùng IN nhưng vị trí mới hơn.
 3. Phase 7.5: mỗi lần route được ghi thì đẩy cùng JSON vào Kafka OUT cho OA.
 
-## 6. Yêu cầu Kafka OUT liên quan Mobix
+## 6. Field địa chỉ / tọa độ / hợp đồng trong route (đã có từ Phase 7.9, 2026-10-02)
 
-Mobix cần địa chỉ và tọa độ từng điểm để hiển thị danh sách/map. Vì vậy mỗi `TASK` trong
-`data.clusters[].schedule[]` cần có:
+Mỗi dòng `TASK` trong `data.clusters[].schedule[]` (route trả Mobix = OUT cho OA, cùng một JSON) có thêm, theo workbook
+API (3) sheet 03:
 
-| Field | Kiểu | Mục đích |
+| Field | Kiểu | Giá trị |
 |---|---|---|
-| `location` | string | Địa chỉ hiển thị |
-| `latlng` | string `lat,lng` | Marker/điểm trên bản đồ |
+| `location` | string | Địa chỉ khách, đúng như input (`""` nếu input rỗng) |
+| `latlng` | string `lat,lng` | Tọa độ task, 6 chữ số thập phân (~0,1 m), VD `"21.029123,105.801235"` — marker trên map |
+| `contract_id` | như input | Số nguyên ObjID; `null` khi input không gửi hoặc `null` |
+| `contract_no` | như input | Chuỗi (kể cả `""`); `null` khi input không gửi hoặc `null` |
 
-Team data có thể bỏ qua hai field này vì đã có dữ liệu nguồn; Gateway/Mobix dùng chúng. Đây là
-thay đổi OUT contract, không phải HTTP response body.
+Thứ tự field: `task_id, location, latlng, task_group_*, task_type_*, task_sub_*, checkindate, checkoutdate,
+travel_minutes_before, travel_km_before, handle_minutes, projected_sla, contract_id, contract_no`. Lưu ý: workbook ghi
+`contract_id` kiểu string; ta giữ đúng kiểu của input (người dùng chốt).
 
 ## 7. Giới hạn/bảo mật cần ghi trong ticket
 
