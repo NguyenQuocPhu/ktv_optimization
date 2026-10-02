@@ -48,7 +48,8 @@ std::string issue_key(const Error& warning) {
 
 const std::vector<TaskStatus>& task_statuses() {
     using A = StatusAction;
-    // Sheet 05 workbook API (3), 2026-10-02. hoa_don, onsite chưa có bảng (dòng "khác": chỉ xếp việc còn mở).
+    // Sheet 05 workbook API (3) + (4), 2026-10-02. cscd và mã không có ở đây: dòng "khác" — chỉ xếp việc còn mở
+    // (normalization đoán theo task_status_name).
     static const std::vector<TaskStatus> statuses = {
         {"trien_khai", 96, "Đang di chuyển", A::Route},
         {"trien_khai", 97, "Đã nhận tuyến", A::Route},
@@ -73,6 +74,12 @@ const std::vector<TaskStatus>& task_statuses() {
         {"thu_hoi", 1, "Đã thu hồi", A::Skip},  // workbook không ghi "không xếp"; người dùng duyệt coi là xong
         {"thu_hoi", 2, "Đã nhập kho", A::Skip},
         {"thu_hoi", -1, "Đã hủy", A::Skip},
+        // Workbook API (4), 2026-10-02.
+        {"hoa_don", 0, "Chưa thanh toán", A::Route},
+        {"hoa_don", 1, "Đã thanh toán", A::Skip},
+        {"onsite", 0, "Chưa xử lý", A::Route},
+        {"onsite", 10, "Đang xử lý (check in)", A::Current},
+        {"onsite", 1, "Đã hoàn tất", A::Skip},
     };
     return statuses;
 }

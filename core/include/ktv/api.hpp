@@ -153,7 +153,7 @@ struct TaskStatus {
     const char* name;
     StatusAction action;
 };
-const std::vector<TaskStatus>& task_statuses();                       // Cả bảng (3 nhóm có danh mục).
+const std::vector<TaskStatus>& task_statuses();                       // Cả bảng (5 nhóm, workbook API (3) + (4)).
 const TaskStatus* find_status(const std::string& group, int status);  // Không có trong bảng → nullptr.
 
 inline constexpr const char* kGroups[] = {"trien_khai", "bao_tri", "thu_hoi", "hoa_don", "onsite"};  // 5 khóa của tasks.

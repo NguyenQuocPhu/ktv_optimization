@@ -98,6 +98,10 @@ int main() {
             {"thu_hoi", 0, "", true, ""},      {"thu_hoi", 1, "", false, ""},        // 1: Đã thu hồi → bỏ (duyệt)
             {"thu_hoi", 2, "", false, ""},     {"thu_hoi", -1, "", false, ""},
             // Không có trong bảng: tên mang nghĩa xong/hủy → bỏ; còn lại (kể cả tên rỗng) → xếp. Đều cảnh báo.
+            // Workbook (4): bảng hoa_don, onsite. Đã thanh toán / đã hoàn tất tên rỗng trước đây bị xếp (đoán theo tên).
+            {"hoa_don", 0, "", true, ""},      {"hoa_don", 1, "", false, ""},
+            {"onsite", 0, "", true, ""},       {"onsite", 1, "", false, ""},
+            {"onsite", 10, "", false, "CURRENT_NOT_MATCHED"},
             {"hoa_don", 6, "", true, "TASK_STATUS_UNKNOWN"},
             {"hoa_don", 4, "Chờ thu", true, "TASK_STATUS_UNKNOWN"},
             {"hoa_don", 9, "Đã thu tiền", false, "TASK_STATUS_UNKNOWN_CLOSED"},
@@ -141,7 +145,7 @@ int main() {
             make_task(106, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, 10, "21.07,105.85", ""),                     // trùng current
         });
         const json thu = json::array({make_task(104, "thu_hoi", 3, "thu_hoi_thiet_bi", 1, nullptr, 4, -1, "21.05,105.83", "")});
-        const json hoa = json::array({make_task(105, "hoa_don", 4, "hoa_don_tra_sau", 2, nullptr, 4, 0, "21.06,105.84", "")});
+        const json hoa = json::array({make_task(105, "hoa_don", 4, "hoa_don_tra_sau", 2, nullptr, 4, 4, "21.06,105.84", "")});  // mã 4: không có trong bảng
 
         std::vector<ktv::Error> errors;
         ktv::Message message = ktv::parse_message(make_message("2", current, trien, bao, thu, hoa, empty), errors);
