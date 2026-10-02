@@ -661,6 +661,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.9 ⏳ | Output TASK thêm `location`/`latlng`/`contract_id`/`contract_no` (sheet 03) | đủ 4 field, thứ tự tuyến không đổi |
 | 7.10 ✅ | `staff_role = 0` hợp lệ, nhận `CreateDate`, tên topic, sổ câu hỏi (kết quả bên dưới) | `validate` staging hết lỗi role |
 | 7.10b ✅ | Task lô 0 lùi xuống `block_id` trong rule quay lại khu vực (`AREA_REENTRY`) (kết quả bên dưới) | test thẳng hàng X1–Y–X2 đổi thứ tự đúng |
+| 7.11 ✅ | Bảng trạng thái `hoa_don`/`onsite` theo workbook API (4) — chi tiết + kết quả bên dưới | hóa đơn đã thanh toán, onsite đã hoàn tất không còn bị xếp |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -761,8 +762,13 @@ workbook API (3); sửa bảng ở đó rồi cập nhật bảng này). Thứ t
 | `thu_hoi` | 1 | Đã thu hồi | Bỏ (người dùng duyệt; workbook không ghi "không xếp") | — |
 | `thu_hoi` | 2 | Đã nhập kho | Bỏ | — |
 | `thu_hoi` | -1 | Đã hủy | Bỏ | — |
-| `hoa_don`, `onsite`, mã lạ ở mọi nhóm | bất kỳ (không có trong bảng) | `task_status_name` mang nghĩa đã xong/hủy | Bỏ | `TASK_STATUS_UNKNOWN_CLOSED` |
-| `hoa_don`, `onsite`, mã lạ ở mọi nhóm | bất kỳ (không có trong bảng) | tên khác hoặc rỗng | **Xếp** (coi là còn mở) | `TASK_STATUS_UNKNOWN` |
+| `hoa_don` | 0 | Chưa thanh toán | **Xếp** (7.11, workbook (4)) | — |
+| `hoa_don` | 1 | Đã thanh toán | Bỏ (7.11) | — |
+| `onsite` | 0 | Chưa xử lý | **Xếp** (7.11) | — |
+| `onsite` | 10 | Đang xử lý (check in) | Đang làm: trùng `current_task` → khóa đầu tuyến; không trùng → bỏ (7.11) | `CURRENT_NOT_MATCHED` (khi không trùng) |
+| `onsite` | 1 | Đã hoàn tất | Bỏ (7.11) | — |
+| `cscd`, mã lạ ở mọi nhóm | bất kỳ (không có trong bảng) | `task_status_name` mang nghĩa đã xong/hủy | Bỏ | `TASK_STATUS_UNKNOWN_CLOSED` |
+| `cscd`, mã lạ ở mọi nhóm | bất kỳ (không có trong bảng) | tên khác hoặc rỗng | **Xếp** (coi là còn mở) | `TASK_STATUS_UNKNOWN` |
 
 Tên "đã xong/hủy" (`status_name_closed`, sau khi bỏ dấu + chữ thường + `_`/`-` → dấu cách): chứa cụm `huy`, `hoan tat`,
 `da xu ly`, `dong checklist`, `da dong`, `da thu`, `nhap kho`, `cancel`/`canceled`/`cancelled`, `closed`, `done`,
@@ -846,6 +852,31 @@ trong `schedule`; giờ xuất phát = `max(giờ lập tuyến, đầu ca, gi�
   Cần: hỏi OA (thêm vào `docs/DATA_QUESTIONS.md` ở 7.10) và field trong `staff.current_task` hoặc dòng task. Làm khi có field.
 - Còn để ngỏ (chưa duyệt): dùng tọa độ của việc đang làm làm điểm xuất phát khi có; hiện việc đang làm đầu tuyến
   cho Mobix (sheet 03 không yêu cầu).
+
+##### 7.11 — Bảng trạng thái `hoa_don` / `onsite` (workbook `API-Goi-y-cong-viec (4).xlsx`, người dùng chọn 2026-10-02)
+
+Workbook (4) sheet 05 bổ sung bảng trạng thái cho hai nhóm chưa có ở 7.7:
+
+| Nhóm | `task_status_id` | Tên | Xử lý |
+|---|---:|---|---|
+| `hoa_don` | 0 | Chưa thanh toán | Xếp |
+| `hoa_don` | 1 | Đã thanh toán ("không tính toán sắp xếp") | Không xếp |
+| `onsite` | 0 | Chưa xử lý | Xếp |
+| `onsite` | 10 | Đang xử lý (check in) ("không tính toán sắp xếp") | Đang làm: trùng `current_task` → khóa đầu tuyến; không trùng → bỏ + `CURRENT_NOT_MATCHED` |
+| `onsite` | 1 | Đã hoàn tất ("không tính toán sắp xếp") | Không xếp |
+
+- Hiện tại: hai nhóm không có trong bảng → đoán theo `task_status_name`; staging gửi tên rỗng → **hóa đơn đã thanh toán, onsite
+  đã hoàn tất vẫn bị xếp** (kèm `TASK_STATUS_UNKNOWN`).
+- Sửa: thêm 5 dòng vào `task_statuses()` (`core/src/api.cpp`), cập nhật bảng tra 7.7. Không đổi code khác. Mã khác của hai
+  nhóm này (VD 6 trong benchmark giả) vẫn theo luật "không có trong bảng" như cũ.
+- Test: `test_normalization` thêm 5 ca (nhóm, status) — không cảnh báo, xếp/bỏ đúng; `hoa_don` 1 / `onsite` 1 tên rỗng không
+  còn bị xếp; test fail trên code cũ. Benchmark (status 6 ở mọi nhóm) → tuyến giống hệt.
+- Không làm trong 7.11: nhóm `cscd`, `data.priority_type`, `onsite` "rule như bao_tri" (chưa chọn).
+
+**Kết quả 7.11 (2026-10-02):** thêm 5 dòng vào `task_statuses()` (bảng còn 28 dòng, 5 nhóm); bảng tra 7.7 cập nhật. Ca message
+đủ loại trong `test_normalization` đổi task `hoa_don` 0 → mã 4 (vẫn ngoài bảng) để giữ kiểm luật "không có trong bảng". Kiểm:
+test mới trên code cũ fail 11 kiểm — `hoa_don` 1 và `onsite` 1 tên rỗng **bị xếp** (đúng lỗi cần sửa); code mới `ctest` 15/15;
+benchmark (status 6) + file staging thật giống hệt trước/sau.
 
 **Kết quả 7.6 — vận hành (2026-10-01):** `compose.yaml`: Kafka thêm listener `INTERNAL`
 (`kafka:19092`) cho container, host giữ `localhost:9092`; profile `app` gồm `kafka-init` (tạo `ktv-local-in/out`),
