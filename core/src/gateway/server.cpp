@@ -1,7 +1,10 @@
 #include "ktv/gateway/server.hpp"
 
 #include "ktv/adapter/http.hpp"
+#include "ktv/adapter/log.hpp"
 
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <optional>
 
@@ -16,6 +19,31 @@
 namespace ktv {
 
 namespace {
+
+// Giờ bắt đầu request: pre_routing và logger của httplib chạy cùng một luồng cho cùng một request.
+thread_local std::chrono::steady_clock::time_point t_request_started;
+
+// Một dòng JSON / request /api/ (không log /healthz, /readyz; không log query — latlng là vị trí KTV).
+// VD {"event":"http","route":"replan","staff_id":"00201964","http_status":200,"cache":"MISS","statuscode":"200",...}
+void log_request(const httplib::Request& request, const httplib::Response& response) {
+    if (request.path.rfind("/api/", 0) != 0) return;
+    nlohmann::ordered_json line = log_event("http");
+    line["method"] = request.method;
+    const size_t staff = request.path.find("/staff/");  // /api/v1/staff/{staff_id}/{route|replan}
+    const size_t slash = staff == std::string::npos ? staff : request.path.find('/', staff + 7);
+    line["route"] = slash == std::string::npos ? request.path : request.path.substr(slash + 1);
+    line["staff_id"] = slash == std::string::npos ? nlohmann::ordered_json(nullptr)
+                                                  : nlohmann::ordered_json(request.path.substr(staff + 7, slash - staff - 7));
+    line["http_status"] = response.status;
+    line["cache"] = response.has_header("X-Cache") ? nlohmann::ordered_json(response.get_header_value("X-Cache"))
+                                                   : nlohmann::ordered_json(nullptr);
+    const nlohmann::json body = nlohmann::json::parse(response.body, nullptr, false);  // route hoặc lỗi
+    line["statuscode"] = body.is_object() && body.contains("statuscode") ? body["statuscode"] : nlohmann::json(nullptr);
+    line["message"] = body.is_object() && body.contains("message") ? body["message"] : nlohmann::json(nullptr);
+    line["total_ms"] =
+        std::round(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_request_started).count() * 10) / 10;
+    write_log(line);
+}
 
 bool authorized(const httplib::Request& request, const std::string& token) {
     if (token.empty()) return true;
@@ -98,6 +126,11 @@ std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const Ga
                                                      RedisStore* redis) {
     auto server = std::make_unique<httplib::Server>();
     exclusive_port(*server);  // trùng cổng là listen lỗi, không chia request ngẫu nhiên với tiến trình khác
+    server->set_pre_routing_handler([](const httplib::Request&, httplib::Response&) {
+        t_request_started = std::chrono::steady_clock::now();
+        return httplib::Server::HandlerResponse::Unhandled;  // chỉ bấm giờ, để route xử lý như thường
+    });
+    server->set_logger(log_request);
 
     server->Get("/healthz", [&store, &options](const httplib::Request&, httplib::Response& response) {
         nlohmann::json body = {{"ok", true}, {"entries", store.size()}};

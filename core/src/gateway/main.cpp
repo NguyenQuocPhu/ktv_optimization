@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 
+#include "ktv/adapter/log.hpp"
 #include "ktv/gateway/seed.hpp"
 #include "ktv/gateway/server.hpp"
 #include "ktv/gateway/store.hpp"
@@ -25,6 +26,15 @@
 #endif
 
 namespace {
+
+// Lỗi khiến gateway không chạy được: một dòng log "fatal" + mã thoát.
+int fatal(const std::string& error, int code) {
+    nlohmann::ordered_json line = ktv::log_event("fatal");
+    line["error"] = error;
+    line["exit_code"] = code;
+    ktv::write_log(line);
+    return code;
+}
 
 int usage() {
     std::cerr << "cách dùng: ktv_gateway [--host H] [--port N] [--seed out.jsonl] [--token T]\n"
@@ -69,17 +79,16 @@ int main(int argc, char** argv) {
     try {
         options.rules = rules_path.empty() ? ktv::default_rules() : ktv::load_rules(rules_path);
     } catch (const std::exception& error) {
-        std::cerr << error.what() << "\n";
-        return 2;
+        return fatal(error.what(), 2);
     }
     if (!at.empty()) {
         options.fixed_now = ktv::parse_datetime(at);
         if (!options.fixed_now) {
-            std::cerr << "--at cần \"YYYY-MM-DD HH:mm:ss\": " << at << "\n";
-            return 2;
+            return fatal("--at cần \"YYYY-MM-DD HH:mm:ss\": " + at, 2);
         }
     }
 
+    nlohmann::ordered_json start = ktv::log_event("start");
 #ifdef KTV_WITH_KAFKA
     std::unique_ptr<ktv::KafkaProducer> producer;
     if (!env_path.empty()) {
@@ -92,18 +101,15 @@ int main(int argc, char** argv) {
                 };
                 options.out_failed = [&producer] { return producer->failed(); };
             }
-            std::cerr << "ktv_gateway: " << ktv::describe(kafka)
-                      << (producer ? " → đẩy OUT vào " + kafka.topic_out : std::string(" (KAFKA_TOPIC_OUT trống: không OUT)"))
-                      << "\n";
+            start["kafka"] = ktv::describe(kafka);  // không chứa password
+            start["topic_out"] = producer ? nlohmann::ordered_json(kafka.topic_out) : nlohmann::ordered_json(nullptr);
         } catch (const std::exception& error) {
-            std::cerr << error.what() << "\n";
-            return 2;
+            return fatal(error.what(), 2);
         }
     }
 #else
     if (!env_path.empty()) {
-        std::cerr << "bản build này không có Kafka (thiếu librdkafka khi build)\n";
-        return 2;
+        return fatal("bản build này không có Kafka (thiếu librdkafka khi build)", 2);
     }
 #endif
 
@@ -113,8 +119,7 @@ int main(int argc, char** argv) {
     if (!redis_addr.empty()) {
         std::optional<ktv::RedisStore::Config> parsed = ktv::redis_config(redis_addr);
         if (!parsed) {
-            std::cerr << "--redis cần dạng HOST:PORT\n";
-            return 2;
+            return fatal("--redis cần dạng HOST:PORT: " + redis_addr, 2);
         }
         ktv::RedisStore::Config config = *parsed;
         config.password = redis_password;
@@ -124,15 +129,13 @@ int main(int argc, char** argv) {
             redis = redis_store.get();
             store = std::move(redis_store);
         } catch (const std::exception& error) {
-            std::cerr << error.what() << "\n";
-            return 2;
+            return fatal(error.what(), 2);
         }
-        std::cerr << "store: Redis " << redis_addr << " prefix=" << redis_prefix << "\n";
+        start["redis"] = redis_addr + " prefix=" + redis_prefix;
     }
 #else
     if (!redis_addr.empty()) {
-        std::cerr << "bản build này không có Redis (thiếu hiredis khi build)\n";
-        return 2;
+        return fatal("bản build này không có Redis (thiếu hiredis khi build)", 2);
     }
 #endif
     if (!store) store = std::make_unique<ktv::MemoryRouteStore>();
@@ -140,31 +143,30 @@ int main(int argc, char** argv) {
     if (!seed_path.empty()) {
         std::ifstream in(seed_path);
         if (!in) {
-            std::cerr << "không mở được " << seed_path << "\n";
-            return 2;
+            return fatal("không mở được " + seed_path, 2);
         }
         try {
             const std::size_t loaded = ktv::load_routes(in, *store);
-            std::cerr << "nạp " << loaded << " bản từ " << seed_path << " (store có " << store->size() << ")\n";
+            start["seed"] = {{"file", seed_path}, {"loaded", loaded}, {"store_size", store->size()}};
         } catch (const std::exception& error) {
-            std::cerr << "nạp seed lỗi: " << error.what() << "\n";
-            return 2;
+            return fatal(std::string("nạp seed lỗi: ") + error.what(), 2);
         }
     }
 
     auto server = ktv::make_gateway_server(*store, options, redis);
-    if (!redis) std::cerr << "ktv_gateway: không có --redis → /replan trả 503\n";
-    std::cerr << "ktv_gateway nghe " << options.host << ":" << options.port
-              << (options.token.empty() ? " (không token)" : " (có token)") << "\n";
-    if (!server->bind_to_port(options.host, options.port)) {
-        std::cerr << "không listen được " << options.host << ":" << options.port << "\n";
-        return 1;
-    }
+    if (!server->bind_to_port(options.host, options.port))
+        return fatal("không listen được " + options.host + ":" + std::to_string(options.port), 1);
+    start["listen"] = options.host + ":" + std::to_string(options.port);
+    start["token"] = !options.token.empty();
+    if (!start.contains("redis")) start["redis"] = nullptr;  // không Redis: /replan trả 503
+    ktv::write_log(start);
     std::thread listener([&server] { server->listen_after_bind(); });
     server->wait_until_ready();  // stop() chỉ tác dụng khi server đã chạy
     int signal_number = 0;
     sigwait(&stop_signals, &signal_number);
-    std::cerr << "ktv_gateway: nhận tín hiệu " << signal_number << ", dừng (đẩy nốt OUT nếu có)\n";
+    nlohmann::ordered_json stop = ktv::log_event("stop");  // dừng server, đẩy nốt OUT nếu có
+    stop["signal"] = signal_number;
+    ktv::write_log(stop);
     server->stop();
     listener.join();
     return 0;

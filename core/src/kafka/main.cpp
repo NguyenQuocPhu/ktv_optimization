@@ -6,7 +6,11 @@
 //
 //   ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"]
 //              [--out responses.jsonl] [--max N] [--health-port N]
-//              [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]
+//              [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]] [--log-payload none|error|all]
+//
+// Log: mỗi sự kiện MỘT dòng JSON trên stderr (adapter/log.hpp). Mỗi message IN một dòng event "message": vị trí Kafka,
+// staff_id, statuscode, message, errors (đầy đủ), warnings, đếm task, có/không đẩy OUT, thời gian; payload IN theo
+// --log-payload (mặc định error = chỉ khi 400/500). stdout / --out vẫn là response (= OUT) như cũ.
 //
 // --max N: dừng sau N message (test nhanh); bỏ qua = chạy tới khi bị dừng (Ctrl-C / SIGTERM).
 // --health-port N: mở GET /healthz (worker còn chạy + bộ đếm) và GET /readyz (nối được broker) cho
@@ -17,6 +21,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cmath>
 #include <cctype>
 #include <csignal>
 #include <cstdlib>
@@ -34,6 +40,7 @@
 
 #include "ktv/adapter/file.hpp"
 #include "ktv/adapter/http.hpp"
+#include "ktv/adapter/log.hpp"
 #include "ktv/adapter/publish.hpp"
 #include "ktv/kafka/config.hpp"
 #include "ktv/kafka/consumer.hpp"
@@ -50,8 +57,18 @@ int usage() {
     std::cerr << "cách dùng:\n"
                  "  ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"]\n"
                  "             [--out responses.jsonl] [--max N] [--health-port N]\n"
-                 "             [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]\n";
+                 "             [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]\n"
+                 "             [--log-payload none|error|all]\n";
     return 2;
+}
+
+// Lỗi khiến worker không chạy / phải dừng: một dòng log "fatal" + mã thoát.
+int fatal(const std::string& error, int code) {
+    nlohmann::ordered_json line = ktv::log_event("fatal");
+    line["error"] = error;
+    line["exit_code"] = code;
+    ktv::write_log(line);
+    return code;
 }
 
 // Số nguyên trong [low, high], cả chuỗi phải là chữ số. Sai → không có.
@@ -140,7 +157,7 @@ std::unique_ptr<HealthServer> start_health(Health& health, int port) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string env_path = ".env", rules_path, out_path, osrm_url, at, max_text, port_text;
+    std::string env_path = ".env", rules_path, out_path, osrm_url, at, max_text, port_text, payload_text = "error";
     std::string redis_addr, redis_password, redis_prefix = "ktv:";
     long long max_messages = 0;
     int health_port = 0;
@@ -156,32 +173,32 @@ int main(int argc, char** argv) {
         else if (arg == "--redis" && i + 1 < argc) redis_addr = argv[++i];
         else if (arg == "--redis-password" && i + 1 < argc) redis_password = argv[++i];
         else if (arg == "--redis-prefix" && i + 1 < argc) redis_prefix = argv[++i];
+        else if (arg == "--log-payload" && i + 1 < argc) payload_text = argv[++i];
         else return usage();
     }
     // Gõ nhầm (VD "8O81") không được âm thầm thành 0 = tắt health / chạy vô hạn.
     if (!max_text.empty()) {
         const auto value = whole(max_text, 1, 1'000'000'000);
         if (!value) {
-            std::cerr << "--max cần số nguyên dương: " << max_text << "\n";
-            return 2;
+            return fatal("--max cần số nguyên dương: " + max_text, 2);
         }
         max_messages = *value;
     }
     if (!port_text.empty()) {
         const auto value = whole(port_text, 1, 65535);
         if (!value) {
-            std::cerr << "--health-port cần cổng 1–65535: " << port_text << "\n";
-            return 2;
+            return fatal("--health-port cần cổng 1–65535: " + port_text, 2);
         }
         health_port = static_cast<int>(*value);
     }
+    const std::optional<ktv::PayloadLog> payload_log = ktv::payload_log_from(payload_text);
+    if (!payload_log) return fatal("--log-payload cần none, error hoặc all: " + payload_text, 2);
 
     ktv::Rules rules;
     try {
         rules = rules_path.empty() ? ktv::default_rules() : ktv::load_rules(rules_path);
     } catch (const std::exception& error) {
-        std::cerr << error.what() << "\n";
-        return 2;
+        return fatal(error.what(), 2);
     }
 
     // --at cố định giờ cho test; không có thì mỗi message lấy giờ lúc xử lý (worker chạy cả ngày).
@@ -190,8 +207,7 @@ int main(int argc, char** argv) {
     if (!at.empty()) {
         fixed_now = ktv::parse_datetime(at);
         if (!fixed_now) {
-            std::cerr << "--at cần \"YYYY-MM-DD HH:mm:ss\": " << at << "\n";
-            return 2;
+            return fatal("--at cần \"YYYY-MM-DD HH:mm:ss\": " + at, 2);
         }
     }
 
@@ -199,21 +215,15 @@ int main(int argc, char** argv) {
     try {
         config = ktv::kafka_config_from_env(ktv::kafka_env(env_path));
     } catch (const std::exception& error) {
-        std::cerr << error.what() << "\n";
-        return 2;
+        return fatal(error.what(), 2);
     }
-    std::cerr << "ktv_worker: " << ktv::describe(config) << "\n";
     std::unique_ptr<ktv::KafkaProducer> producer;
-    if (config.topic_out.empty()) {
-        std::cerr << "ktv_worker: KAFKA_TOPIC_OUT trống → không đẩy OUT\n";
-    } else {
+    if (!config.topic_out.empty()) {
         try {
             producer = std::make_unique<ktv::KafkaProducer>(config);
         } catch (const std::exception& error) {
-            std::cerr << error.what() << "\n";
-            return 2;
+            return fatal(error.what(), 2);
         }
-        std::cerr << "ktv_worker: đẩy OUT vào " << config.topic_out << "\n";
     }
     ktv::SendOut send_out;
     if (producer) send_out = [&producer](const std::string& key, const std::string& value) { producer->send(key, value); };
@@ -222,18 +232,15 @@ int main(int argc, char** argv) {
     if (!redis_addr.empty()) {
         std::optional<ktv::RedisStore::Config> redis = ktv::redis_config(redis_addr);
         if (!redis) {
-            std::cerr << "--redis cần dạng HOST:PORT: " << redis_addr << "\n";
-            return 2;
+            return fatal("--redis cần dạng HOST:PORT: " + redis_addr, 2);
         }
         redis->password = redis_password;
         redis->prefix = redis_prefix;
         try {
             store = std::make_unique<ktv::RedisStore>(*redis);
         } catch (const std::exception& error) {
-            std::cerr << error.what() << "\n";
-            return 2;
+            return fatal(error.what(), 2);
         }
-        std::cerr << "ktv_worker: Redis " << redis_addr << " prefix=" << redis_prefix << "\n";
     }
 
     // Ghi nối: chạy lại cùng file không xóa response của các message đã commit.
@@ -241,8 +248,7 @@ int main(int argc, char** argv) {
     if (!out_path.empty()) {
         file.open(out_path, std::ios::app);
         if (!file) {
-            std::cerr << "không mở được " << out_path << " để ghi\n";
-            return 2;
+            return fatal("không mở được " + out_path + " để ghi", 2);
         }
     }
     std::ostream* out = out_path.empty() ? &std::cout : &file;
@@ -251,18 +257,26 @@ int main(int argc, char** argv) {
     std::unique_ptr<HealthServer> health_server;
     if (health_port > 0) {
         health_server = start_health(health, health_port);
-        if (!health_server) {
-            std::cerr << "không mở được cổng health " << health_port << "\n";
-            return 2;
-        }
-        std::cerr << "ktv_worker: /healthz ở cổng " << health_port << "\n";
+        if (!health_server) return fatal("không mở được cổng health " + std::to_string(health_port), 2);
     }
 
     std::signal(SIGINT, request_stop);
     std::signal(SIGTERM, request_stop);
 
     long long processed = 0;
-    std::cerr << "ktv_worker: đang chờ message từ " << config.topic_in << " (Ctrl-C để dừng)\n";
+    {
+        nlohmann::ordered_json line = ktv::log_event("start");
+        line["kafka"] = ktv::describe(config);  // không chứa password
+        line["topic_in"] = config.topic_in;
+        line["topic_out"] = config.topic_out.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(config.topic_out);
+        line["redis"] = redis_addr.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(redis_addr + " prefix=" + redis_prefix);
+        line["osrm"] = osrm_url.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(osrm_url);
+        line["rules"] = rules_path.empty() ? "mặc định" : rules_path;
+        line["health_port"] = health_port > 0 ? nlohmann::ordered_json(health_port) : nlohmann::ordered_json(nullptr);
+        line["log_payload"] = payload_text;
+        line["out"] = out_path.empty() ? "stdout" : out_path;
+        ktv::write_log(line);
+    }
     try {
         ktv::KafkaConsumer consumer(config);
         long long last_check = 0;
@@ -277,6 +291,7 @@ int main(int argc, char** argv) {
             if (!record) continue;
             health.last_broker_ok = health.last_poll.load();  // nhận được message = broker đang nối
             ++processed;
+            const auto started = std::chrono::steady_clock::now();
 
             const ktv::Minutes now = fixed_now.value_or(ktv::vietnam_now());
             // Thiếu message_id: lấy vị trí Kafka làm ID — không trùng giữa các lần chạy / replica.
@@ -284,9 +299,9 @@ int main(int argc, char** argv) {
                 record->topic + "-" + std::to_string(record->partition) + "-" + std::to_string(record->offset);
             // Lỗi Redis ném ra vòng ngoài: thoát, KHÔNG commit. Lỗi tính tuyến đã thành 500 bên trong.
             const ktv::json in = ktv::json::parse(record->payload, nullptr, false);
-            const ktv::Published published =
-                ktv::plan_and_store(in, ktv::local_envelope(in, position, now), now, {record->timestamp_ms, record->offset},
-                                    rules, osrm_url, store.get(), send_out);
+            const ktv::Envelope envelope = ktv::local_envelope(in, position, now);
+            const ktv::Published published = ktv::plan_and_store(in, envelope, now, {record->timestamp_ms, record->offset},
+                                                                 rules, osrm_url, store.get(), send_out);
             // OUT phải tới nơi trước khi commit IN; không thì thoát (ném ra vòng ngoài), restart đọc lại và gửi lại.
             if (published.out_sent && !producer->flush(10'000))
                 throw std::runtime_error("OUT không được Kafka xác nhận, không commit " + position);
@@ -308,20 +323,49 @@ int main(int argc, char** argv) {
                 health.last_message_at = ktv::format_datetime(ktv::vietnam_now());
             }
 
-            std::cerr << "#" << processed << " " << position << " key=" << record->key << " status=" << status;
-            if (store) std::cerr << " route=" << (published.route_stored ? "ghi" : "giữ") << (published.used_mobix_loc ? " vị_trí=mobix" : "");
-            if (producer) std::cerr << " out=" << (published.out_sent ? "gửi" : "không");
-            if (!warnings.empty()) std::cerr << " cảnh_báo=" << warnings.size();
-            for (const auto& [name, value_text] : record->headers) std::cerr << " header." << name << "=" << value_text;
-            std::cerr << "\n";
-            for (const std::string& key : record_issues(health, warnings))  // chỉ log loại mới; đếm xem /healthz
-                std::cerr << "  cảnh báo dữ liệu mới (" << published.message_id << "): " << key << "\n";
+            // Một dòng JSON / message: đủ để biết vì sao ra statuscode này mà không phải lục Kafka OUT.
+            nlohmann::ordered_json log = ktv::log_event("message");
+            log["topic"] = record->topic;
+            log["partition"] = record->partition;
+            log["offset"] = record->offset;
+            log["key"] = record->key;
+            log["headers"] = nlohmann::ordered_json::object();
+            for (const auto& [name, value_text] : record->headers) log["headers"][name] = value_text;
+            log["message_id"] = published.message_id;
+            log["run_code"] = envelope.run_code.empty() ? envelope.message_id : envelope.run_code;
+            log["staff_id"] = published.staff_id;
+            log["statuscode"] = status;  // "STALE" = IN cũ hơn state đang có, bỏ qua (không response, không OUT)
+            log["message"] = published.out ? (*published.out)["message"] : nlohmann::ordered_json(nullptr);
+            log["errors"] = ktv::errors_json(published.errors);
+            log["warnings"] = nlohmann::ordered_json::array();
+            for (const ktv::Error& warning : warnings) log["warnings"].push_back(ktv::issue_key(warning));
+            log["tasks"] = {{"received", published.stats.tasks},
+                            {"routed", published.stats.candidates},
+                            {"skipped_status", published.stats.excluded_status},
+                            {"current", published.stats.excluded_current},
+                            {"missing_location", published.stats.excluded_missing_location}};
+            log["sent_to"] = published.out_sent ? nlohmann::ordered_json("kafka") : nlohmann::ordered_json(nullptr);
+            log["stored"] = published.route_stored;
+            log["used_mobix_loc"] = published.used_mobix_loc;
+            const auto& data = published.out ? (*published.out)["data"] : nlohmann::ordered_json(nullptr);
+            log["generated_in_ms"] = data.is_object() ? data["metrics"]["generated_in_ms"] : nlohmann::ordered_json(nullptr);
+            log["total_ms"] = std::round(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count() * 10) / 10;
+            if (ktv::payload_wanted(*payload_log, status)) log["payload"] = ktv::payload_json(in, record->payload);
+            ktv::write_log(log);
+            for (const std::string& key : record_issues(health, warnings)) {  // loại cảnh báo mới: một dòng; đếm ở /healthz
+                nlohmann::ordered_json fresh = ktv::log_event("data_issue_new");
+                fresh["issue"] = key;
+                fresh["message_id"] = published.message_id;
+                ktv::write_log(fresh);
+            }
         }
     } catch (const std::exception& error) {
-        std::cerr << error.what() << "\n";
-        return 1;
+        return fatal(error.what(), 1);
     }
 
-    std::cerr << "ktv_worker: " << processed << " message đã xử lý" << (g_stop ? " (dừng theo tín hiệu)" : "") << "\n";
+    nlohmann::ordered_json stop = ktv::log_event("stop");
+    stop["processed"] = processed;
+    stop["reason"] = g_stop ? "signal" : "max";
+    ktv::write_log(stop);
     return 0;
 }

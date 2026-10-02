@@ -27,6 +27,7 @@
 
 #include "ktv/api.hpp"
 #include "ktv/dp.hpp"
+#include "ktv/normalization.hpp"
 #include "ktv/rules.hpp"
 
 namespace ktv {
@@ -38,6 +39,7 @@ struct PlanResult {
     int excluded = 0;                   // Số việc bị loại (thiếu tọa độ).
     const char* travel = "HAVERSINE";   // OSRM, HAVERSINE, hoặc ESTIMATED (OSRM lỗi → chim bay × 1,3).
     std::vector<Error> warnings;        // Cảnh báo của bước lọc (trạng thái task). Log + /healthz, không vào OUT.
+    NormalizationStats stats;           // Đếm task theo lý do bị loại (log: vì sao 422 "không có việc").
 };
 
 // HÀM CHÍNH. server_now: giờ VN hiện tại, dùng khi message không có planned_at và cho server_time.

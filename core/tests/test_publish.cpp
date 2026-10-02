@@ -1,5 +1,6 @@
 // plan_and_store (Phase 7.3, luồng T1 của worker) trên Redis thật: state/route, IN cũ, giao lại, vị trí Mobix,
 // 422 vẫn ghi route, 400 không đụng Redis. Cần env KTV_TEST_REDIS=host:port; không kết nối được thì SKIP.
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -99,6 +100,23 @@ int main() {
             const ktv::Published r = run(message("m0", home), {1, 1}, nullptr);
             CHECK(r.status == "200" && r.out && !r.route_stored && r.message_id == "m0");
             CHECK(r.out_sent && sent.size() == 1);  // không Redis: 200 vẫn gửi OUT
+        }
+        {  // 7.14: 400 → errors ĐẦY ĐỦ (response chỉ ghi 3 lỗi đầu) + staff_id đọc được; 200 → đếm task.
+            json bad = message("m-bad", home);
+            bad["staff"]["staff_account"] = "";
+            bad["staff"]["latlng"] = "";
+            bad["staff"]["available"] = "";
+            bad["staff"]["plots"] = "x";  // nới lỏng: chỉ cảnh báo, không vào errors
+            json no_id = bad;
+            no_id["staff"]["staff_id"] = "";
+            const ktv::Published r = run(no_id, {1, 1}, nullptr);
+            CHECK(r.status == "400" && r.errors.size() == 4 && r.staff_id.empty() && !r.out_sent);
+            std::string text = (*r.out)["message"].get<std::string>();
+            CHECK(std::count(text.begin(), text.end(), ';') == 3);  // response vẫn 3 lỗi đầu
+            const ktv::Published named = run(bad, {1, 1}, nullptr);
+            CHECK(named.status == "400" && named.errors.size() == 3 && named.staff_id == "S1");
+            const ktv::Published ok = run(message("m0", home), {1, 1}, nullptr);
+            CHECK(ok.errors.empty() && ok.staff_id == "S1" && ok.stats.tasks >= 1 && ok.stats.candidates == ok.stats.tasks);
         }
         const double km_home = first_leg_km(*run(message("m0", home), {1, 1}, nullptr).out);
 

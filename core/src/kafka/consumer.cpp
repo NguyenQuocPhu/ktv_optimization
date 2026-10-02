@@ -1,6 +1,8 @@
 #include "ktv/kafka/consumer.hpp"
 
 #include <iostream>
+
+#include "ktv/adapter/log.hpp"
 #include <stdexcept>
 
 namespace ktv {
@@ -12,7 +14,11 @@ namespace {
 // Không in info/debug cho đỡ rối. level: 0..4 = emerg..warning.
 void log_callback(const rd_kafka_t*, int level, const char* facility, const char* message) {
     if (level > 4) return;
-    std::cerr << "kafka[" << facility << "] " << message << "\n";
+    nlohmann::ordered_json line = ktv::log_event("kafka");
+    line["level"] = level;
+    line["facility"] = facility;
+    line["text"] = message;
+    ktv::write_log(line);
 }
 
 }  // namespace
@@ -61,7 +67,9 @@ std::optional<KafkaConsumer::Record> KafkaConsumer::poll(int timeout_ms) {
                           code == RD_KAFKA_RESP_ERR_GROUP_AUTHORIZATION_FAILED ||
                           code == RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART;
         if (!stop) {
-            std::cerr << "kafka: lỗi tạm thời, thử lại: " << text << "\n";
+            nlohmann::ordered_json line = ktv::log_event("kafka_retry");  // lỗi tạm thời (mạng, broker): thử lại
+            line["text"] = text;
+            ktv::write_log(line);
             return std::nullopt;
         }
         if (code == RD_KAFKA_RESP_ERR__FATAL) {
@@ -108,8 +116,13 @@ bool KafkaConsumer::commit(const Record& record) {
     if (code == RD_KAFKA_RESP_ERR_REBALANCE_IN_PROGRESS || code == RD_KAFKA_RESP_ERR_ILLEGAL_GENERATION ||
         code == RD_KAFKA_RESP_ERR_UNKNOWN_MEMBER_ID || code == RD_KAFKA_RESP_ERR__ASSIGNMENT_LOST ||
         code == RD_KAFKA_RESP_ERR__STATE) {
-        std::cerr << "kafka: bỏ commit " << record.topic << "[" << record.partition << "]@" << record.offset
-                  << " do đang chia lại partition (" << rd_kafka_err2str(code) << "), message sẽ được giao lại\n";
+        // Đang chia lại partition: message sẽ được giao lại cho consumer nhận partition (at-least-once).
+        nlohmann::ordered_json line = ktv::log_event("commit_skipped");
+        line["topic"] = record.topic;
+        line["partition"] = record.partition;
+        line["offset"] = record.offset;
+        line["reason"] = rd_kafka_err2str(code);
+        ktv::write_log(line);
         return false;
     }
     fail("commit: " + std::string(rd_kafka_err2str(code)));

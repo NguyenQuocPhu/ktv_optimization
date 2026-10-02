@@ -38,11 +38,11 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
     Published result;
     result.message_id = envelope.message_id;
 
-    std::vector<Error> errors;
-    Message message = parse_record(in, envelope, errors, &result.warnings);
-    if (!errors.empty()) {
+    Message message = parse_record(in, envelope, result.errors, &result.warnings);
+    result.staff_id = message.staff.staff_id;
+    if (!result.errors.empty()) {
         result.status = "400";
-        result.out = wrap_response(envelope, bad_request(errors, envelope.message_id, now));
+        result.out = wrap_response(envelope, bad_request(result.errors, envelope.message_id, now));
         return result;
     }
 
@@ -66,6 +66,7 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
     try {
         PlanResult planned = plan(message, rules, now, osrm_url);
         response = std::move(planned.response);
+        result.stats = planned.stats;
         // Cảnh báo bước lọc (trạng thái task) đi cùng cảnh báo parser: worker log + /healthz.
         result.warnings.insert(result.warnings.end(), planned.warnings.begin(), planned.warnings.end());
     } catch (const std::exception& error) {

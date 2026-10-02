@@ -4,6 +4,7 @@
 
 #include "ktv/adapter/envelope.hpp"
 #include "ktv/adapter/file.hpp"
+#include "ktv/adapter/log.hpp"
 
 static int failures = 0;
 #define CHECK(cond)                                                           \
@@ -73,6 +74,34 @@ int main() {
                                        {"trace_id", "local-2"}, {"server_time", "2026-09-10 09:00:01"}, {"data", nullptr}};
         nlohmann::ordered_json out = wrap_response(e, resp);
         CHECK(out["success"] == false && out["data"].is_null());
+    }
+
+    {  // 7.14 log: chế độ payload, payload JSON / chuỗi cắt 64 KB, errors đầy đủ, giờ có giây.
+        using ktv::PayloadLog;
+        CHECK(ktv::payload_log_from("none") == PayloadLog::None && ktv::payload_log_from("error") == PayloadLog::Error &&
+              ktv::payload_log_from("all") == PayloadLog::All && !ktv::payload_log_from("ALL"));
+        for (const char* code : {"400", "500"}) CHECK(ktv::payload_wanted(PayloadLog::Error, code));
+        for (const char* code : {"200", "424", "422", "STALE"}) CHECK(!ktv::payload_wanted(PayloadLog::Error, code));
+        CHECK(ktv::payload_wanted(PayloadLog::All, "200") && !ktv::payload_wanted(PayloadLog::None, "400"));
+
+        const json parsed = json::parse(R"({"staff":{"staff_id":""},"tasks":{}})");
+        CHECK(ktv::payload_json(parsed, "bỏ qua")["staff"]["staff_id"] == "");  // đọc được → JSON gốc, jq đọc thẳng
+        const std::string broken = "{hỏng";
+        CHECK(ktv::payload_json(json::parse(broken, nullptr, false), broken) == broken);
+        const std::string huge(70 * 1024, 'x');
+        const std::string cut = ktv::payload_json(json::parse(huge, nullptr, false), huge).get<std::string>();
+        CHECK(cut.size() < huge.size() && cut.rfind(std::string(ktv::kMaxLoggedPayload, 'x'), 0) == 0 &&
+              cut.find("tổng 71680 byte") != std::string::npos);
+
+        std::vector<ktv::Error> errors;
+        for (int i = 0; i < 5; ++i) errors.push_back({"staff.f" + std::to_string(i), "sai"});
+        const auto listed = ktv::errors_json(errors);
+        CHECK(listed.size() == 5 && listed[4]["path"] == "staff.f4" && listed[4]["problem"] == "sai");
+
+        const std::string ts = ktv::log_now();
+        CHECK(ts.size() == 19 && ts[4] == '-' && ts[10] == ' ' && ts[16] == ':' && ktv::parse_datetime(ts));
+        const auto line = ktv::log_event("message");
+        CHECK(line.begin().key() == "ts" && line["event"] == "message");
     }
 
     if (failures) std::cerr << failures << " lỗi\n";

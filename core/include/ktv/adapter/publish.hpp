@@ -42,6 +42,7 @@
 #include "ktv/adapter/envelope.hpp"
 #include "ktv/api.hpp"
 #include "ktv/gateway/redis_store.hpp"
+#include "ktv/normalization.hpp"
 #include "ktv/rules.hpp"
 
 namespace ktv {
@@ -53,7 +54,10 @@ struct Published {
     std::optional<nlohmann::ordered_json> out;  // Response đã gói (= OUT). Không có = IN cũ, đã bỏ qua.
     std::string status;                         // "200" / "424" / "422" / "400" / "500", hoặc "STALE".
     std::string message_id;                     // VD "m-123" hoặc fallback "topic-0-123".
-    std::vector<Error> warnings;                // Cảnh báo parse nới lỏng (log + /healthz, không vào OUT).
+    std::vector<Error> warnings;                // Cảnh báo parse nới lỏng + bước lọc (log + /healthz, không vào OUT).
+    std::vector<Error> errors;                  // Lỗi chặn khi 400 — ĐẦY ĐỦ (response chỉ ghi 3 lỗi đầu). Cho log.
+    std::string staff_id;                       // staff_id đọc được (kể cả khi 400 vì lỗi khác); "" nếu không có.
+    NormalizationStats stats;                   // Đếm task theo lý do bị loại (0 hết khi 400/500). Cho log.
     bool route_stored = false;                  // false khi không Redis, 400/500, hoặc đã có route mới hơn.
     bool used_mobix_loc = false;                // true = đã thay vị trí IN bằng vị trí Mobix.
     bool out_sent = false;                      // true = đã gọi send_out (key = staff_id, value = route).

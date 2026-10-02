@@ -44,6 +44,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     const Minutes day = start_of_day(now);
     const NormalizedWorklist worklist = normalize_worklist(message);
     result.warnings = worklist.warnings;
+    result.stats = worklist.stats;
     if (worklist.staff_off) {  // KTV off (hoặc trạng thái không rõ): không sinh tuyến.
         const char* why = message.staff.status == kStaffStatusUnknown ? "Trạng thái KTV không rõ, không sinh tuyến"
                                                                        : "KTV đang off, không sinh tuyến";

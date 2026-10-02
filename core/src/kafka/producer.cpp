@@ -1,6 +1,8 @@
 #include "ktv/kafka/producer.hpp"
 
 #include <iostream>
+
+#include "ktv/adapter/log.hpp"
 #include <stdexcept>
 
 namespace ktv {
@@ -10,7 +12,11 @@ namespace {
 
 void log_callback(const rd_kafka_t*, int level, const char* facility, const char* message) {
     if (level > 4) return;  // chỉ lỗi/cảnh báo
-    std::cerr << "kafka[" << facility << "] " << message << "\n";
+    nlohmann::ordered_json line = ktv::log_event("kafka");
+    line["level"] = level;
+    line["facility"] = facility;
+    line["text"] = message;
+    ktv::write_log(line);
 }
 
 }  // namespace
@@ -19,7 +25,10 @@ void KafkaProducer::on_delivery(rd_kafka_t*, const rd_kafka_message_t* message, 
     if (message->err == RD_KAFKA_RESP_ERR_NO_ERROR) return;
     auto* self = static_cast<KafkaProducer*>(opaque);
     ++self->failed_;
-    std::cerr << "kafka: OUT không tới " << self->topic_ << ": " << rd_kafka_err2str(message->err) << "\n";
+    nlohmann::ordered_json line = ktv::log_event("out_failed");  // Kafka báo không giao được OUT
+    line["topic"] = self->topic_;
+    line["reason"] = rd_kafka_err2str(message->err);
+    ktv::write_log(line);
 }
 
 KafkaProducer::KafkaProducer(const KafkaConfig& config) : topic_(config.topic_out) {
@@ -52,7 +61,10 @@ void KafkaProducer::send(const std::string& key, const std::string& value) {
         RD_KAFKA_V_END);
     if (code != RD_KAFKA_RESP_ERR_NO_ERROR) {  // không ném: gateway vẫn trả route; worker thấy qua flush()
         ++failed_;
-        std::cerr << "kafka: không gửi được OUT vào " << topic_ << ": " << rd_kafka_err2str(code) << "\n";
+        nlohmann::ordered_json line = ktv::log_event("out_failed");  // không đưa được vào hàng đợi
+        line["topic"] = topic_;
+        line["reason"] = rd_kafka_err2str(code);
+        ktv::write_log(line);
     }
     rd_kafka_poll(handle_, 0);  // chạy callback giao nhận của các message trước (gateway không flush)
 }

@@ -49,7 +49,7 @@ if(PkgConfig_FOUND)
 endif()
 
 add_library(kafka STATIC src/kafka/config.cpp)
-target_include_directories(kafka PUBLIC include)
+target_include_directories(kafka PUBLIC include third_party)  # third_party: log JSON (adapter/log.hpp)
 target_link_libraries(kafka PUBLIC Threads::Threads)
 if(RDKAFKA_FOUND AND HIREDIS_FOUND)
   target_sources(kafka PRIVATE src/kafka/consumer.cpp src/kafka/producer.cpp)
