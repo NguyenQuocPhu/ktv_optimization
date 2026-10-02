@@ -190,8 +190,13 @@ int main(int argc, char** argv) {
             CHECK(result.routed == static_cast<int>(worklist.candidates.size()));
             CHECK(result.excluded == worklist.stats.excluded_missing_location);
             if (seed % 10 == 0) {  // 300 bài kiểm tất định
+                // generated_in_ms là thời gian đo bằng đồng hồ (máy bận: 0 → 1 ms) → bỏ ra trước khi so, không thì test chập chờn.
+                auto stable = [](ojson response) {
+                    if (response["data"].is_object()) response["data"]["metrics"].erase("generated_in_ms");
+                    return response;
+                };
                 ktv::PlanResult again = ktv::plan(message, rules, now);
-                CHECK(again.response == result.response);
+                CHECK(stable(again.response) == stable(result.response));
             }
         }
     }
