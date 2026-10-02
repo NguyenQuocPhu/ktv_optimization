@@ -243,7 +243,7 @@ Chỉ khi phải kết nối cluster **chỉ-SCRAM** (không phải cluster dev 
 
 Toàn bộ nghiệp vụ (loại tác vụ, hạn, ưu tiên, cách tính thời gian và quãng đường, rule và trọng số) cùng các câu hỏi chờ xác nhận nằm ở [docs/BUSINESS_RULES.md](docs/BUSINESS_RULES.md). Rule cụ thể trong code: `core/src/rules.cpp`.
 
-- Chọn task để xếp (`core/src/normalization.cpp`): chỉ status 6; status 10 trùng `staff.current_task` là việc đang làm (khóa đầu tuyến, không thành điểm dừng); bỏ task đã có `complete_date` và task thiếu tọa độ; KTV `status = 3` (off) không có tuyến.
+- Chọn task để xếp (`core/src/normalization.cpp`): `task_id` trùng `staff.current_task` là việc đang làm (khóa đầu tuyến, không thành điểm dừng); `task_status_id` tra theo **từng nhóm** (bảng sheet 05 workbook API (3), `task_statuses()` trong `api.cpp`) → xếp / không xếp; mã không có trong bảng (`hoa_don`, `onsite`, mã lạ) thì đọc `task_status_name`: tên mang nghĩa đã xong/hủy → bỏ, còn lại → xếp, đều có cảnh báo; bỏ task đã có `complete_date` và task thiếu tọa độ; KTV `status = 3` (off) không có tuyến.
 - Nguồn km/phút: **OSRM đường bộ** khi truyền `--osrm` (một lần gọi `/table` mỗi KTV), lỗi hoặc trả ma trận méo thì lùi về chim bay × 1,3 và trả mã 424; mặc định trong code là chim bay 30 km/h.
 - Hạn check-in/hoàn tất tính theo loại việc, mốc hẹn và `create_date` (`core/src/sla.cpp`). Trễ hẹn tính theo **giờ check-in**; trễ hoàn tất so với giờ xong.
 - Thứ tự tối ưu bằng **QHĐ theo tầng rule** (`core/src/dp.cpp`): ≤ 12 việc giải chính xác; nhiều hơn dùng tham lam + 2-opt. Nghỉ trưa bắt buộc 45 phút, bắt đầu trong 11:30–12:45 [giả định].
@@ -278,7 +278,7 @@ Chỉ `data/sample/` được commit (16 MB), cắt từ export QOS chi nhánh H
 - `QOS_MAINT_CHECKIN_INFO_utf8.csv`: 18.445 lượt check-in của các checklist đó.
 - `boundary_fake_from_checkins.geojson`: 25 phường giả dựng từ chính bộ mẫu (job cùng phường trùng tọa độ).
 - `events_2026-06_HNI_04.jsonl`: 59.410 sự kiện (không có GPS — file GPS mẫu không có KTV nào của HNI_04).
-- `Data staging.txt`: một payload message staging mẫu. `validate` (strict) trả `400` vì `staff_role = 0`; `plan` (nới lỏng) ra 2 cảnh báo `STAFF_ROLE` rồi `422` vì task có status 0/97 (chỉ status 6 được xếp).
+- `Data staging.txt`: một payload message staging mẫu. `validate` (strict) trả `400` vì `staff_role = 0`; `plan` (nới lỏng) ra 2 cảnh báo `STAFF_ROLE` rồi `200`, xếp 3 task (`trien_khai` 97 + 2 × `bao_tri` 0; `bao_tri` 10 là việc đang làm).
 
 Lịch sử: bản Python đầy đủ trong tag `python-legacy-2026-09-30`; bản lưu SQLite cũ ở `.temp/backup_before_routing_core_2026-09-11.tar.gz`.
 

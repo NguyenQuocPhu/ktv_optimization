@@ -10,7 +10,7 @@ record JSON (object hoặc JSONL)
    ▼
 api        đọc + kiểm tra theo file API ─────────────────────► lỗi → 400
    ▼
-normalize  lọc status 6/10/khác, complete_date, thiếu tọa độ ─► không còn việc → 422
+normalize  lọc theo (nhóm, status) sheet 05, current_task, complete_date, thiếu tọa độ ─► không còn việc → 422
    │  sla      hạn A/B/hoàn tất theo loại việc + hẹn + create_date
    │  travel   ma trận km / phút: OSRM đường bộ (--osrm URL); lỗi → chim bay × 1,3, mã 424
    │  rules    tầng rule + trọng số (mặc định trong code, đè bằng --rules file.json)
@@ -27,7 +27,7 @@ cluster    cắt cụm theo chặng > 2 km + tóm tắt (tâm, bán kính, km v�
 | Module | File | Làm gì |
 |---|---|---|
 | api | `include/ktv/api.hpp`, `src/api.cpp` | Struct của message, đọc JSON, kiểm tra từng field, bảng loại việc (sheet 05), đổi ngày giờ |
-| normalization | `include/ktv/normalization.hpp`, `src/normalization.cpp` | Lọc việc được xếp: status 6, bỏ hoàn tất, bỏ thiếu tọa độ, tách current task |
+| normalization | `include/ktv/normalization.hpp`, `src/normalization.cpp` | Lọc việc được xếp: trạng thái theo nhóm (sheet 05) + tên trạng thái khi mã lạ, bỏ hoàn tất, bỏ thiếu tọa độ, tách current task |
 | sla | `include/ktv/sla.hpp`, `src/sla.cpp` | Hạn check-in/hoàn tất theo loại việc, hẹn, create_date; nhãn projected_sla |
 | rules | `include/ktv/rules.hpp`, `src/rules.cpp` | Danh sách rule mềm, tầng, trọng số, các ngưỡng. **Đọc file này để biết routing ưu tiên gì** |
 | travel | `include/ktv/travel.hpp`, `src/travel.cpp` | Ma trận km/phút: OSRM (một lần gọi `/table` mỗi KTV) hoặc chim bay |

@@ -49,7 +49,7 @@ Một message Kafka = **một KTV** (`staff` + `tasks` 5 nhóm). Lõi `plan()`:
 ```text
 record JSON → adapter (envelope message_id/planned_at/trigger)
  → api::parse_message      strict (validate) hoặc NỚI LỎNG (plan/worker: chỉ 400 khi không xếp được)
- → normalize_worklist      status 6 = xếp; 10 khớp current_task = việc đang làm; khác/đã xong/thiếu tọa độ → loại;
+ → normalize_worklist      (nhóm, status) theo bảng sheet 05 (từ 7.7); task_id khớp current_task = việc đang làm; thiếu tọa độ → loại;
                            staff.status 3 hoặc không rõ → 422
  → resolve_deadlines (sla) hạn check-in B = hẹn + SLA; hạn hoàn tất (ngày hẹn / ngày tạo / tháng)
  → travel                  OSRM /table (--osrm) hoặc chim bay; OSRM lỗi/méo → chim bay ×1,3, mã 424

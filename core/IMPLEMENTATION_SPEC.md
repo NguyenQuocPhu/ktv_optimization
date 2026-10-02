@@ -656,7 +656,11 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.4 ✅ | Gateway: `GET route` + `GET replan` (kết quả bên dưới) | HTTP test: replan trả route mới; gọi lại cùng vị trí → HIT; đổi vị trí → MISS; không có state → 404 |
 | 7.5 ✅ | Producer OUT, nối vào T1 và T2 (kết quả bên dưới) | E2E Kafka local: mỗi lần tính ra đúng một OUT; worker chỉ commit sau delivery; topic trống → chạy bình thường không OUT |
 | 7.6 ✅ | Vận hành (kết quả bên dưới): compose chạy worker + gateway + Redis, `/healthz` gateway kiểm Redis, README | demo end-to-end bằng compose |
-| sau | JWT thay token tĩnh, rate limit, OUT thêm `location`/`latlng` mỗi TASK (cần OA đồng ý) | |
+| 7.7 ✅ | `task_status_id` theo từng nhóm (sheet 05 workbook 3) — chi tiết + kết quả bên dưới | file staging thật `200`, xếp đúng 3 task; bảng (nhóm, status) |
+| 7.8 ⏳ | `complete_date` đổi nghĩa: không còn loại task | task XẾP có `complete_date` được xếp; benchmark giữ 5202/130 |
+| 7.9 ⏳ | Output TASK thêm `location`/`latlng`/`contract_id`/`contract_no` (sheet 03) | đủ 4 field, thứ tự tuyến không đổi |
+| 7.10 ⏳ | `staff_role = 0` hợp lệ, nhận `CreateDate`, tên topic, sổ câu hỏi | `validate` staging hết lỗi role |
+| sau | JWT thay token tĩnh, rate limit, lùi về `block_id` khi task không có lô (đổi thứ tự, trình bày riêng) | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
 
@@ -675,6 +679,101 @@ Authorization: Bearer <token>       Cache-Control: no-store
 Còn mở (không chặn code): tên topic OUT + quyền WRITE (SYS); envelope thật của OA (chờ message đầu tiên);
 key của message IN (nếu OA không key theo `staff_id`, hai message của cùng KTV có thể nằm khác partition —
 version của state xử lý được thứ tự đến).
+
+#### 7.7–7.10 — cập nhật theo workbook `API-Goi-y-cong-viec (3).xlsx` (2026-10-02, chờ duyệt từng phase)
+
+Workbook (3) đổi 5 chỗ so với (2): `task_status_id` có nghĩa **theo từng nhóm** (sheet 05); `complete_date` đổi nghĩa
+thành "ngày hoàn tất ca vụ trước đó (ngày thu bill trước)"; output TASK thêm `location`/`latlng`/`contract_id`/`contract_no`
+(sheet 03); `staff_role` có "0 default", `staff_plots_id` "không có thì 0, tính ưu tiên xuống `block_id`", tên
+`create_date` ghi thành `CreateDate` (sheet 02); tên topic IN prod/staging (sheet 00). Mỗi phase dưới đây một commit,
+có test riêng, làm phase sau khi phase trước được duyệt. Thứ tự theo mức nghiêm trọng: 7.7 đang làm mất việc thật.
+
+##### 7.7 — `task_status_id` theo từng nhóm
+
+Bảng sheet 05 dịch thành ba hành động:
+
+| Nhóm | XẾP | ĐANG LÀM (qua `staff.current_task`) | KHÔNG XẾP ("không tính toán sắp xếp") | Chưa rõ |
+|---|---|---|---|---|
+| `trien_khai` | 96 Đang di chuyển · 97 Đã nhận tuyến · 98 Đã phân công | 0 check_in | 5 Đang theo dõi · 1 Hoàn tất · -2 Hủy thi công · -1 Chờ xác minh | 99 Chưa phân công |
+| `bao_tri` | 0 Đã phân công · 6 Đã nhận ca · 7 Đang di chuyển | 10 check_in | 5 Đang theo dõi · 1 Hoàn tất · 3 Hoàn tất qua phone · 97 Đã hủy · 100 Đóng checklist | 2 Chưa phân công ("không đẩy qua AI core") |
+| `thu_hoi` | 0 Chưa thu hồi | — | 2 Đã nhập kho · -1 Đã hủy | 1 Đã thu hồi (không ghi "không xếp") |
+| `hoa_don`, `onsite` | chưa có bảng | | | dòng "khác": chỉ xếp việc còn mở, bỏ việc hoàn tất/hủy |
+
+Code hiện tại chỉ xếp status 6 cho mọi nhóm. Cùng mã khác nghĩa theo nhóm (0: `bao_tri` xếp, `trien_khai` đang làm;
+97: `trien_khai` xếp, `bao_tri` đã hủy). File staging thật (`trien_khai` 97 + 2 × `bao_tri` 0 + `bao_tri` 10 khớp
+`current_task`) đang ra `422` không xếp gì; đúng ra phải xếp 3 task.
+
+- `api.hpp/.cpp`: bảng `task_statuses()` `{nhóm, status, tên, hành động XẾP/ĐANG_LÀM/KHÔNG_XẾP}` cùng kiểu
+  `task_kinds()`; `status_action(nhóm, status)`.
+- `normalization.cpp`: tra bảng thay `!= 6`. ĐANG_LÀM không khớp `current_task` → bỏ + cảnh báo `CURRENT_NOT_MATCHED`;
+  KHÔNG_XẾP → bỏ, không cảnh báo (đúng nghĩa); "chưa phân công" theo (b); mã không có trong bảng theo (c).
+- Đường cảnh báo: `NormalizedWorklist.warnings` → `PlanResult.warnings` → `plan_and_store` / CLI gộp với cảnh báo
+  parser → log worker, `/healthz` `data_issues`, bảng cuối `ktv_core plan`.
+- Test: viết lại `test_normalization` theo bảng `(nhóm, status) → hành động` (có cặp cùng mã khác nghĩa); test nguyên file
+  staging thật `200` đúng 3 task; chứng minh test fail trên code cũ.
+- Rủi ro: benchmark giả 5.332 message dùng status 6 cho **mọi nhóm**. (c) = xếp + cảnh báo → giữ 5202/130, thêm cảnh
+  báo ở các nhóm khác `bao_tri`; (c) = bỏ → benchmark đổi hẳn, phải sinh lại fixture.
+- **Cần chốt**: (a) `thu_hoi` 1 — đề xuất **không xếp**; (b) `trien_khai` 99, `bao_tri` 2 — đề xuất **không xếp +
+  cảnh báo** `TASK_STATUS_UNASSIGNED`; (c) mã không có trong bảng (toàn bộ `hoa_don`/`onsite` + mã lạ) — đề xuất
+  **xếp + cảnh báo** `TASK_STATUS_UNKNOWN` (bỏ sót việc khó phát hiện hơn; cảnh báo lộ ở `/healthz`).
+
+**Kết quả 7.7 (2026-10-02):** người dùng duyệt (a) `thu_hoi` 1 không xếp, (b) "chưa phân công" không xếp + cảnh báo, và
+sửa (c): mã không có trong bảng thì **lọc việc còn mở** trước khi xếp — tín hiệu duy nhất trong payload là
+`task_status_name` (`complete_date` giờ là kỳ trước, không có giờ check-out). `api`: `StatusAction`, `TaskStatus`,
+`task_statuses()` (23 dòng, 3 nhóm), `find_status()`. `normalization`: tra (nhóm, status); mã lạ → `status_name_closed()`
+(bỏ dấu, chữ thường, `_`/`-` thành cách; có "chưa" → còn mở; "huy", "hoan tat", "da xu ly", "dong checklist", "da thu",
+"nhap kho", "cancel(l)ed", "closed", "done", "completed" → đã xong) → bỏ + `TASK_STATUS_UNKNOWN_CLOSED`, còn lại (kể cả tên
+rỗng) xếp + `TASK_STATUS_UNKNOWN`; "đang làm" không khớp current → `CURRENT_NOT_MATCHED`; chưa phân công →
+`TASK_STATUS_UNASSIGNED`. Cảnh báo: `NormalizedWorklist.warnings` → `PlanResult.warnings` → `plan_and_store` / CLI (log
+worker, `/healthz` `data_issues`, bảng `ktv_core plan`); gateway `replan` vẫn bỏ cảnh báo như trước. Kiểm: `test_normalization`
+viết lại (31 ca bảng (nhóm, status, tên) → xếp + mã cảnh báo; 20 tên trạng thái; message đủ loại; file staging thật qua
+`KTV_STAGING_FILE` → 3 task, `200`); so `ktv_core` trước/sau: staging `422` → `200` 3 task; benchmark 5.332 message tuyến
+**giống hệt từng message** (5202/130), thêm 9.465 cảnh báo `TASK_STATUS_UNKNOWN` (benchmark giả dùng status 6 cho mọi
+nhóm). `ctest` 15/15 trên máy không có hiredis/librdkafka (18 khi đủ). Còn mở: bảng trạng thái `hoa_don`/`onsite` (sổ câu hỏi).
+
+##### 7.8 — `complete_date` đổi nghĩa
+
+- `normalization.cpp`: bỏ luật loại task có `complete_date` (và bộ đếm `excluded_completed`); việc đã xong do status
+  (7.7) quyết định. `api.hpp`: sửa comment field theo nghĩa mới; vẫn đọc vào, chưa dùng.
+- Trước/sau: task XẾP có `complete_date` trước bị bỏ, sau được xếp.
+- Test: `test_normalization` task có `complete_date` + status XẾP → xếp; `test_invariants` bỏ kiểm "complete_date thì
+  loại". Benchmark không có `complete_date` → giữ 5202/130.
+- **Cần chốt**: (d) dùng `complete_date` tính hạn thu bill (VD kỳ trước + 1 tháng)? Đề xuất **chưa**, ghi sổ câu hỏi;
+  nếu làm thì trình bày riêng (đổi nghiệp vụ hạn).
+
+##### 7.9 — Output thêm 4 field (sheet 03)
+
+- `plan.cpp` (dựng dòng TASK): thêm `location` (địa chỉ input), `latlng` (`"lat,lng"`), `contract_id` (**string** theo
+  workbook), `contract_no`, đúng thứ tự sheet 03. Tự chảy sang route cache Redis, Kafka OUT, response `replan`.
+- Docs: README (output), `docs/MOBIX-REPLAN-API-DRAFT.md` mục 6 (đang chờ field này).
+- Test: `test_pipeline` dòng TASK đủ 4 field, giá trị khớp input, không hợp đồng → giá trị theo (e); `test_invariants`
+  + test gateway vẫn pass. Thứ tự tuyến không đổi.
+- **Cần chốt**: (e) không có hợp đồng → `""` (như `checkindate`) hay `null`? Đề xuất **`""`**.
+
+##### 7.10 — Field input + docs
+
+- `api.cpp`: `staff_role = 0` **hợp lệ** (không cảnh báo, strict cũng không lỗi); khác 0–3 vẫn cảnh báo. Nhận thêm tên
+  `CreateDate`: có cả hai → ưu tiên `create_date`, khác giá trị thì cảnh báo.
+- `.env.example` + README: topic IN prod `inside-par-assignment-optimal-assign-task-emp-assigned-queue`, staging
+  `stag-inside-par-assignment-optimal-assign-task-emp-assigned-queue`.
+- `docs/DATA_QUESTIONS.md`: bỏ `STAFF_ROLE` khỏi câu hỏi (đã trả lời), thêm mã mới của 7.7, ghi "Nhật ký trả lời"
+  những gì workbook (3) đã trả lời.
+- Trước/sau: `ktv_core validate` file staging hết lỗi role (trước `400`).
+- Test: `test_api` role 0 không cảnh báo (cả hai chế độ); `CreateDate` đọc được; có cả hai tên mà lệch → cảnh báo.
+- **Không làm**: lùi về `block_id` khi task không có lô (đổi rule `AREA_REENTRY` → đổi thứ tự tuyến), trình bày riêng.
+
+##### Ghi chú — việc đang làm (`staff.current_task`), người dùng duyệt hướng 2026-10-02
+
+Hiện tại: nhận diện bằng `task_id` khớp `staff.current_task` (không theo status); không thành điểm dừng, không hiện
+trong `schedule`; giờ xuất phát = `max(giờ lập tuyến, đầu ca, giờ lập tuyến + rules.current_task_minutes)`
+(`plan.cpp`); điểm xuất phát = `staff.latlng` (hoặc vị trí Mobix ≤ 60 phút).
+
+- **Thời gian còn lại**: luôn **30 phút** (`current_task_minutes`), việc nào cũng vậy [GIẢ ĐỊNH]. Input không có giờ bắt
+  đầu làm nên chưa tính được "còn bao lâu". **Nếu OA gửi giờ check-in của việc đang làm** thì tính: còn lại =
+  `max(0, định mức thời gian của loại việc − (giờ lập tuyến − giờ check-in))`; thiếu giờ check-in thì giữ 30 phút.
+  Cần: hỏi OA (thêm vào `docs/DATA_QUESTIONS.md` ở 7.10) và field trong `staff.current_task` hoặc dòng task. Làm khi có field.
+- Còn để ngỏ (chưa duyệt): dùng tọa độ của việc đang làm làm điểm xuất phát khi có; hiện việc đang làm đầu tuyến
+  cho Mobix (sheet 03 không yêu cầu).
 
 **Kết quả 7.6 — vận hành (2026-10-01):** `compose.yaml`: Kafka thêm listener `INTERNAL`
 (`kafka:19092`) cho container, host giữ `localhost:9092`; profile `app` gồm `kafka-init` (tạo `ktv-local-in/out`),
