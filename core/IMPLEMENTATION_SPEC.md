@@ -731,6 +731,45 @@ viết lại (31 ca bảng (nhóm, status, tên) → xếp + mã cảnh báo; 20
 **giống hệt từng message** (5202/130), thêm 9.465 cảnh báo `TASK_STATUS_UNKNOWN` (benchmark giả dùng status 6 cho mọi
 nhóm). `ctest` 15/15 trên máy không có hiredis/librdkafka (18 khi đủ). Còn mở: bảng trạng thái `hoa_don`/`onsite` (sổ câu hỏi).
 
+**Bảng tra 7.7 — `task_status_id` → xử lý → cảnh báo** (nguồn: `task_statuses()` trong `core/src/api.cpp`, sheet 05
+workbook API (3); sửa bảng ở đó rồi cập nhật bảng này). Thứ tự xét trong `normalize_worklist`: KTV off → `task_id` trùng
+`staff.current_task` (việc đang làm, **bất kể status**) → bảng dưới → `complete_date` (7.8) → thiếu tọa độ.
+
+| Nhóm | `task_status_id` | Tên (workbook) | Xử lý | Cảnh báo |
+|---|---:|---|---|---|
+| `trien_khai` | 96 | Đang di chuyển | **Xếp** | — |
+| `trien_khai` | 97 | Đã nhận tuyến | **Xếp** | — |
+| `trien_khai` | 98 | Đã phân công | **Xếp** | — |
+| `trien_khai` | 0 | check_in (việc đang thực hiện) | Đang làm: trùng `current_task` → khóa đầu tuyến; không trùng → bỏ | `CURRENT_NOT_MATCHED` (khi không trùng) |
+| `trien_khai` | 99 | Chưa phân công | Bỏ | `TASK_STATUS_UNASSIGNED` |
+| `trien_khai` | 5 | Đã xử lý đang theo dõi | Bỏ | — |
+| `trien_khai` | 1 | Đã hoàn tất | Bỏ | — |
+| `trien_khai` | -2 | Huỷ thi công | Bỏ | — |
+| `trien_khai` | -1 | Chờ xác minh | Bỏ | — |
+| `bao_tri` | 0 | Đã phân công | **Xếp** | — |
+| `bao_tri` | 6 | Đã nhận ca | **Xếp** | — |
+| `bao_tri` | 7 | Đang di chuyển | **Xếp** | — |
+| `bao_tri` | 10 | check_in (việc đang thực hiện) | Đang làm: trùng `current_task` → khóa đầu tuyến; không trùng → bỏ | `CURRENT_NOT_MATCHED` (khi không trùng) |
+| `bao_tri` | 2 | Chưa phân công | Bỏ | `TASK_STATUS_UNASSIGNED` |
+| `bao_tri` | 5 | Đã xử lý và đang theo dõi | Bỏ | — |
+| `bao_tri` | 1 | Đã xử lý hoàn tất | Bỏ | — |
+| `bao_tri` | 3 | Đã xử lý hoàn tất qua phone | Bỏ | — |
+| `bao_tri` | 97 | Đã hủy | Bỏ | — |
+| `bao_tri` | 100 | Đóng checklist | Bỏ | — |
+| `thu_hoi` | 0 | Chưa thu hồi | **Xếp** | — |
+| `thu_hoi` | 1 | Đã thu hồi | Bỏ (người dùng duyệt; workbook không ghi "không xếp") | — |
+| `thu_hoi` | 2 | Đã nhập kho | Bỏ | — |
+| `thu_hoi` | -1 | Đã hủy | Bỏ | — |
+| `hoa_don`, `onsite`, mã lạ ở mọi nhóm | bất kỳ (không có trong bảng) | `task_status_name` mang nghĩa đã xong/hủy | Bỏ | `TASK_STATUS_UNKNOWN_CLOSED` |
+| `hoa_don`, `onsite`, mã lạ ở mọi nhóm | bất kỳ (không có trong bảng) | tên khác hoặc rỗng | **Xếp** (coi là còn mở) | `TASK_STATUS_UNKNOWN` |
+
+Tên "đã xong/hủy" (`status_name_closed`, sau khi bỏ dấu + chữ thường + `_`/`-` → dấu cách): chứa cụm `huy`, `hoan tat`,
+`da xu ly`, `dong checklist`, `da dong`, `da thu`, `nhap kho`, `cancel`/`canceled`/`cancelled`, `closed`, `done`,
+`completed` (so nguyên từ). Có từ `chua` ("Chưa hoàn tất", "Chưa thu hồi") → luôn coi là còn mở. VD: "Đã hủy", "ĐÃ HỦY",
+"Huỷ Thi công", "Đã thu tiền", "da_huy" → đã xong; "Đang di chuyển", "Đã phân công", "Chờ xác minh", "check_in",
+"Huyện Đông Anh", "" → còn mở. Mọi cảnh báo: log worker (một lần mỗi loại) + `/healthz` `data_issues` + bảng cuối
+`ktv_core plan`; không vào OUT. Mã + câu hỏi cho team data: `docs/DATA_QUESTIONS.md`.
+
 ##### 7.8 — `complete_date` đổi nghĩa
 
 - `normalization.cpp`: bỏ luật loại task có `complete_date` (và bộ đếm `excluded_completed`); việc đã xong do status
