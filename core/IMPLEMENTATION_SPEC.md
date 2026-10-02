@@ -662,6 +662,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.10 ✅ | `staff_role = 0` hợp lệ, nhận `CreateDate`, tên topic, sổ câu hỏi (kết quả bên dưới) | `validate` staging hết lỗi role |
 | 7.10b ✅ | Task lô 0 lùi xuống `block_id` trong rule quay lại khu vực (`AREA_REENTRY`) (kết quả bên dưới) | test thẳng hàng X1–Y–X2 đổi thứ tự đúng |
 | 7.11 ✅ | Bảng trạng thái `hoa_don`/`onsite` theo workbook API (4) — chi tiết + kết quả bên dưới | hóa đơn đã thanh toán, onsite đã hoàn tất không còn bị xếp |
+| 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -886,6 +887,44 @@ Workbook (4) sheet 05 bổ sung bảng trạng thái cho hai nhóm chưa có ở
 đủ loại trong `test_normalization` đổi task `hoa_don` 0 → mã 4 (vẫn ngoài bảng) để giữ kiểm luật "không có trong bảng". Kiểm:
 test mới trên code cũ fail 11 kiểm — `hoa_don` 1 và `onsite` 1 tên rỗng **bị xếp** (đúng lỗi cần sửa); code mới `ctest` 15/15;
 benchmark (status 6) + file staging thật giống hệt trước/sau.
+
+##### 7.14 — Log có cấu trúc (người dùng chọn 2026-10-02)
+
+Bối cảnh: log staging (bản deploy, định dạng JSON riêng không có trong repo) chỉ có `"statuscode": "400"` + cảnh báo, không có
+lý do lỗi; log trong repo là chữ tự do (`#5 topic-2-7 status=400 cảnh_báo=3`). Response `400` chỉ ghi 3 lỗi đầu.
+
+- **Worker: một dòng JSON / message IN** trên stderr (`event: "message"`), giữ các key log staging đang dùng (`topic`, `partition`,
+  `offset`, `staff_id`, `sent_to`, `statuscode`, `stored`, `warnings`, `generated_in_ms`, `total_ms`) và thêm: `ts` (giờ VN có
+  giây), `key`, `headers`, `message_id`, `run_code`, `used_mobix_loc`, `message` (như field trong OUT), `errors` (**đầy đủ**
+  `{path, problem}`, không cắt 3), `tasks` (`received`, `routed`, `skipped_status`, `current`, `missing_location`), `payload`
+  (theo cờ). `sent_to` = `"kafka"` chỉ khi message này **thật sự** được đẩy OUT, không thì `null`; `stored` = route ghi vào Redis.
+- **`--log-payload none|error|all`** (mặc định `error`): `error` = in payload IN vào dòng log khi `statuscode` là `400`/`500`;
+  `all` = mọi message (soi staging); `none` = không bao giờ. Payload parse được → JSON gốc; không parse được → chuỗi, cắt 64 KB.
+  Không log tọa độ/địa chỉ ở chỗ khác (chỉ trong `payload` khi bật).
+- **Các dòng khác của worker cũng là JSON** với `event`: `start` (cấu hình, không password), `health`, `data_issue_new`,
+  `commit_skipped`, `kafka` (log librdkafka), `fatal`, `stop`. Lọc: `jq -c 'select(.event=="message" and .statuscode=="400")'`.
+- **Gateway: một dòng JSON / request `/api/`** (`event: "http"`): `method`, `route` (`route`/`replan`), `staff_id`, `http_status`,
+  `cache` (HIT/MISS), `statuscode` + `message` của body khi có, `total_ms`. Không log `/healthz`, `/readyz`.
+- Code: `adapter/log.hpp` (header-only: giờ có giây, chế độ payload, `errors`/`payload` cho log), `Published` thêm `staff_id`,
+  `errors`, `stats`; `PlanResult` thêm `stats` (đếm của bước lọc, đã có trong `normalize_worklist`); `kafka/main.cpp`,
+  `kafka/consumer.cpp`, `gateway/server.cpp` in JSON. README mục đọc log.
+- Test: `test_adapter` (chế độ payload, cắt 64 KB, `errors` đầy đủ); `test_publish` (`errors` > 3 lỗi, `staff_id`, `stats`);
+  E2E Kafka + Redis local: mỗi dòng stderr là JSON hợp lệ, message `400` có đủ `errors` + `payload`, `200` không có `payload`.
+
+**Kết quả 7.14 (2026-10-02):** `adapter/log.hpp` (header-only: `PayloadLog`, `payload_wanted`, `payload_json` cắt 64 KB,
+`errors_json`, `log_now` có giây, `log_event`, `write_log`); `Published` thêm `errors` (đầy đủ), `staff_id`, `stats`;
+`PlanResult.stats`; worker: dòng `message` + `start`/`stop`/`fatal`/`data_issue_new`, cờ `--log-payload` (mặc định `error`),
+`sent_to` = `"kafka"` chỉ khi thật sự đẩy OUT; consumer/producer: `kafka`/`kafka_retry`/`commit_skipped`/`out_failed`;
+gateway: dòng `http` mỗi request `/api/` (pre-routing bấm giờ + logger của httplib), `start`/`stop`/`fatal`. README mục
+"Đọc log". Kiểm: `test_adapter` (chế độ payload, cắt 64 KB, `errors`, giờ), `test_publish` (400 → 4 lỗi đầy đủ trong khi
+response 3; `staff_id` khi 400 vì lỗi khác; đếm task), `ctest` 18/18 (Redis riêng cổng 16399). E2E Kafka local: 3 message
+(tốt / `400` 4 lỗi / JSON hỏng) → mọi dòng stderr là JSON, `400` có đủ `errors` + `payload`, `200` không payload; gateway:
+route 200, replan MISS → HIT, 400 latlng, 404 KTV lạ, 401 thiếu token — mỗi request một dòng, `/healthz` không log, SIGTERM
+→ `stop`. Kèm sửa build: hiredis link bằng đường dẫn đầy đủ (`HIREDIS_LINK_LIBRARIES`, commit riêng).
+
+**Sự cố khi kiểm (máy gpu-server-5080):** cổng `127.0.0.1:6379` là Redis của project khác (`nghechuanai-backend-redis-1`),
+`ktv-redis` của compose không lên được. `ctest` (cố định `KTV_TEST_REDIS=127.0.0.1:6379`) và demo đã ghi vào Redis đó; test
+tự dọn key `ktvtest-*`, 5 key `ktvlog:` của demo đã xóa (chỉ prefix của ta). Từ nay trên máy này dùng Redis riêng cổng khác.
 
 **Kết quả 7.6 — vận hành (2026-10-01):** `compose.yaml`: Kafka thêm listener `INTERNAL`
 (`kafka:19092`) cho container, host giữ `localhost:9092`; profile `app` gồm `kafka-init` (tạo `ktv-local-in/out`),

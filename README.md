@@ -182,6 +182,7 @@ Cấu hình qua `.env` (copy từ `.env.example`; biến môi trường thật �
 ```bash
 core/build/ktv_worker --env .env --max 1          # đọc 1 message → in response
 core/build/ktv_worker --env .env --out responses.jsonl --health-port 8081
+core/build/ktv_worker --env .env --log-payload all        # in payload IN vào mọi dòng log (soi staging)
 core/build/ktv_worker --env .env --osrm http://127.0.0.1:5000 --rules rules.json
 core/build/ktv_worker --env .env --redis 127.0.0.1:6379   # ghi thêm state + route vào Redis (Phase 7.3)
 ```
@@ -212,6 +213,30 @@ sudo docker compose up -d kafka
 KAFKA_BOOTSTRAP_SERVERS=127.0.0.1:9092 KAFKA_USE_SASL=false KAFKA_SECURITY_PROTOCOL=PLAINTEXT \
 KAFKA_GROUP_ID=ktv-local-g1 KAFKA_TOPIC_IN=<topic> \
 core/build/ktv_worker --env .env --max 1 --at "2026-09-10 09:00:00"
+```
+
+### Đọc log (worker + gateway)
+
+Mỗi sự kiện **một dòng JSON trên stderr** (stdout / `--out` của worker vẫn là response = OUT như cũ). Trường chung: `ts` (giờ VN,
+có giây), `event`.
+
+| `event` | Khi nào | Trường chính |
+|---|---|---|
+| `message` (worker) | Mỗi message IN | `topic` `partition` `offset` `key` `headers` `message_id` `run_code` `staff_id` `statuscode` `message` `errors` (đầy đủ, response chỉ ghi 3 lỗi đầu) `warnings` `tasks` (`received`/`routed`/`skipped_status`/`current`/`missing_location`) `sent_to` (`"kafka"` khi thật sự đẩy OUT, không thì `null`) `stored` (route ghi Redis) `used_mobix_loc` `generated_in_ms` `total_ms`, `payload` (theo `--log-payload`) |
+| `http` (gateway) | Mỗi request `/api/` (không log `/healthz`, `/readyz`, không log query) | `method` `route` (`route`/`replan`) `staff_id` `http_status` `cache` (HIT/MISS) `statuscode` `message` `total_ms` |
+| `start` / `stop` | Khởi động / dừng | cấu hình (không password) / số message, lý do |
+| `fatal` | Lỗi làm tiến trình thoát | `error`, `exit_code` |
+| `data_issue_new` | Lần đầu gặp một loại cảnh báo dữ liệu | `issue`, `message_id` (đếm đầy đủ ở `/healthz`) |
+| `kafka`, `kafka_retry`, `commit_skipped`, `out_failed` | Log librdkafka, lỗi tạm thời, rebalance, OUT không tới | `text` / `reason` |
+
+`--log-payload none|error|all` (worker, mặc định `error`): in nguyên payload IN vào dòng `message` khi `400`/`500`
+(`error`), mọi message (`all`, dùng khi soi staging), hoặc không bao giờ (`none`). Payload chứa địa chỉ, tọa độ, hợp đồng
+khách — prod để `error`.
+
+```bash
+docker logs ktv-worker 2>&1 >/dev/null | jq -c 'select(.event=="message" and .statuscode=="400") | {offset, staff_id, errors}'
+docker logs ktv-worker 2>&1 >/dev/null | jq -c 'select(.event=="message") | .statuscode' | sort | uniq -c
+docker logs ktv-gateway 2>&1 | jq -c 'select(.event=="http" and .http_status!=200)'
 ```
 
 ### Queue cluster của công ty (trạng thái 2026-09-30)
