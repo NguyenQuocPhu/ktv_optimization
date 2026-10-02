@@ -663,6 +663,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.10b ✅ | Task lô 0 lùi xuống `block_id` trong rule quay lại khu vực (`AREA_REENTRY`) (kết quả bên dưới) | test thẳng hàng X1–Y–X2 đổi thứ tự đúng |
 | 7.11 ✅ | Bảng trạng thái `hoa_don`/`onsite` theo workbook API (4) — chi tiết + kết quả bên dưới | hóa đơn đã thanh toán, onsite đã hoàn tất không còn bị xếp |
 | 7.15 ✅ | `onsite/phieu_onsite` theo luật mới "rule như bao_tri" (workbook API (4)) — chi tiết bên dưới | `phieu_onsite` có hẹn + SLA 60 → hạn check-in trước B, không cảnh báo |
+| 7.13 ✅ | Output `data.priority_type` (workbook API (4)), luôn `0` (default) — chi tiết bên dưới | mọi response có tuyến có `priority_type: 0` ngay sau `staff_id` |
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
 | sau | JWT thay token tĩnh, rate limit | |
 
@@ -914,6 +915,24 @@ vẫn xếp); test mới fail trên code cũ (4 kiểm); `ctest` 18/18 (Redis ri
 **nới lỏng** như worker/gateway (benchmark giả sinh theo danh mục cũ, SLA null → trước đây bị strict coi là lỗi); 3.000 message
 ngẫu nhiên vẫn strict. Benchmark: **0/5.332 tuyến đổi thứ tự**, chỉ số giữ nguyên (hạn cuối tháng của 272 việc không hẹn vốn
 không bao giờ trễ), thêm 559 cảnh báo `CATALOG_MISMATCH`. `BUSINESS_RULES` + `DATA_QUESTIONS` cập nhật.
+
+##### 7.13 — Output `data.priority_type` (người dùng chọn 2026-10-02)
+
+Workbook (4) sheet 03 thêm field bắt buộc `data.priority_type`: "Loại sắp xếp: 0 default; 1 SLA, 2 Tuyến", ngay sau
+`data.staff_id`. Người dùng chốt: **làm phần output trước, luôn `0` (default)**; API `replan` có tham số mode + bộ rule mode
+SLA / tuyến **làm sau** (plan đã bàn: mode SLA = rule hiện tại; mode tuyến cần duyệt cách chấm; nhớ mode KTV; dedup/version
+có mode).
+
+- Sửa: `plan.cpp` dựng `data` = `{staff_id, priority_type: 0, clusters, metrics}`. Response lỗi (`data: null`) không đổi.
+  Tự chảy sang route cache Redis, Kafka OUT, response `replan`.
+- Test: `test_pipeline` (`priority_type == 0`, thứ tự key của `data`); test fail trên code cũ; benchmark bỏ field mới thì
+  giống hệt.
+
+**Kết quả 7.13 (2026-10-02):** đúng như plan. `test_pipeline` mới fail 2 kiểm trên code cũ, `ctest` 18/18 (Redis riêng);
+benchmark 5.332 message: bỏ `priority_type` thì output giống hệt, mọi bản có `priority_type: 0`. Phần còn lại (API `replan`
+nhận mode, bộ rule SLA / tuyến, nhớ mode, dedup/version theo mode) để sau — các câu cần chốt (a)–(e) đã nêu trong chat
+2026-10-02: (a) bỏ trống mode → output 1 hay 0, (b) mode tuyến "100%" hay giữa chừng, (c) IN mới giữ mode KTV đã chọn,
+(d) tên tham số `priority_type` hay `mode`, (e) `GET /route` không nhận mode.
 
 ##### 7.14 — Log có cấu trúc (người dùng chọn 2026-10-02)
 

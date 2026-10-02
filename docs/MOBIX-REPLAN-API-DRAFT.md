@@ -107,6 +107,11 @@ Thứ tự field: `task_id, location, latlng, task_group_*, task_type_*, task_su
 travel_minutes_before, travel_km_before, handle_minutes, projected_sla, contract_id, contract_no`. Lưu ý: workbook ghi
 `contract_id` kiểu string; ta giữ đúng kiểu của input (người dùng chốt).
 
+## 6b. `data.priority_type` (đã có từ Phase 7.13, 2026-10-02)
+
+Route có `data.priority_type` ngay sau `data.staff_id` (workbook API (4) sheet 03): `0` default · `1` SLA · `2` tuyến. Hiện
+**luôn `0`**: API `replan` chưa nhận tham số chọn mode (để sau).
+
 ## 7. Giới hạn/bảo mật cần ghi trong ticket
 
 - `replan` là GET có tác dụng phụ: `Cache-Control: no-store`; không log query chứa tọa độ nguyên văn.
