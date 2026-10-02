@@ -88,13 +88,13 @@ struct Task {
     std::optional<int> sla_minutes;      // Hẹn A → hạn check-in B = A + sla_minutes. Không có = hạn không tính theo phút.
     int priority_in_day = 0;             // 1 gấp nhất … 4.
     std::optional<Minutes> appointment;  // Mốc hẹn A. Không có = khách không hẹn.
-    std::optional<Minutes> create_date;  // Ngày phát sinh ca vụ (workbook mới). Không có = chưa gửi.
+    std::optional<Minutes> create_date;  // Ngày phát sinh ca vụ. Input tên "create_date" hoặc "CreateDate" (cùng một field).
     std::optional<Minutes> complete_date;// Ngày hoàn tất ca vụ TRƯỚC ĐÓ, VD ngày thu bill kỳ trước (workbook (3)).
                                           // Không phải "task này đã xong" (đó là task_status_id). Chưa dùng khi xếp.
     std::string location;                // Địa chỉ, chỉ để hiển thị.
     std::optional<Point> latlng;         // Không có = thiếu tọa độ → bị loại khỏi tuyến.
     std::optional<int> handle_minutes;   // Không có / 0 = dùng định mức theo loại việc.
-    int task_plots_id = 0, staff_plots_id = 0, staff_role = 0, block_id = 0;
+    int task_plots_id = 0, staff_plots_id = 0, staff_role = 0, block_id = 0;  // staff_role 0 = không khớp lô nào của KTV.
     std::optional<long long> contract_id;  // ObjID hợp đồng. Chỉ để truy vết.
     std::string contract_no;               // Số hợp đồng. Chỉ để truy vết.
 };
@@ -108,7 +108,7 @@ struct Message {
 };
 
 // Một lỗi dữ liệu. VD {"tasks.bao_tri[0].latlng", "cần \"lat,lng\" trong Việt Nam"}.
-// Cảnh báo (chế độ nới lỏng) có thêm mã, VD {"tasks.bao_tri[0].staff_role", "cần 1, 2 hoặc 3", "STAFF_ROLE"}.
+// Cảnh báo (chế độ nới lỏng) có thêm mã, VD {"tasks.bao_tri[0].staff_role", "cần 0, 1, 2 hoặc 3", "STAFF_ROLE"}.
 struct Error {
     std::string path, problem;
     std::string code{};  // Rỗng với lỗi; mã cảnh báo (docs/DATA_QUESTIONS.md) với cảnh báo.
@@ -162,7 +162,7 @@ inline constexpr const char* kGroups[] = {"trien_khai", "bao_tri", "thu_hoi", "h
 // warnings = nullptr: strict. Có: nới lỏng, lệch hợp đồng mà vẫn xếp được thì ghi vào *warnings (có mã).
 Message parse_message(const json& data, std::vector<Error>& errors, std::vector<Error>* warnings = nullptr);
 
-// Khóa gom cảnh báo cùng loại để đếm (bỏ chỉ số mảng). VD "STAFF_ROLE tasks.bao_tri[].staff_role — cần 1, 2 hoặc 3 (đang là 0)".
+// Khóa gom cảnh báo cùng loại để đếm (bỏ chỉ số mảng). VD "STAFF_ROLE tasks.bao_tri[].staff_role — cần 0, 1, 2 hoặc 3 (đang là 7)".
 std::string issue_key(const Error& warning);
 
 std::optional<Minutes> parse_datetime(const std::string& text);  // "2026-09-10 14:00:00" → Minutes; sai dạng → không có.

@@ -87,7 +87,11 @@ int main() {
         CHECK(status_failed);
 
         data = sample();
-        data["tasks"]["trien_khai"][0]["staff_role"] = 0;  // Role 0 chưa hỗ trợ (deferred).
+        data["tasks"]["trien_khai"][0]["staff_role"] = 0;  // Role 0 = default (workbook (3)): hợp lệ cả ở strict.
+        errors.clear();
+        ktv::parse_message(data, errors);
+        CHECK(errors.empty());
+        data["tasks"]["trien_khai"][0]["staff_role"] = 4;  // ngoài 0–3: strict vẫn lỗi.
         errors.clear();
         ktv::parse_message(data, errors);
         bool role_failed = false;
@@ -228,13 +232,38 @@ int main() {
         CHECK(warned("TASK_GROUPS", "tasks.onsite"));
         CHECK(strict_fails(data));
     }
-    {  // staff_role = 0 (staging thật có) → giữ task, giữ nguyên số 0.
+    {  // staff_role = 0 (staging thật có, workbook (3) "0 default") → hợp lệ, không cảnh báo. Số lạ (7) → cảnh báo.
         json data = sample();
         data["tasks"]["trien_khai"][0]["staff_role"] = 0;
         auto m = lenient(data);
-        CHECK(errors.empty() && m.tasks.size() == 2 && m.tasks[0].staff_role == 0);
+        CHECK(errors.empty() && warnings.empty() && m.tasks.size() == 2 && m.tasks[0].staff_role == 0);
+        CHECK(!strict_fails(data));
+        data["tasks"]["trien_khai"][0]["staff_role"] = 7;
+        m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2 && m.tasks[0].staff_role == 7);
         CHECK(warned("STAFF_ROLE", "tasks.trien_khai[0].staff_role"));
         CHECK(strict_fails(data));
+    }
+    {  // create_date / CreateDate là một field: tên nào cũng nhận; cả hai mà khác → dùng create_date + cảnh báo.
+        json data = sample();
+        json& t = data["tasks"]["trien_khai"][0];
+        t["CreateDate"] = "2026-09-01 08:00:00";
+        auto m = lenient(data);
+        CHECK(errors.empty() && warnings.empty() && m.tasks[0].create_date &&
+              ktv::format_datetime(*m.tasks[0].create_date) == "2026-09-01 08:00:00");
+        CHECK(!strict_fails(data));
+        t["create_date"] = "2026-09-01 08:00:00";  // cả hai, cùng giá trị: không cảnh báo
+        m = lenient(data);
+        CHECK(errors.empty() && warnings.empty());
+        t["create_date"] = "2026-09-02 09:30:00";  // cả hai, khác: create_date thắng + cảnh báo
+        m = lenient(data);
+        CHECK(errors.empty() && ktv::format_datetime(*m.tasks[0].create_date) == "2026-09-02 09:30:00");
+        CHECK(warned("CREATE_DATE_CONFLICT", "tasks.trien_khai[0].CreateDate"));
+        CHECK(strict_fails(data));
+        t.erase("create_date");
+        t["CreateDate"] = "01/09/2026";  // sai định dạng: lỗi của task như create_date
+        lenient(data);
+        CHECK(errors.empty() && warned("TASK_DROPPED", "tasks.trien_khai[0]"));
     }
     {  // Lệch danh mục → dùng giá trị input.
         json data = sample();

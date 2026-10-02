@@ -401,7 +401,7 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
             tr.only(item, path,
                     {"task_id", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
                      "task_sub_name", "task_status_id", "task_status_name", "sla", "appointment", "create_date",
-                     "complete_date", "location", "latlng", "handle_minutes", "task_plots_id", "staff_plots_id",
+                     "CreateDate", "complete_date", "location", "latlng", "handle_minutes", "task_plots_id", "staff_plots_id",
                      "staff_role", "block_id", "location_id", "contract_id", "contract_no"});
             Task t;
             t.task_id = tr.integer<long long>(item, path, "task_id");
@@ -428,18 +428,23 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                     tr.fail(path + ".appointment", "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
                 }
             }
-            const std::pair<const char*, std::optional<Minutes>*> date_fields[] = {
-                {"create_date", &t.create_date}, {"complete_date", &t.complete_date}};
-            for (const auto& field : date_fields) {
-                if (!item.contains(field.first)) continue;
-                const json& value = item[field.first];
-                if (value.is_string() && value.get_ref<const std::string&>().empty()) {
-                } else if (auto when = value.is_string() ? parse_datetime(value.get<std::string>()) : std::nullopt) {
-                    *field.second = when;
-                } else {
-                    tr.fail(path + "." + field.first, "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
-                }
-            }
+            // "" = không có; sai định dạng = lỗi của task.
+            auto read_date = [&](const char* key) -> std::optional<Minutes> {
+                if (!item.contains(key)) return std::nullopt;
+                const json& value = item[key];
+                if (value.is_string() && value.get_ref<const std::string&>().empty()) return std::nullopt;
+                if (auto when = value.is_string() ? parse_datetime(value.get<std::string>()) : std::nullopt) return when;
+                tr.fail(path + "." + key, "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
+                return std::nullopt;
+            };
+            // create_date: workbook (3) ghi "CreateDate", staging gửi "create_date" → hai tên là MỘT field, tên nào cũng
+            // nhận. Gửi cả hai mà khác giá trị → lấy create_date + cảnh báo.
+            const std::optional<Minutes> snake = read_date("create_date"), camel = read_date("CreateDate");
+            t.create_date = snake ? snake : camel;
+            if (snake && camel && *snake != *camel)
+                tr.tolerate("CREATE_DATE_CONFLICT", path + ".CreateDate",
+                            "khác create_date (" + format_datetime(*snake) + " ≠ " + format_datetime(*camel) + "), dùng create_date");
+            t.complete_date = read_date("complete_date");
             if (item.contains("contract_id")) {
                 const json& value = item["contract_id"];
                 if (value.is_null()) {
@@ -468,14 +473,15 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                     tr.fail(path + ".handle_minutes", "cần \"\", null hoặc số nguyên ≥ 0");
                 }
             }
-            // 1 chính / 2 kiêm nhiệm / 3 hỗ trợ. Không dùng khi xếp tuyến, nên nới lỏng thì giữ nguyên số lạ (VD 0).
+            // 0 default (không khớp lô nào của KTV — workbook (3)) / 1 chính / 2 kiêm nhiệm / 3 hỗ trợ. Không dùng khi xếp
+            // tuyến, nên nới lỏng thì giữ nguyên số lạ.
             if (item.contains("staff_role")) {
                 const json& value = item["staff_role"];
-                if (value.is_number_integer() && value.get<int>() >= 1 && value.get<int>() <= 3) {
+                if (value.is_number_integer() && value.get<int>() >= 0 && value.get<int>() <= 3) {
                     t.staff_role = value.get<int>();
                 } else {
                     if (value.is_number_integer()) t.staff_role = value.get<int>();
-                    tr.tolerate("STAFF_ROLE", path + ".staff_role", "cần 1, 2 hoặc 3 (đang là " + value.dump() + ")");
+                    tr.tolerate("STAFF_ROLE", path + ".staff_role", "cần 0, 1, 2 hoặc 3 (đang là " + value.dump() + ")");
                 }
             } else {
                 tr.tolerate("STAFF_ROLE", path + ".staff_role", "thiếu field bắt buộc");
