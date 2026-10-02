@@ -136,7 +136,7 @@ int main() {
             make_task(107, "trien_khai", 1, "trien_khai_net", 3, 120, 3, 0, "21.08,105.86", ""),   // check_in, không current
         });
         const json bao = json::array({
-            make_task(102, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, 6, "21.04,105.82", "2026-09-01 10:00:00"),  // hoàn tất
+            make_task(102, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, 6, "21.04,105.82", "2026-09-01 10:00:00"),  // có complete_date (kỳ trước) → vẫn xếp
             make_task(103, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, 6, "", ""),                                  // thiếu tọa độ
             make_task(106, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, 10, "21.07,105.85", ""),                     // trùng current
         });
@@ -151,22 +151,22 @@ int main() {
         ktv::NormalizedWorklist w = ktv::normalize_worklist(message);
         CHECK(!w.staff_off);
         CHECK(w.stats.tasks == 7);
-        CHECK(w.candidates.size() == 2 && w.candidates[0]->task_id == 101 && w.candidates[1]->task_id == 105);
+        CHECK(w.candidates.size() == 3 && w.candidates[0]->task_id == 101 && w.candidates[1]->task_id == 102 &&
+              w.candidates[2]->task_id == 105);
         CHECK(w.stats.excluded_current == 1);           // 106
         CHECK(w.stats.excluded_status == 2);            // 107 (check_in không current), 104 (thu_hoi đã hủy)
-        CHECK(w.stats.excluded_completed == 1);         // 102
         CHECK(w.stats.excluded_missing_location == 1);  // 103
         CHECK(w.current_task && w.current_task->task_id == 106);
         CHECK(w.warnings.size() == 2 && warned(w, "CURRENT_NOT_MATCHED") && warned(w, "TASK_STATUS_UNKNOWN"));
 
-        // Plan: chỉ 101 + 105 thành TASK; cảnh báo đi theo PlanResult (worker log + /healthz).
+        // Plan: 101, 102, 105 thành TASK; cảnh báo đi theo PlanResult (worker log + /healthz).
         ktv::PlanResult r = ktv::plan(message, ktv::default_rules(), *ktv::parse_datetime("2026-09-10 09:00:05"));
         CHECK(r.response["success"] == true && r.response["statuscode"] == "200");
-        CHECK(r.routed == 2);
+        CHECK(r.routed == 3);
         CHECK(r.warnings.size() == 2);
         for (const auto& cluster : r.response["data"]["clusters"])
             for (const auto& row : cluster["schedule"]) {
-                CHECK(row["entry_type"] != "TASK" || row["task_id"] == 101 || row["task_id"] == 105);
+                CHECK(row["entry_type"] != "TASK" || row["task_id"] == 101 || row["task_id"] == 102 || row["task_id"] == 105);
                 if (row["task_id"] == 101) CHECK(row["handle_minutes"] == 120);  // "" → định mức trien_khai_net
             }
     }
@@ -196,11 +196,11 @@ int main() {
         CHECK(errors.empty() && !ktv::normalize_worklist(on).staff_off && ktv::normalize_worklist(on).candidates.size() == 1);
     }
 
-    {  // Thứ tự loại: trạng thái → complete_date → tọa độ (bao_tri 6 = Đã nhận ca).
-        struct Case { int status; bool location, complete; size_t routable; int status_excluded, complete_excluded, location_excluded; };
+    {  // Thứ tự loại: trạng thái → tọa độ (bao_tri 6 = Đã nhận ca). complete_date không loại (7.8: là ngày kỳ trước).
+        struct Case { int status; bool location, complete; size_t routable; int status_excluded, location_excluded; };
         const Case cases[] = {
-            {6, true, false, 1, 0, 0, 0},   {6, false, false, 0, 0, 0, 1},  {6, true, true, 0, 0, 1, 0},
-            {6, false, true, 0, 0, 1, 0},   {97, false, true, 0, 1, 0, 0},  // đã hủy: loại theo trạng thái trước
+            {6, true, false, 1, 0, 0},   {6, false, false, 0, 0, 1},  {6, true, true, 1, 0, 0},  // complete_date vẫn xếp
+            {6, false, true, 0, 0, 1},   {97, false, true, 0, 1, 0},  // đã hủy: loại theo trạng thái trước tọa độ
         };
         for (const Case& c : cases) {
             const json tasks = json::array({make_task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, c.status,
@@ -211,7 +211,6 @@ int main() {
             ktv::NormalizedWorklist w = ktv::normalize_worklist(message);
             CHECK(w.candidates.size() == c.routable);
             CHECK(w.stats.excluded_status == c.status_excluded);
-            CHECK(w.stats.excluded_completed == c.complete_excluded);
             CHECK(w.stats.excluded_missing_location == c.location_excluded);
         }
     }

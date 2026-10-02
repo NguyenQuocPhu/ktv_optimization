@@ -93,10 +93,8 @@ NormalizedWorklist normalize_worklist(const Message& message) {
             ++result.stats.excluded_status;
             continue;
         }
-        if (task.complete_date) {
-            ++result.stats.excluded_completed;
-            continue;
-        }
+        // complete_date KHÔNG loại task (workbook (3): là ngày hoàn tất kỳ trước, VD ngày thu bill trước); việc đã xong
+        // do trạng thái ở trên quyết định.
         if (!task.latlng) {
             ++result.stats.excluded_missing_location;
             continue;

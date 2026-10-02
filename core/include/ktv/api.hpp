@@ -89,7 +89,8 @@ struct Task {
     int priority_in_day = 0;             // 1 gấp nhất … 4.
     std::optional<Minutes> appointment;  // Mốc hẹn A. Không có = khách không hẹn.
     std::optional<Minutes> create_date;  // Ngày phát sinh ca vụ (workbook mới). Không có = chưa gửi.
-    std::optional<Minutes> complete_date;// Ngày hoàn thành. Không có = chưa hoàn thành.
+    std::optional<Minutes> complete_date;// Ngày hoàn tất ca vụ TRƯỚC ĐÓ, VD ngày thu bill kỳ trước (workbook (3)).
+                                          // Không phải "task này đã xong" (đó là task_status_id). Chưa dùng khi xếp.
     std::string location;                // Địa chỉ, chỉ để hiển thị.
     std::optional<Point> latlng;         // Không có = thiếu tọa độ → bị loại khỏi tuyến.
     std::optional<int> handle_minutes;   // Không có / 0 = dùng định mức theo loại việc.

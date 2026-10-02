@@ -167,13 +167,18 @@ int main() {
         m["staff"]["status"] = 3;
         CHECK(run(m, ktv::default_rules())->response["statuscode"] == "422");
     }
-    {  // complete_date loại việc; việc còn lại vẫn xếp.
-        json done = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, "");
-        done["complete_date"] = "2026-09-01 10:00:00";
-        auto r = run(message("2026-09-10 09:00:00", none,
-                             json::array({task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, ""), done}),
-                             none, none, none));
-        CHECK(r && r->response["data"]["metrics"]["tasks_total"] == 1);
+    {  // complete_date = ngày hoàn tất kỳ trước (workbook (3)): KHÔNG loại việc, không đổi giờ/định mức.
+        json previous = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, "");
+        previous["complete_date"] = "2026-09-01 10:00:00";
+        json same = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, "");
+        auto with = run(message("2026-09-10 09:00:00", none,
+                                json::array({task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, ""), previous}),
+                                none, none, none));
+        auto without = run(message("2026-09-10 09:00:00", none,
+                                   json::array({task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, ""), same}),
+                                   none, none, none));
+        CHECK(with && with->response["data"]["metrics"]["tasks_total"] == 2);
+        CHECK(with && without && with->response["data"]["clusters"] == without->response["data"]["clusters"]);
     }
     {  // Nhiều cụm: tổng task_count = tasks_total; inbound+internal ≈ tổng khoảng cách.
         auto r = run(message("2026-09-10 09:00:00", none,

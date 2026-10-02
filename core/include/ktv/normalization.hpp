@@ -12,8 +12,8 @@
 //          KHÔNG có trong bảng (hoa_don/onsite, mã lạ) → đọc task_status_name: tên mang nghĩa xong/hủy
 //            ("Đã hủy", "Hoàn tất", "Đóng checklist"...) → bỏ + TASK_STATUS_UNKNOWN_CLOSED; còn lại (kể cả
 //            tên rỗng) coi là còn mở → xếp + TASK_STATUS_UNKNOWN
-//     4. complete_date có giá trị → loại (7.8 sẽ bỏ luật này: workbook (3) đổi nghĩa)
-//     5. thiếu tọa độ          → loại (chưa tính được đường)
+//     4. thiếu tọa độ          → loại (chưa tính được đường)
+//   complete_date KHÔNG loại task: workbook (3) đổi nghĩa thành "ngày hoàn tất ca vụ trước đó (ngày thu bill trước)".
 //   Giống "lọc hồ sơ trước khi giao việc": chỉ giữ hồ sơ còn mở, đủ dữ liệu, không trùng.
 //
 // Dùng thế nào:
@@ -44,7 +44,6 @@ struct NormalizationStats {
     int tasks = 0;                      // Số task nhận vào.
     int candidates = 0;                 // Số task được xếp tuyến.
     int excluded_status = 0;            // bị bỏ theo trạng thái (không xếp, chưa phân công, đang làm không khớp, tên đã xong).
-    int excluded_completed = 0;         // complete_date có giá trị.
     int excluded_missing_location = 0;  // thiếu tọa độ.
     int excluded_current = 0;           // row trùng current_task (không tính là stop).
 };
