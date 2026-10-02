@@ -70,6 +70,8 @@ foreach(name api dp plan travel normalization sla cluster adapter pipeline)
   target_link_libraries(test_${name} ktv)
   add_test(NAME ${name} COMMAND test_${name})
 endforeach()
+# normalization còn chạy file staging thật của team data (thiếu file thì bỏ qua phần đó).
+set_tests_properties(normalization PROPERTIES ENVIRONMENT "KTV_STAGING_FILE=${CMAKE_CURRENT_SOURCE_DIR}/../data/sample/Data staging.txt")
 
 # CLI end-to-end cần đường dẫn binary ktv_core.
 add_executable(test_cli tests/test_cli.cpp)

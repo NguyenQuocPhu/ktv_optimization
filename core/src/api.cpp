@@ -46,6 +46,43 @@ std::string issue_key(const Error& warning) {
     return warning.code + " " + path + (warning.problem.empty() ? "" : " — " + warning.problem);
 }
 
+const std::vector<TaskStatus>& task_statuses() {
+    using A = StatusAction;
+    // Sheet 05 workbook API (3), 2026-10-02. hoa_don, onsite chưa có bảng (dòng "khác": chỉ xếp việc còn mở).
+    static const std::vector<TaskStatus> statuses = {
+        {"trien_khai", 96, "Đang di chuyển", A::Route},
+        {"trien_khai", 97, "Đã nhận tuyến", A::Route},
+        {"trien_khai", 98, "Đã phân công", A::Route},
+        {"trien_khai", 0, "check_in (việc đang thực hiện)", A::Current},
+        {"trien_khai", 99, "Chưa phân công", A::Unassigned},
+        {"trien_khai", 5, "Đã xử lý đang theo dõi", A::Skip},
+        {"trien_khai", 1, "Đã hoàn tất", A::Skip},
+        {"trien_khai", -2, "Huỷ thi công", A::Skip},
+        {"trien_khai", -1, "Chờ xác minh", A::Skip},
+        {"bao_tri", 0, "Đã phân công", A::Route},
+        {"bao_tri", 6, "Đã nhận ca", A::Route},
+        {"bao_tri", 7, "Đang di chuyển", A::Route},
+        {"bao_tri", 10, "check_in (việc đang thực hiện)", A::Current},
+        {"bao_tri", 2, "Chưa phân công", A::Unassigned},  // ghi chú workbook: chưa phân công thì không đẩy qua AI
+        {"bao_tri", 5, "Đã xử lý và đang theo dõi", A::Skip},
+        {"bao_tri", 1, "Đã xử lý hoàn tất", A::Skip},
+        {"bao_tri", 3, "Đã xử lý hoàn tất qua phone", A::Skip},
+        {"bao_tri", 97, "Đã hủy", A::Skip},
+        {"bao_tri", 100, "Đóng checklist", A::Skip},
+        {"thu_hoi", 0, "Chưa thu hồi", A::Route},
+        {"thu_hoi", 1, "Đã thu hồi", A::Skip},  // workbook không ghi "không xếp"; người dùng duyệt coi là xong
+        {"thu_hoi", 2, "Đã nhập kho", A::Skip},
+        {"thu_hoi", -1, "Đã hủy", A::Skip},
+    };
+    return statuses;
+}
+
+const TaskStatus* find_status(const std::string& group, int status) {
+    for (const auto& item : task_statuses())
+        if (group == item.group && status == item.status) return &item;
+    return nullptr;
+}
+
 const TaskKind& kind_or_default(const std::string& group, const std::string& name) {
     static const TaskKind unknown{"", 0, "", std::nullopt, OnTime::CheckinBeforeB, 3, 60};  // [GIẢ ĐỊNH]
     const TaskKind* kind = find_kind(group, name);

@@ -94,6 +94,7 @@ int main(int argc, char** argv) {
         } else if (command == "plan") {
             ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url);
             response = std::move(result.response);
+            for (const ktv::Error& warning : result.warnings) ++issues[ktv::issue_key(warning)];
             if (response["success"]) {
                 ++sources[ktv::kSourceNames[static_cast<int>(result.source)]];
                 ++travels[result.travel];

@@ -26,6 +26,8 @@
 //   OnTime, TaskKind     – một dòng bảng loại việc (sheet 05): SLA, ưu tiên, định mức thời gian
 //   task_kinds, find_kind – lấy bảng loại việc / tìm một loại theo (nhóm, tên)
 //   kind_or_default      – như find_kind, nhưng loại ngoài danh mục thì trả loại mặc định
+//   StatusAction, TaskStatus, task_statuses, find_status
+//                        – bảng trạng thái theo nhóm (sheet 05): (nhóm, task_status_id) → xếp / đang làm / không xếp
 //   parse_message        – HÀM CHÍNH: JSON → Message (+ danh sách lỗi, + cảnh báo nếu nới lỏng)
 //   parse_datetime, format_datetime – "2026-09-10 14:00:00" ↔ Minutes
 //   parse_latlng         – "21.02,105.79" → Point (khung Việt Nam)
@@ -134,6 +136,24 @@ const TaskKind* find_kind(const std::string& group, const std::string& name);  /
 // Loại ngoài danh mục (chỉ lọt qua ở chế độ nới lỏng) → loại mặc định: không hạn theo loại (hạn chỉ
 // theo hẹn + SLA của input), xử lý 60 phút. [GIẢ ĐỊNH, xem docs/DATA_QUESTIONS.md UNKNOWN_TASK_TYPE]
 const TaskKind& kind_or_default(const std::string& group, const std::string& name);
+
+// Trạng thái task theo nhóm (sheet 05, workbook API (3)). Cùng mã khác nghĩa theo nhóm:
+// VD 0 ở bao_tri = "Đã phân công" (xếp), ở trien_khai = check_in (đang làm); 97 ở trien_khai = "Đã nhận tuyến" (xếp),
+// ở bao_tri = "Đã hủy" (không xếp).
+enum class StatusAction {
+    Route,       // Việc còn mở, đưa vào tuyến. VD bao_tri 6 "Đã nhận ca".
+    Current,     // Việc đang làm: chỉ có nghĩa khi trùng staff.current_task, không thành điểm dừng.
+    Skip,        // Đã xong / đã hủy / đang theo dõi ("không tính toán sắp xếp"). Bỏ, không cảnh báo.
+    Unassigned,  // "Chưa phân công": lẽ ra OA không gửi sang. Bỏ + cảnh báo TASK_STATUS_UNASSIGNED.
+};
+struct TaskStatus {
+    const char* group;
+    int status;
+    const char* name;
+    StatusAction action;
+};
+const std::vector<TaskStatus>& task_statuses();                       // Cả bảng (3 nhóm có danh mục).
+const TaskStatus* find_status(const std::string& group, int status);  // Không có trong bảng → nullptr.
 
 inline constexpr const char* kGroups[] = {"trien_khai", "bao_tri", "thu_hoi", "hoa_don", "onsite"};  // 5 khóa của tasks.
 

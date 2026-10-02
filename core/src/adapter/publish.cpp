@@ -64,7 +64,10 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
 
     nlohmann::ordered_json response;
     try {
-        response = plan(message, rules, now, osrm_url).response;
+        PlanResult planned = plan(message, rules, now, osrm_url);
+        response = std::move(planned.response);
+        // Cảnh báo bước lọc (trạng thái task) đi cùng cảnh báo parser: worker log + /healthz.
+        result.warnings.insert(result.warnings.end(), planned.warnings.begin(), planned.warnings.end());
     } catch (const std::exception& error) {
         // Lỗi của MỘT message không được làm chết worker (chết → đọc lại → chết tiếp → kẹt partition).
         response = error_response("500", std::string("Lỗi xử lý: ") + error.what(), envelope.message_id, now);
