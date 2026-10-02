@@ -20,7 +20,7 @@ static std::string when(const std::optional<Minutes>& t) { return t ? format_dat
 
 int main() {
     const TaskKind* checkin = find_kind("bao_tri", "bao_tri_vat_ly");   // CheckinBeforeB
-    const TaskKind* created = find_kind("onsite", "ngung_ket_noi_4h");  // DoneSameCreatedDay
+    const TaskKind* created = find_kind("cscd", "ngung_ket_noi_4h");    // DoneSameCreatedDay (7.12: chuyển từ onsite)
     const TaskKind* month = find_kind("thu_hoi", "thu_hoi_thiet_bi");   // DoneWithinMonth
     CHECK(checkin && created && month);
 

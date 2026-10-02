@@ -25,7 +25,9 @@
 //   Error                – một lỗi / cảnh báo dữ liệu: đường dẫn field + mô tả (+ mã nếu là cảnh báo)
 //   OnTime, TaskKind     – một dòng bảng loại việc (sheet 05): SLA, ưu tiên, định mức thời gian
 //   task_kinds, find_kind – lấy bảng loại việc / tìm một loại theo (nhóm, tên)
-//   kind_or_default      – như find_kind, nhưng loại ngoài danh mục thì trả loại mặc định
+//   kind_or_default      – như find_kind; không có trong nhóm thì tra cùng tên ở nhóm khác (loại đã chuyển nhóm),
+//                          vẫn không có thì trả loại mặc định
+//   kind_in_any_group    – tìm loại theo tên ở mọi nhóm
 //   StatusAction, TaskStatus, task_statuses, find_status
 //                        – bảng trạng thái theo nhóm (sheet 05): (nhóm, task_status_id) → xếp / đang làm / không xếp
 //   parse_message        – HÀM CHÍNH: JSON → Message (+ danh sách lỗi, + cảnh báo nếu nới lỏng)
@@ -104,7 +106,7 @@ struct Message {
     std::string message_id, trigger;  // Vỏ Kafka (đề xuất), không bắt buộc.
     std::optional<Minutes> planned_at;  // Thời điểm tính tuyến; không có thì lấy giờ server.
     Staff staff;
-    std::vector<Task> tasks;            // Gộp 5 nhóm, thứ tự trien_khai → bao_tri → thu_hoi → hoa_don → onsite.
+    std::vector<Task> tasks;            // Gộp các nhóm, thứ tự trien_khai → bao_tri → thu_hoi → hoa_don → onsite → cscd.
 };
 
 // Một lỗi dữ liệu. VD {"tasks.bao_tri[0].latlng", "cần \"lat,lng\" trong Việt Nam"}.
@@ -137,6 +139,8 @@ const TaskKind* find_kind(const std::string& group, const std::string& name);  /
 // Loại ngoài danh mục (chỉ lọt qua ở chế độ nới lỏng) → loại mặc định: không hạn theo loại (hạn chỉ
 // theo hẹn + SLA của input), xử lý 60 phút. [GIẢ ĐỊNH, xem docs/DATA_QUESTIONS.md UNKNOWN_TASK_TYPE]
 const TaskKind& kind_or_default(const std::string& group, const std::string& name);
+// Tìm theo tên ở mọi nhóm (loại đã chuyển nhóm, VD ngung_ket_noi_4h onsite → cscd). Không thấy → nullptr.
+const TaskKind* kind_in_any_group(const std::string& name);
 
 // Trạng thái task theo nhóm (sheet 05, workbook API (3)). Cùng mã khác nghĩa theo nhóm:
 // VD 0 ở bao_tri = "Đã phân công" (xếp), ở trien_khai = check_in (đang làm); 97 ở trien_khai = "Đã nhận tuyến" (xếp),
@@ -156,7 +160,11 @@ struct TaskStatus {
 const std::vector<TaskStatus>& task_statuses();                       // Cả bảng (5 nhóm, workbook API (3) + (4)).
 const TaskStatus* find_status(const std::string& group, int status);  // Không có trong bảng → nullptr.
 
-inline constexpr const char* kGroups[] = {"trien_khai", "bao_tri", "thu_hoi", "hoa_don", "onsite"};  // 5 khóa của tasks.
+// Khóa của tasks (thứ tự = task_group_id 1..6). 5 nhóm đầu bắt buộc; "cscd" (CSKH chủ động, workbook API (4)) không bắt
+// buộc vì sheet 02 vẫn ghi "5 khoá cố định" và JSON mẫu chưa có — gửi thì đọc, không gửi thì không cảnh báo.
+inline constexpr const char* kGroups[] = {"trien_khai", "bao_tri", "thu_hoi", "hoa_don", "onsite", "cscd"};
+inline constexpr int kGroupCount = 6;
+inline constexpr int kRequiredGroups = 5;
 
 // HÀM CHÍNH. Đọc + kiểm tra theo file API; lỗi ghi vào errors (rỗng = xếp được).
 // warnings = nullptr: strict. Có: nới lỏng, lệch hợp đồng mà vẫn xếp được thì ghi vào *warnings (có mã).

@@ -24,8 +24,10 @@ const std::vector<TaskKind>& task_kinds() {
         {"hoa_don", 1, "hoa_don_tra_truoc", std::nullopt, O::DoneWithinMonth, 4, 15},
         {"hoa_don", 2, "hoa_don_tra_sau", std::nullopt, O::DoneWithinMonth, 4, 15},
         {"onsite", 1, "phieu_onsite", 60, O::CheckinBeforeB, 2, 45},  // Workbook (4): "rule như bao_tri" (7.15; trước: trong tháng)
-        {"onsite", 2, "ngung_ket_noi_4h", std::nullopt, O::DoneSameCreatedDay, 2, 30},
-        {"onsite", 3, "chap_chon_suy_hao", std::nullopt, O::DoneSameCreatedDay, 4, 40},
+        // Workbook API (4) tách nhóm 6 "cscd" (CSKH chủ động): hai loại dưới đây chuyển từ onsite sang (người dùng chốt 7.12).
+        // OA còn gửi dưới onsite theo hợp đồng cũ → kind_in_any_group tra ra đây, kèm cảnh báo TASK_TYPE_OTHER_GROUP.
+        {"cscd", 2, "ngung_ket_noi_4h", std::nullopt, O::DoneSameCreatedDay, 2, 30},
+        {"cscd", 3, "chap_chon_suy_hao", std::nullopt, O::DoneSameCreatedDay, 4, 40},
     };
     return kinds;
 }
@@ -90,9 +92,16 @@ const TaskStatus* find_status(const std::string& group, int status) {
     return nullptr;
 }
 
+const TaskKind* kind_in_any_group(const std::string& name) {
+    for (const auto& kind : task_kinds())
+        if (name == kind.name) return &kind;
+    return nullptr;
+}
+
 const TaskKind& kind_or_default(const std::string& group, const std::string& name) {
     static const TaskKind unknown{"", 0, "", std::nullopt, OnTime::CheckinBeforeB, 3, 60};  // [GIẢ ĐỊNH]
     const TaskKind* kind = find_kind(group, name);
+    if (!kind) kind = kind_in_any_group(name);  // tra dự phòng: loại đã chuyển nhóm (VD onsite → cscd)
     return kind ? *kind : unknown;
 }
 
@@ -368,24 +377,28 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
     const json* tasks = r.field(data, "", "tasks", true);
     if (!tasks) return message;
     if (!tasks->is_object()) {
-        r.fail("tasks", "cần object 5 khóa");
+        r.fail("tasks", "cần object 5 khóa trien_khai, bao_tri, thu_hoi, hoa_don, onsite (+ cscd nếu có)");
         return message;
     }
     std::set<std::string> keys;
     for (auto it = tasks->begin(); it != tasks->end(); ++it) keys.insert(it.key());
     const std::set<std::string> groups(std::begin(kGroups), std::end(kGroups));
-    if (keys != groups) {
+    const std::set<std::string> required(std::begin(kGroups), std::begin(kGroups) + kRequiredGroups);
+    bool unknown_key = false, missing_key = false;
+    for (const std::string& key : keys) unknown_key |= !groups.count(key);
+    for (const std::string& key : required) missing_key |= !keys.count(key);
+    if (unknown_key || missing_key) {
         if (!warnings) {
-            r.fail("tasks", "cần đúng 5 khóa trien_khai, bao_tri, thu_hoi, hoa_don, onsite");
-        } else {  // Nới lỏng: nhóm lạ bỏ qua, nhóm thiếu coi như [].
+            r.fail("tasks", "cần đúng 5 khóa trien_khai, bao_tri, thu_hoi, hoa_don, onsite (+ cscd nếu có)");
+        } else {  // Nới lỏng: nhóm lạ bỏ qua, nhóm bắt buộc thiếu coi như [].
             for (const std::string& key : keys)
                 if (!groups.count(key)) r.tolerate("UNKNOWN_FIELD", "tasks." + key, "field không có trong file API");
-            for (const std::string& key : groups)
+            for (const std::string& key : required)
                 if (!keys.count(key)) r.tolerate("TASK_GROUPS", "tasks." + key, "thiếu nhóm, coi như []");
         }
     }
     std::set<long long> seen;
-    for (int g = 0; g < 5; ++g) {
+    for (int g = 0; g < kGroupCount; ++g) {
         const std::string key = kGroups[g];
         auto found = tasks->find(key);
         if (found == tasks->end()) continue;
@@ -525,7 +538,12 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                     t.task_group_name = key;
                     t.task_group_id = g + 1;
                 }
-                if (const TaskKind* kind = find_kind(key, t.task_type_name)) {
+                const TaskKind* kind = find_kind(key, t.task_type_name);
+                if (!kind && (kind = kind_in_any_group(t.task_type_name)))  // loại đã chuyển nhóm: dùng luật nhóm kia
+                    tr.tolerate("TASK_TYPE_OTHER_GROUP", path + ".task_type_name",
+                                t.task_type_name + " thuộc nhóm " + kind->group + " (workbook API (4)), không phải " + key +
+                                    "; dùng luật nhóm " + kind->group);
+                if (kind) {
                     if (t.task_type_id != kind->type_id)
                         tr.tolerate("CATALOG_MISMATCH", path + ".task_type_id", "danh mục ghi " + std::to_string(kind->type_id));
                     if (sla && (t.sla_minutes != kind->sla_minutes || t.priority_in_day != kind->priority))
@@ -535,7 +553,7 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                                         std::to_string(t.priority_in_day) + ", danh mục " +
                                         (kind->sla_minutes ? std::to_string(*kind->sla_minutes) : "null") + " phút/P" +
                                         std::to_string(kind->priority) + ")");
-                } else {
+                } else {  // không có ở nhóm nào
                     tr.tolerate("UNKNOWN_TASK_TYPE", path + ".task_type_name",
                                 "không có trong danh mục sheet 05: " + key + "/" + t.task_type_name);
                 }

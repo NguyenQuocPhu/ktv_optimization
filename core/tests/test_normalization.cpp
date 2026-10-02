@@ -57,15 +57,17 @@ static ktv::NormalizedWorklist one(const char* group, int status, const char* st
     struct Kind { const char* group; int gid; const char* type; int tid; json sla; int priority; };
     const Kind kinds[] = {{"trien_khai", 1, "trien_khai_net", 3, 120, 3}, {"bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1},
                           {"thu_hoi", 3, "thu_hoi_thiet_bi", 1, nullptr, 4}, {"hoa_don", 4, "hoa_don_tra_sau", 2, nullptr, 4},
-                          {"onsite", 5, "phieu_onsite", 1, 60, 2}};
-    json groups[5] = {json::array(), json::array(), json::array(), json::array(), json::array()};
-    for (int g = 0; g < 5; ++g)
+                          {"onsite", 5, "phieu_onsite", 1, 60, 2}, {"cscd", 6, "ngung_ket_noi_4h", 2, nullptr, 2}};
+    json groups[6] = {json::array(), json::array(), json::array(), json::array(), json::array(), json::array()};
+    for (int g = 0; g < 6; ++g)
         if (std::string(kinds[g].group) == group)
             groups[g].push_back(make_task(1, kinds[g].group, kinds[g].gid, kinds[g].type, kinds[g].tid, kinds[g].sla,
                                           kinds[g].priority, status, "21.03,105.81", "", status_name));
     std::vector<ktv::Error> errors;
     static ktv::Message message;  // worklist giữ con trỏ vào message: sống tới lần gọi sau
-    message = ktv::parse_message(make_message(nullptr, json(nullptr), groups[0], groups[1], groups[2], groups[3], groups[4]), errors);
+    json data = make_message(nullptr, json(nullptr), groups[0], groups[1], groups[2], groups[3], groups[4]);
+    data["tasks"]["cscd"] = groups[5];
+    message = ktv::parse_message(data, errors);
     for (const auto& e : errors) std::cerr << "  lỗi không mong đợi: " << e.path << " " << e.problem << "\n";
     return ktv::normalize_worklist(message);
 }
@@ -110,6 +112,8 @@ int main() {
             {"bao_tri", 42, "Đóng checklist", false, "TASK_STATUS_UNKNOWN_CLOSED"},  // mã lạ trong nhóm có bảng
             {"bao_tri", 43, "", true, "TASK_STATUS_UNKNOWN"},
             {"trien_khai", 6, "", true, "TASK_STATUS_UNKNOWN"},                      // 6 chỉ có nghĩa ở bao_tri
+            {"cscd", 0, "", true, "TASK_STATUS_UNKNOWN"},                             // 7.12: cscd chưa có bảng trạng thái
+            {"cscd", 1, "Đã hoàn tất", false, "TASK_STATUS_UNKNOWN_CLOSED"},
         };
         for (const Case& c : cases) {
             const ktv::NormalizedWorklist w = one(c.group, c.status, c.name);

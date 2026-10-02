@@ -269,6 +269,49 @@ int main() {
         m = lenient(data);
         CHECK(errors.empty() && m.tasks.size() == 2 && warned("CATALOG_MISMATCH", "tasks.onsite[0].sla"));
     }
+    {  // 7.12: nhóm cscd không bắt buộc. 5 khóa: không cảnh báo. 6 khóa: đọc task cscd ở cả strict lẫn nới lỏng.
+        json data = sample();
+        auto m = lenient(data);
+        CHECK(errors.empty() && warnings.empty() && !strict_fails(data));
+        json cscd = data["tasks"]["hoa_don"][0];
+        cscd["task_id"] = 777;
+        cscd["task_group_id"] = 6;
+        cscd["task_group_name"] = "cscd";
+        cscd["task_type_id"] = 2;
+        cscd["task_type_name"] = "ngung_ket_noi_4h";
+        cscd["sla"] = {{"sla_minutes", nullptr}, {"priority_in_day", 2}};
+        data["tasks"]["cscd"] = json::array({cscd});
+        m = lenient(data);
+        CHECK(errors.empty() && warnings.empty() && m.tasks.size() == 3);
+        CHECK(m.tasks[2].task_id == 777 && m.tasks[2].task_group_name == "cscd" && m.tasks[2].task_group_id == 6);
+        CHECK(!strict_fails(data));
+        const ktv::TaskKind* kind = ktv::find_kind("cscd", "ngung_ket_noi_4h");
+        CHECK(kind && kind->on_time == ktv::OnTime::DoneSameCreatedDay && kind->handle_minutes == 30 && kind->priority == 2);
+        data["tasks"]["cscd"][0]["task_type_name"] = "cscd_moi";  // loại lạ dưới cscd → loại mặc định + cảnh báo
+        data["tasks"]["cscd"][0]["task_type_id"] = 9;
+        m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 3 && warned("UNKNOWN_TASK_TYPE", "tasks.cscd[0].task_type_name"));
+        data["tasks"].erase("onsite");  // nhóm bắt buộc thiếu vẫn cảnh báo / strict lỗi
+        m = lenient(data);
+        CHECK(warned("TASK_GROUPS", "tasks.onsite") && !warned("TASK_GROUPS", "tasks.cscd") && strict_fails(data));
+        // Phương án B: OA còn gửi ngung_ket_noi_4h dưới onsite (hợp đồng cũ) → luật của cscd + TASK_TYPE_OTHER_GROUP.
+        data = sample();
+        json old_style = cscd;
+        old_style["task_group_id"] = 5;
+        old_style["task_group_name"] = "onsite";
+        data["tasks"]["onsite"] = json::array({old_style});
+        m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 3 && warned("TASK_TYPE_OTHER_GROUP", "tasks.onsite[0].task_type_name"));
+        CHECK(!warned("UNKNOWN_TASK_TYPE", "tasks.onsite[0].task_type_name") && !warned("CATALOG_MISMATCH", "tasks.onsite[0].sla"));
+        CHECK(strict_fails(data));
+        const ktv::TaskKind& moved = ktv::kind_or_default("onsite", "ngung_ket_noi_4h");
+        CHECK(std::string(moved.group) == "cscd" && moved.on_time == ktv::OnTime::DoneSameCreatedDay && moved.handle_minutes == 30);
+        CHECK(!ktv::find_kind("onsite", "ngung_ket_noi_4h") && !ktv::find_kind("onsite", "chap_chon_suy_hao"));
+        data = sample();
+        data["tasks"]["kiem_dinh"] = json::array();  // nhóm lạ vẫn là field lạ
+        lenient(data);
+        CHECK(warned("UNKNOWN_FIELD", "tasks.kiem_dinh"));
+    }
     {  // create_date / CreateDate là một field: tên nào cũng nhận; cả hai mà khác → dùng create_date + cảnh báo.
         json data = sample();
         json& t = data["tasks"]["trien_khai"][0];
