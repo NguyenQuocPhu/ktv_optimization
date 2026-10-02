@@ -40,6 +40,7 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 
 - Envelope thật của OA: `message_id`, `planned_at`, `trigger` nằm trong body hay header Kafka? Key message là gì? (Worker đang log header để soi khi có message đầu tiên.)
 - ~~Bảng trạng thái của `hoa_don` và `onsite`~~ — đã có trong workbook (4) (xem Nhật ký). Còn: bảng trạng thái của nhóm `cscd` (workbook (4) thêm nhóm 6 nhưng chưa có bảng); mã lạ vẫn đoán theo `task_status_name`.
+- `onsite`: workbook (4) cùng một dòng ghi cả "Hoàn tất trong ngày hẹn" lẫn "rule như bao_tri" (check-in trước mốc B). Đang theo "như bao_tri" (Phase 7.15) — xác nhận? Hai loại `ngung_ket_noi_4h`, `chap_chon_suy_hao` (CSKH chủ động) còn thuộc `onsite` không, hay đã sang `cscd`?
 - `complete_date` (workbook (3): "ngày hoàn tất ca vụ trước đó, ngày thu bill trước"): có cần dùng để tính hạn không, VD hạn thu bill kỳ này = kỳ trước + 1 tháng? Hiện chỉ đọc vào, không dùng (IMPLEMENTATION_SPEC 7.8). Có nhóm nào vẫn dùng `complete_date` theo nghĩa cũ "task này đã xong" mà không đổi `task_status_id` không?
 - Việc đang làm: OA gửi được **giờ check-in** của `staff.current_task` không? Có thì tính được thời gian còn lại (định mức − đã làm) thay vì luôn 30 phút (IMPLEMENTATION_SPEC 7.7–7.10, ghi chú việc đang làm).
 - OA có gửi message IN mới cho KTV **mỗi khi task đổi trạng thái** (check-in, hoàn tất, gán thêm, đổi hẹn) không, hay chỉ khi gán việc? Route (worker lẫn `replan`) chỉ biết danh sách việc trong IN mới nhất: nếu OA không gửi lại, việc KTV đã làm xong vẫn nằm trong tuyến tới IN kế tiếp. (Đã chốt 2026-10-01: IN mới thì worker tính luôn — IMPLEMENTATION_SPEC Phase 7.)
@@ -55,5 +56,6 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 | 2026-10-02 | Ý nghĩa `task_status_id` | Sheet 05: bảng trạng thái theo nhóm `trien_khai`/`bao_tri`/`thu_hoi` (chưa có `hoa_don`/`onsite`) | Lọc theo (nhóm, status), Phase 7.7 |
 | 2026-10-02 | `complete_date` | Sheet 02: "ngày hoàn tất ca vụ trước đó (ngày thu bill trước)" | Không còn loại task, Phase 7.8 |
 | 2026-10-02 | Tên `create_date` | Sheet 02 ghi `CreateDate` | Nhận cả hai tên, Phase 7.10 |
+| 2026-10-02 | Luật hạn của `onsite` | Workbook (4) sheet 05 nhóm 5: "rule như bao_tri" (SLA 60, P2) | `phieu_onsite` → check-in trước B, Phase 7.15 |
 | 2026-10-02 | Trạng thái `hoa_don` / `onsite` | Workbook (4) sheet 05: `hoa_don` 0 chưa thanh toán / 1 đã thanh toán; `onsite` 0 chưa xử lý / 10 đang xử lý / 1 đã hoàn tất | Thêm vào bảng trạng thái, Phase 7.11 |
 | 2026-10-02 | Tên topic IN | Sheet 00: prod `inside-par-…`, staging `stag-inside-par-…` | `.env.example`, README |

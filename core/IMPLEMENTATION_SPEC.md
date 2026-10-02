@@ -662,6 +662,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.10 ✅ | `staff_role = 0` hợp lệ, nhận `CreateDate`, tên topic, sổ câu hỏi (kết quả bên dưới) | `validate` staging hết lỗi role |
 | 7.10b ✅ | Task lô 0 lùi xuống `block_id` trong rule quay lại khu vực (`AREA_REENTRY`) (kết quả bên dưới) | test thẳng hàng X1–Y–X2 đổi thứ tự đúng |
 | 7.11 ✅ | Bảng trạng thái `hoa_don`/`onsite` theo workbook API (4) — chi tiết + kết quả bên dưới | hóa đơn đã thanh toán, onsite đã hoàn tất không còn bị xếp |
+| 7.15 ✅ | `onsite/phieu_onsite` theo luật mới "rule như bao_tri" (workbook API (4)) — chi tiết bên dưới | `phieu_onsite` có hẹn + SLA 60 → hạn check-in trước B, không cảnh báo |
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
 | sau | JWT thay token tĩnh, rate limit | |
 
@@ -887,6 +888,32 @@ Workbook (4) sheet 05 bổ sung bảng trạng thái cho hai nhóm chưa có ở
 đủ loại trong `test_normalization` đổi task `hoa_don` 0 → mã 4 (vẫn ngoài bảng) để giữ kiểm luật "không có trong bảng". Kiểm:
 test mới trên code cũ fail 11 kiểm — `hoa_don` 1 và `onsite` 1 tên rỗng **bị xếp** (đúng lỗi cần sửa); code mới `ctest` 15/15;
 benchmark (status 6) + file staging thật giống hệt trước/sau.
+
+##### 7.15 — Luật mới của `onsite`: "rule như bao_tri" (người dùng duyệt 2026-10-02)
+
+Workbook (4) sheet 05 nhóm 5 "onsite": SLA 60, P2, "Hoàn tất trong ngày hẹn **rule như bao_tri**". Người dùng chốt theo ghi
+chú "như bao_tri"; mâu thuẫn với cột "Hoàn tất trong ngày hẹn" ghi vào sổ câu hỏi.
+
+Hạn tính chủ yếu từ **input** (`sla.cpp`): có hẹn + `sla_minutes` → check-in trước B = hẹn + SLA (không nhìn danh mục); có
+hẹn + `sla = null` → hoàn tất trong ngày hẹn; không hẹn → theo `on_time` của danh mục. Nên đổi danh mục chỉ ảnh hưởng việc
+**không hẹn**, định mức, và cảnh báo lệch danh mục.
+
+- Sửa: `task_kinds()` `onsite/phieu_onsite`: SLA `null` → **60**, `DoneWithinMonth` → **`CheckinBeforeB`**, P2, 45 phút giữ.
+- Trước/sau: có hẹn + SLA 60 → hạn như cũ, **hết** `CATALOG_MISMATCH`; có hẹn + SLA null → hạn như cũ, **thêm**
+  `CATALOG_MISMATCH`; **không hẹn** → hoàn tất cuối tháng → **không có hạn** (như bao_tri không hẹn).
+- (k) đã chốt **không**: hẹn + `sla = null` không lấy SLA danh mục (nguyên tắc "SLA từ input" giữ cho mọi nhóm).
+- (l) đã chốt **giữ**: `onsite/ngung_ket_noi_4h`, `onsite/chap_chon_suy_hao` vẫn "hoàn tất trong ngày tạo" (việc CSKH chủ
+  động, có thể chuyển sang `cscd`).
+- Test: `test_sla` (`phieu_onsite` hẹn + SLA 60 → hạn check-in hẹn + 60; không hẹn → không hạn), `test_api` (`phieu_onsite`
+  SLA 60 / P2 → không cảnh báo); test mới fail trên code cũ; benchmark đo trước/sau (559 `phieu_onsite`, SLA null:
+  287 có hẹn → chỉ thêm cảnh báo; 272 không hẹn → mất hạn tháng).
+
+**Kết quả 7.15 (2026-10-02):** `task_kinds()` `onsite/phieu_onsite` = `{60, CheckinBeforeB, P2, 45 phút}`. Kiểm: `test_sla` (hẹn +
+SLA 60 → hạn check-in hẹn + 60; không hẹn → không hạn), `test_api` (SLA 60 / P2 không cảnh báo; SLA null → `CATALOG_MISMATCH`,
+vẫn xếp); test mới fail trên code cũ (4 kiểm); `ctest` 18/18 (Redis riêng). `test_invariants`: phần benchmark đổi sang parse
+**nới lỏng** như worker/gateway (benchmark giả sinh theo danh mục cũ, SLA null → trước đây bị strict coi là lỗi); 3.000 message
+ngẫu nhiên vẫn strict. Benchmark: **0/5.332 tuyến đổi thứ tự**, chỉ số giữ nguyên (hạn cuối tháng của 272 việc không hẹn vốn
+không bao giờ trễ), thêm 559 cảnh báo `CATALOG_MISMATCH`. `BUSINESS_RULES` + `DATA_QUESTIONS` cập nhật.
 
 ##### 7.14 — Log có cấu trúc (người dùng chọn 2026-10-02)
 
