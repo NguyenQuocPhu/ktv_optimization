@@ -799,7 +799,12 @@ câu hỏi đã ghi ở `docs/DATA_QUESTIONS.md`.
 - Docs: README (output), `docs/MOBIX-REPLAN-API-DRAFT.md` mục 6 (đang chờ field này).
 - Test: `test_pipeline` dòng TASK đủ 4 field, giá trị khớp input, không hợp đồng → giá trị theo (e); `test_invariants`
   + test gateway vẫn pass. Thứ tự tuyến không đổi.
-- **Cần chốt**: (e) không có hợp đồng → `""` (như `checkindate`) hay `null`? Đề xuất **`""`**.
+- **Đã chốt (e) 2026-10-02: `contract_id` / `contract_no` ra như input** — trả lại đúng giá trị và kiểu JSON đã nhận
+  (số vẫn là số, chuỗi vẫn là chuỗi, `null` vẫn `null`, `""` vẫn `""`); input không gửi field → ra `null`. Lưu ý: khác
+  workbook sheet 03 ghi `contract_id` kiểu string — theo người dùng, giữ như input.
+- **(f) bàn sau** — độ chính xác `latlng` của task trong output: hàm `latlng()` sẵn có (dùng cho tâm cụm) làm tròn 4 chữ số
+  (~11 m), input có tới 7 chữ số. Lựa chọn: 4 chữ số như tâm cụm / 6 chữ số (~0,1 m) / trả đúng chuỗi input. Chưa chốt;
+  khi làm 7.9 tạm dùng 4 chữ số? → **hỏi lại người dùng trước khi code 7.9**.
 
 ##### 7.10 — Field input + docs
 
