@@ -9,7 +9,8 @@
 //   Cách làm: xét dần các tuyến dở dang. Trạng thái = (tập việc đã làm + bit "đã nghỉ trưa", việc làm cuối).
 //   Mỗi trạng thái giữ vài "nhãn" = tuyến dở dang tốt nhất tới đó (giờ xong + điểm phạt theo tầng).
 //   Nhãn thua nhãn khác ở MỌI mặt thì bỏ. Hết việc thì chọn nhãn nhỏ nhất theo tầng (rules).
-//   ≤ max_exact_tasks việc: ra thứ tự tốt nhất. Nhiều hơn: tham lam + 2-opt (đảo đoạn).
+//   ≤ max_exact_tasks việc: ra thứ tự tốt nhất. Nhiều hơn: tham lam rồi cải thiện cục bộ (or-opt dời đoạn 1–3 việc
+//   + 2-opt đảo đoạn) từ nhiều điểm xuất phát, lấy tốt nhất; tất định, 64 việc chậm nhất ~0,5 s.
 //
 //   Nghỉ trưa = "việc ảo" kBreak: không di chuyển, bắt đầu = max(giờ xong, break_open), dài break_minutes.
 //   Luật chặn: CHƯA nghỉ thì mọi việc phải xong trước break_latest (giờ muộn nhất bắt đầu nghỉ).
@@ -30,7 +31,7 @@
 //   objective – chấm điểm một thứ tự theo tầng (test dùng để so với vét cạn)
 //
 // Ẩn trong dp.cpp: visit() = bước chuyển của QHĐ, ĐÂY là chỗ áp rule nghiệp vụ cho từng bước;
-//   nhãn (Label), giữ/bỏ nhãn (keep), vòng QHĐ (exact), tham lam + 2-opt (heuristic).
+//   nhãn (Label), giữ/bỏ nhãn (keep), vòng QHĐ (exact), tham lam + cải thiện cục bộ (heuristic, improve).
 // Phụ thuộc: rules (tầng, trọng số), travel (Matrix).
 // ============================================================================
 #pragma once
@@ -79,7 +80,7 @@ struct Visit {
 enum class Source {
     Optimal,      // QHĐ, tốt nhất theo rules.
     Approximate,  // QHĐ nhưng phải bỏ bớt nhãn (vượt max_labels): gần tốt nhất.
-    Heuristic,    // Quá max_exact_tasks việc: tham lam + 2-opt.
+    Heuristic,    // Quá max_exact_tasks việc: tham lam + or-opt/2-opt (gần đúng).
 };
 inline constexpr const char* kSourceNames[] = {"OPTIMAL", "APPROXIMATE", "HEURISTIC"};
 

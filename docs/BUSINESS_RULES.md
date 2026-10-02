@@ -274,7 +274,7 @@ Tài liệu: *"AI đánh giá: có tạo ra tuyến tốt hơn không? Nếu có
 
 Giới hạn và trường hợp đặc biệt: **[GIẢ ĐỊNH]** (Q25)
 - **Tới 9 job/KTV:** giải chính xác (`sequence_source = OPTIMAL`).
-- **Trên 9 job:** heuristic. Mỗi bước chọn job làm khóa tăng ít nhất, rồi cải thiện bằng đảo đoạn (2-opt, tối đa 2 vòng, tối đa 40 job). `sequence_source = HEURISTIC`, kèm cảnh báo.
+- **Trên 9 job:** heuristic. Mỗi bước chọn job làm khóa tăng ít nhất, rồi cải thiện cục bộ: dời đoạn 1–3 job sang chỗ khác (or-opt) và đảo đoạn (2-opt), lặp tới khi hết cải thiện (tối đa 100 vòng), chạy từ 4 điểm xuất phát lấy tốt nhất, áp dụng tới 64 job (cập nhật 2026-10-02; hiện ngưỡng chính xác là 12 việc). `sequence_source = HEURISTIC`, kèm cảnh báo.
 - **Mỗi trạng thái giữ tối đa 32 nhãn;** vượt thì cắt, kết quả `APPROXIMATE`.
 - **Bảng thời gian học theo giờ** (nghỉ trưa) làm "xong sớm hơn" không phải lúc nào cũng tốt hơn, nên quanh các mốc giờ kết quả chỉ gần tối ưu.
 - **Không biết điểm xuất phát:** vẫn xếp theo km giữa các job, không tính giờ.

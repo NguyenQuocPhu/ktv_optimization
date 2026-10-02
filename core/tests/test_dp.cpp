@@ -144,6 +144,58 @@ int main() {
         }
     }
 
+    {  // Heuristic (> max_exact_tasks) là cực tiểu cục bộ: không nước or-opt (nhấc đoạn 1–3 việc đặt chỗ khác) hay
+       // 2-opt (đảo đoạn) nào làm điểm tốt hơn. Tham lam + 2-opt 2 vòng cũ không đạt điều này.
+        std::mt19937 local_rng(21);
+        const Rules rules = default_rules();
+        for (int n : {13, 20, 30}) {
+            for (int k = 0; k < 5; ++k) {
+                Problem p = random_problem(local_rng, n);
+                p.break_open = 150;
+                p.break_latest = 195;
+                p.break_minutes = 45;
+                const std::vector<int> order = solve(p, rules).order;
+                const std::vector<double> best = objective(p, rules, order);
+                const int m = static_cast<int>(order.size());
+                bool local_min = true;
+                for (int len = 1; len <= 3 && local_min; ++len)
+                    for (int a = 0; a + len <= m && local_min; ++a)
+                        for (int b = 0; b <= m - len && local_min; ++b) {
+                            std::vector<int> moved = order;
+                            std::vector<int> segment(moved.begin() + a, moved.begin() + a + len);
+                            moved.erase(moved.begin() + a, moved.begin() + a + len);
+                            moved.insert(moved.begin() + b, segment.begin(), segment.end());
+                            local_min = !(objective(p, rules, moved) < best);
+                        }
+                for (int a = 0; a < m - 1 && local_min; ++a)
+                    for (int b = a + 1; b < m && local_min; ++b) {
+                        std::vector<int> reversed = order;
+                        std::reverse(reversed.begin() + a, reversed.begin() + b + 1);
+                        local_min = !(objective(p, rules, reversed) < best);
+                    }
+                CHECK(local_min);
+            }
+        }
+    }
+    {  // So với tối ưu thật (QHĐ chính xác chạy tới 14 việc): lệch tầng 1 (trễ check-in có trọng số) trung bình
+       // phải nhỏ. Đo 2026-10-02: tham lam + 2-opt cũ lệch ~3,3–4,6; bản mới (4 lần improve) ~0,4–1,5.
+        std::mt19937 gap_rng(5);
+        Rules exact_rules = default_rules();
+        exact_rules.max_exact_tasks = 14;
+        Rules heuristic_rules = default_rules();
+        heuristic_rules.max_exact_tasks = 0;
+        double gap = 0;
+        const int samples = 12;
+        for (int k = 0; k < samples; ++k) {
+            Problem p = random_problem(gap_rng, 13);
+            const double optimum = objective(p, exact_rules, solve(p, exact_rules).order)[0];
+            const double found = objective(p, exact_rules, solve(p, heuristic_rules).order)[0];
+            CHECK(found >= optimum - 1e-9);  // heuristic không thể tốt hơn tối ưu
+            gap += found - optimum;
+        }
+        CHECK(gap / samples < 1.5);
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_dp: OK (" << checked << " bài so với vét cạn)\n";
     return failures != 0;

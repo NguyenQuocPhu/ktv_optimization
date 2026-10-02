@@ -246,7 +246,7 @@ Toàn bộ nghiệp vụ (loại tác vụ, hạn, ưu tiên, cách tính thời
 - Chọn task để xếp (`core/src/normalization.cpp`): `task_id` trùng `staff.current_task` là việc đang làm (khóa đầu tuyến, không thành điểm dừng); `task_status_id` tra theo **từng nhóm** (bảng sheet 05 workbook API (3), `task_statuses()` trong `api.cpp`) → xếp / không xếp; mã không có trong bảng (`hoa_don`, `onsite`, mã lạ) thì đọc `task_status_name`: tên mang nghĩa đã xong/hủy → bỏ, còn lại → xếp, đều có cảnh báo; bỏ task thiếu tọa độ (`complete_date` **không** loại task: workbook (3) đổi nghĩa thành ngày hoàn tất kỳ trước); KTV `status = 3` (off) không có tuyến.
 - Nguồn km/phút: **OSRM đường bộ** khi truyền `--osrm` (một lần gọi `/table` mỗi KTV), lỗi hoặc trả ma trận méo thì lùi về chim bay × 1,3 và trả mã 424; mặc định trong code là chim bay 30 km/h.
 - Hạn check-in/hoàn tất tính theo loại việc, mốc hẹn và `create_date` (`core/src/sla.cpp`). Trễ hẹn tính theo **giờ check-in**; trễ hoàn tất so với giờ xong.
-- Thứ tự tối ưu bằng **QHĐ theo tầng rule** (`core/src/dp.cpp`): ≤ 12 việc giải chính xác; nhiều hơn dùng tham lam + 2-opt. Nghỉ trưa bắt buộc 45 phút, bắt đầu trong 11:30–12:45 [giả định].
+- Thứ tự tối ưu bằng **QHĐ theo tầng rule** (`core/src/dp.cpp`): ≤ 12 việc giải chính xác; 13–64 việc dùng tham lam + cải thiện cục bộ (or-opt dời đoạn 1–3 việc + 2-opt, 4 điểm xuất phát, lấy tốt nhất; 64 việc chậm nhất ~0,5 s). Nghỉ trưa bắt buộc 45 phút, bắt đầu trong 11:30–12:45 [giả định].
 - Cắt cụm sau khi xếp: chặng giữa hai task > 2 km thì mở cụm mới (`core/src/cluster.cpp`); không đổi thứ tự.
 
 ## OSRM tự host

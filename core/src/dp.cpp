@@ -4,6 +4,7 @@
 #include <array>
 #include <limits>
 #include <optional>
+#include <utility>
 
 namespace ktv {
 
@@ -195,9 +196,64 @@ Solution exact(Search& s) {
     return {s.order_of(best), {}, capped ? Source::Approximate : Source::Optimal};
 }
 
-constexpr int kMaxImproveTasks = 40;  // 2-opt tốn O(n³) mỗi vòng; nhiều việc hơn chỉ dùng tham lam.
+// Vòng cải thiện tối đa. Giới hạn theo vòng chứ không theo đồng hồ: cùng input luôn ra cùng tuyến trên mọi máy.
+// Đo 2026-10-02 (bài ngẫu nhiên kiểu test_dp): 40 việc ~25 ms (chậm nhất ~50 ms), 64 việc ~150 ms (chậm nhất ~210 ms).
+constexpr int kMaxImproveRounds = 100;
 
-// Tham lam: mỗi bước chọn việc (hoặc nghỉ) làm khóa tăng ít nhất; sau đó 2-opt tối đa 2 vòng.
+// Cải thiện cục bộ tới khi không nước nào làm khóa giảm (hoặc hết `rounds` vòng):
+//   or-opt: nhấc một đoạn 1–3 phần tử liên tiếp đặt sang chỗ khác (VD A B C D → C A B D: đưa việc có hẹn sớm lên)
+//   2-opt:  đảo một đoạn (A B C D → A C B D).
+// Có giờ hẹn nên or-opt hiệu quả hơn 2-opt (đảo đoạn làm các việc trong đoạn chạy ngược giờ). Nghỉ trưa (kBreak) cũng
+// được dời như một phần tử; nước đi phạm luật nghỉ → evaluate trả kInfeasible, tự bị loại. Mỗi vòng O(n³).
+// reverse_first: mỗi vòng thử 2-opt trước or-opt (thứ tự khác → rơi vào cực tiểu khác). relocate = false: chỉ 2-opt.
+std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, bool relocate = true,
+                         int rounds = kMaxImproveRounds) {
+    const int m = static_cast<int>(order.size());
+    Key best_key = s.evaluate(order);
+    auto take = [&](std::vector<int>& candidate) {
+        Key k = s.evaluate(candidate);
+        if (!(k < best_key)) return false;
+        order.swap(candidate);
+        best_key = k;
+        return true;
+    };
+    auto or_opt = [&] {
+        bool improved = false;
+        for (int len = 1; len <= 3; ++len)
+            for (int a = 0; a + len <= m; ++a)
+                for (int b = 0; b <= m - len; ++b) {
+                    if (b == a) continue;
+                    std::vector<int> candidate = order;
+                    std::vector<int> segment(candidate.begin() + a, candidate.begin() + a + len);
+                    candidate.erase(candidate.begin() + a, candidate.begin() + a + len);
+                    candidate.insert(candidate.begin() + b, segment.begin(), segment.end());
+                    improved |= take(candidate);
+                }
+        return improved;
+    };
+    auto two_opt = [&] {
+        bool improved = false;
+        for (int a = 0; a < m - 1; ++a)
+            for (int b = a + 1; b < m; ++b) {
+                std::vector<int> candidate = order;
+                std::reverse(candidate.begin() + a, candidate.begin() + b + 1);
+                improved |= take(candidate);
+            }
+        return improved;
+    };
+    for (int round = 0; round < rounds; ++round) {
+        bool improved = false;
+        if (reverse_first) improved |= two_opt();
+        if (relocate) improved |= or_opt();
+        if (!reverse_first) improved |= two_opt();
+        if (!improved) break;
+    }
+    return order;
+}
+
+// Tham lam: mỗi bước chọn việc (hoặc nghỉ) làm khóa tăng ít nhất. Sau đó improve() từ 2 điểm xuất phát (tuyến tham
+// lam; tuyến tham lam + 2-opt 2 vòng) × 2 thứ tự nước đi, lấy kết quả tốt nhất. Đo 2026-10-02 trên 13–15 việc: lệch
+// tầng 1 so với tối ưu ~0,8–1,0 (một lần improve ~2,2–3,0; tham lam + 2-opt cũ ~3,3–4,6). Tất định: cùng input cùng tuyến.
 std::vector<int> heuristic(Search& s) {
     const Problem& p = s.p;
     const int n = p.size();
@@ -225,20 +281,16 @@ std::vector<int> heuristic(Search& s) {
         mask |= bit_of(p, best_j);
         if (best_j != kBreak) i = best_j, ++done;
     }
-    const int m = static_cast<int>(order.size());
-    if (n < 3 || n > kMaxImproveTasks) return order;
-    Key best_key = s.evaluate(order);
-    for (int round = 0; round < 2; ++round) {
-        bool improved = false;
-        for (int a = 0; a < m - 1; ++a)  // Đảo đoạn order[a..b]; đảo làm sai luật nghỉ → kInfeasible, tự bị loại.
-            for (int b = a + 1; b < m; ++b) {
-                std::vector<int> candidate = order;
-                std::reverse(candidate.begin() + a, candidate.begin() + b + 1);
-                if (Key k = s.evaluate(candidate); k < best_key) order = candidate, best_key = k, improved = true;
-            }
-        if (!improved) break;
-    }
-    return order;
+    if (n < 3) return order;
+    const std::vector<int> reversed = improve(s, order, true, false, 2);  // điểm xuất phát thứ 2 (2-opt cũ)
+    std::vector<int> best;
+    Key best_key = kInfeasible;
+    for (const std::vector<int>* start : {&std::as_const(order), &reversed})
+        for (bool reverse_first : {false, true}) {
+            std::vector<int> candidate = improve(s, *start, reverse_first);
+            if (Key k = s.evaluate(candidate); best.empty() || k < best_key) best.swap(candidate), best_key = k;
+        }
+    return best;
 }
 
 }  // namespace
