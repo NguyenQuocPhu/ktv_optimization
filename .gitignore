@@ -49,6 +49,9 @@ artifacts/
 *.json
 .temp/
 
+# Payload staging tải về để soi lỗi (chứa dữ liệu khách hàng) — không commit
+all_errors.*
+
 # Large data files (> 100MB)
 data/QOS_MAINTENANCE.xlsx
 data/QOS_MAINT_CHECKIN_INFO.xlsx
@@ -64,6 +67,9 @@ data/events_*.jsonl
 !data/sample/
 !data/sample/**
 
+# Mẫu input cho tools/review_map (cần commit để pull về chạy được ngay, dù *.json bị ignore)
+!tools/review_map/sample_in.json
+
 # OS
 .DS_Store
 Thumbs.db
@@ -76,3 +82,4 @@ Thumbs.db
 # Tài liệu nội bộ (spec API, SDD của team khác) — không đưa lên repo public
 API-Goi-y-cong-viec*.xlsx
 SDD*.xlsx
+ISC_MobiX_EventCatalogue*.xlsx
