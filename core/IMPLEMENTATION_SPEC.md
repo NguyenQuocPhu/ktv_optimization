@@ -666,7 +666,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.13 ✅ | Output `data.priority_type` (workbook API (4)), luôn `0` (default) — chi tiết bên dưới | mọi response có tuyến có `priority_type: 0` ngay sau `staff_id` |
 | 7.12 ✅ | Nhận nhóm thứ 6 `cscd` (CSKH chủ động, workbook API (4)), không bắt buộc; `onsite` chỉ còn `phieu_onsite`, 2 loại CSKH sang `cscd` (tra dự phòng) — chi tiết bên dưới | payload 6 khóa đọc được task `cscd`; payload 5 khóa không cảnh báo |
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
-| 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): ngưỡng K (`k_month_days`), rule `DEADLINE_URGENCY` ở tầng 3, gộp điểm dừng cùng địa chỉ (tiền/hậu xử lý) — chi tiết bên dưới | việc tháng còn > K không lên tuyến + vào `ca_vu_khong_chen_duoc`; urgency đổi được thứ tự; 2 ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần |
+| 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K** (`k_month_days`, `ca_vu_khong_chen_duoc`); 7.16.2 `DEADLINE_URGENCY` + 7.16.3 gộp điểm dừng cùng địa chỉ chờ — chi tiết bên dưới | việc tháng còn > K không lên tuyến + vào `ca_vu_khong_chen_duoc`; urgency đổi được thứ tự; 2 ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1144,6 +1144,10 @@ benchmark 5.332 message giữ 5202/130, không cảnh báo.
 - Lọc K **chỉ áp cho "hoàn tất trong tháng"** (thu hồi thiết bị, thu bill) — đúng catalogue. Ca "hoàn tất trong ngày hẹn" (gsafe, giao thiết bị cam) **không bị lọc**; `days_left` của chúng vẫn dùng cho urgency (hạn = ngày hẹn).
 - Thu bill trúng ngày thanh toán lịch sử: **không suy được từ input** (cần lịch sử thanh toán của khách). Catalogue để OA gửi `ngayThanhToanThangTruoc` hoặc cờ `denHanHomNay`; repo: **có thì dùng, không có thì bỏ qua ngoại lệ** (thu bill tính như ca tháng bình thường) + ghi câu hỏi.
 - Hệ quả đã biết: việc tháng còn xa **không lên tuyến nữa** (trước đây luôn được xếp). Đây là thay đổi hành vi có chủ ý theo catalogue mục B.
+
+**Tạm không làm (người dùng chốt 2026-10-06):** (1) **danh sách ngày lễ** — `rules.holidays` để rỗng, `days_left` bỏ qua lễ; (2) **thu bill trúng ngày thanh toán lịch sử** — không dùng, thu bill tính như ca tháng bình thường. Cả hai đã ghi thành câu hỏi ở `docs/DATA_QUESTIONS.md` (tài liệu là tham khảo, input thiếu thì không cố).
+
+**Kết quả 7.16.1 (2026-10-06):** `rules.k_month_days = 5` (rules.json, `print-rules` in ra); `sla::workdays_until()` (T2–T6, không tính ngày chạy, tính ngày hạn; hạn hôm nay/đã qua → 0); lọc trong `plan()` sau normalization, trước dựng Problem; OUT thêm `data.ca_vu_khong_chen_duoc` (mảng id, luôn có, rỗng khi không lọc). Test: `test_sla` 5 kiểm cho `workdays_until`; `test_plan` thêm ca chạy 10/09 (hóa đơn còn 14 ngày > K → không xếp + có trong danh sách) và mặc định 28/09 (2 ngày ≤ K → vẫn xếp, danh sách rỗng); `test_invariants` kiểm danh sách khớp đúng tập bị lọc trên 3.000 message ngẫu nhiên; các fixture cũ đổi ngày chạy sang 28/09 để không bị lọc. `ctest` 18/18. **Mốc benchmark 5.332 đổi** (phân bố `200/422` sẽ khác 5.202/130 — test chỉ còn assert tổng + in phân bố; đo lại khi có file). Demo `tools/review_map/sample_in.json`: chạy 05/06 → thu hồi + hóa đơn vào `ca_vu_khong_chen_duoc` (4 việc xếp); chạy 26/06 → 6 việc, danh sách rỗng.
 
 #### 7.16.2 — Rule `DEADLINE_URGENCY` (tầng 3, có trọng số)
 

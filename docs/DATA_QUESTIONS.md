@@ -47,6 +47,8 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 - Việc đang làm: OA gửi được **giờ check-in** của `staff.current_task` không? Có thì tính được thời gian còn lại (định mức − đã làm) thay vì luôn 30 phút (IMPLEMENTATION_SPEC 7.7–7.10, ghi chú việc đang làm).
 - OA có gửi message IN mới cho KTV **mỗi khi task đổi trạng thái** (check-in, hoàn tất, gán thêm, đổi hẹn) không, hay chỉ khi gán việc? Route (worker lẫn `replan`) chỉ biết danh sách việc trong IN mới nhất: nếu OA không gửi lại, việc KTV đã làm xong vẫn nằm trong tuyến tới IN kế tiếp. (Đã chốt 2026-10-01: IN mới thì worker tính luôn — IMPLEMENTATION_SPEC Phase 7.)
 - Kafka timestamp của topic IN là `CreateTime` (giờ OA gửi) hay `LogAppendTime`? Version của state dùng timestamp này (Phase 7.3).
+- **Danh sách ngày lễ** (7.16.1): "số ngày làm việc còn lại" tính theo T2–T6 **trừ ngày lễ** (catalogue, tham số #2), nhưng chưa có danh sách lễ → hiện tính bỏ qua lễ (`rules.holidays` để rỗng). Cần lễ chính thức để `days_left` (lọc K, urgency) khỏi lệch quanh lễ.
+- **Thu bill trúng ngày thanh toán tháng trước** (7.16.1, catalogue mục E): OA có gửi `ngayThanhToanThangTruoc`/cờ "đến hạn hôm nay" không? Hiện chưa dùng — thu bill tính như ca tháng bình thường (chỉ tranh chỗ khi còn ≤ K ngày làm việc).
 - Các câu nghiệp vụ Q1–Q26 ở [BUSINESS_RULES.md](BUSINESS_RULES.md) mục 11.
 
 ## Nhật ký trả lời
