@@ -666,7 +666,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.13 ✅ | Output `data.priority_type` (workbook API (4)), luôn `0` (default) — chi tiết bên dưới | mọi response có tuyến có `priority_type: 0` ngay sau `staff_id` |
 | 7.12 ✅ | Nhận nhóm thứ 6 `cscd` (CSKH chủ động, workbook API (4)), không bắt buộc; `onsite` chỉ còn `phieu_onsite`, 2 loại CSKH sang `cscd` (tra dự phòng) — chi tiết bên dưới | payload 6 khóa đọc được task `cscd`; payload 5 khóa không cảnh báo |
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
-| 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K** (`k_month_days`, `ca_vu_khong_chen_duoc`); 7.16.2 `DEADLINE_URGENCY` + 7.16.3 gộp điểm dừng cùng địa chỉ chờ — chi tiết bên dưới | việc tháng còn > K không lên tuyến + vào `ca_vu_khong_chen_duoc`; urgency đổi được thứ tự; 2 ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần |
+| 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K**, **7.16.2 ✅ `DEADLINE_URGENCY`**; 7.16.3 gộp điểm dừng cùng địa chỉ chờ — chi tiết bên dưới | việc tháng còn > K không lên tuyến + vào `ca_vu_khong_chen_duoc`; urgency đổi được thứ tự; 2 ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1166,6 +1166,8 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 - `Rules` thêm rule `DEADLINE_URGENCY` vào enum + `kRuleCodes`; `rules.cpp` parse trọng số trong `tiers` như 9 rule cũ; `print-rules` in ra.
 - Ví dụ: ca chèn 0 ngày còn lại check-in lúc +6h → 5×6×0.5 = **15 km tương đương**; ca chèn còn 4 ngày → 1×6×0.5 = **3 km**; ca chính và ca chèn còn ≥ K ngày → 0.
 - Đổi `days_left` 0 ↔ 5 trên cùng bài phải đổi được thứ tự (test); benchmark cũ không đổi (không có field mới → urgency 0).
+
+**Kết quả 7.16.2 (2026-10-06):** rule `DEADLINE_URGENCY` vào enum + `kRuleCodes` (tầng 3 mặc định, weight 0.5 — tune bằng `rules.json`); `Problem.urgency[]` do plan.cpp nạp (ca chèn theo `TaskKind.extra`, = `max(0, K − ngày làm việc còn lại)`; ca chính/không có hạn → 0); `visit()` cộng `urgency × giờ check-in`; `TaskKind` thêm `extra` (catalogue sheet 5: giao thiết bị cam, thu hồi, thu bill, cscd; gsafe chưa có entry riêng). Test: `test_dp` nhét urgency vào 600 bài so vét cạn + kiểm weight 0 = như không urgency; `test_plan` kiểm `--explain` có `DEADLINE_URGENCY > 0` cho ca chèn gần hạn và = 0 khi chỉ còn ca chính. `ctest` 18/18. Demo 26/06: `DEADLINE_URGENCY = 6,48`; mẫu 05/06: 0 (không còn ca chèn được xếp).
 
 #### 7.16.3 — Gộp điểm dừng cùng địa chỉ (mục C — tiền/hậu xử lý)
 
