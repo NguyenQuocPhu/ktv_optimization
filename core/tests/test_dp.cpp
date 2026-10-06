@@ -33,6 +33,7 @@ static Problem random_problem(std::mt19937& rng, int n) {
         p.due.push_back(booked ? a + 60 : (unit(rng) < 0.3 ? unit(rng) * 400 : kNone));
         p.complete_by.push_back(unit(rng) < 0.3 ? unit(rng) * 500 : kNone);
         p.weight.push_back(4 - static_cast<int>(unit(rng) * 4));
+        p.urgency.push_back(unit(rng) < 0.5 ? 0 : unit(rng) * 5);  // 7.16.2: nửa số bài có urgency
         area[i] = static_cast<int>(unit(rng) * 3);
     }
     for (int i = 0; i < n; ++i) {
@@ -194,6 +195,20 @@ int main() {
             gap += found - optimum;
         }
         CHECK(gap / samples < 1.5);
+    }
+
+    {  // 7.16.2: trọng số DEADLINE_URGENCY = 0 → cùng thứ tự như khi không có urgency.
+        Rules zero = default_rules();
+        for (auto& tier : zero.tiers)
+            for (auto& [rule, weight] : tier)
+                if (rule == DEADLINE_URGENCY) weight = 0;
+        std::mt19937 urgent_rng(11);
+        for (int k = 0; k < 20; ++k) {
+            Problem p = random_problem(urgent_rng, 6);
+            Problem q = p;
+            for (double& value : q.urgency) value = 0;
+            CHECK(solve(p, zero).order == solve(q, default_rules()).order);
+        }
     }
 
     if (failures) std::cerr << failures << " lỗi\n";

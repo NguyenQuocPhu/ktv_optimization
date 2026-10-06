@@ -220,6 +220,9 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         p.due.push_back(relative(d.due));
         p.complete_by.push_back(relative(d.complete_by));
         p.weight.push_back(rules.priority_weight[task->priority_in_day]);
+        // 7.16.2: độ gấp cho ca chèn = K − số ngày làm việc còn lại (ca chính / không có hạn → 0).
+        const int days_left = d.complete_by ? workdays_until(now, *d.complete_by) : 0;
+        p.urgency.push_back(kind.extra && d.complete_by ? std::max(0, rules.k_month_days - days_left) : 0);
     }
     // Khu vực cho rule "quay lại khu vực đã rời" (AREA_REENTRY): biết lô → theo lô; lô 0 → lùi xuống block
     // (workbook (3): "không có lô thì tính ưu tiên xuống block_id"), chỉ so với task lô 0 khác; lô 0 + block 0 → không

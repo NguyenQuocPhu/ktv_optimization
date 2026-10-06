@@ -57,6 +57,7 @@ struct Problem {
     std::vector<double> due;          // Hạn check-in B. kNone = không có.
     std::vector<double> complete_by;  // Hạn làm xong. kNone = không có.
     std::vector<double> weight;       // Trọng số ưu tiên: P1 = 4 … P4 = 1.
+    std::vector<double> urgency;      // 7.16.2: độ gấp của ca chèn (0..K; ca chính = 0). Rỗng = không dùng (test cũ).
     std::vector<uint64_t> same_area;  // same_area[i]: các việc khác cùng lô với việc i (bit j = 1 nếu việc j cùng lô).
     double shift_end = kNone;         // Giờ hết ca.
     double break_open = kNone;        // Sớm nhất được bắt đầu nghỉ trưa. kNone = tuyến này không cần nghỉ.

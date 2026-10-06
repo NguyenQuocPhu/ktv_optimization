@@ -39,6 +39,9 @@ Visit visit(const Problem& p, uint64_t done_mask, int i, int j, double clock) {
     uint64_t area = p.same_area[j];
     if (i >= 0 && !(area >> i & 1) && (done_mask & area)) v.cost[AREA_REENTRY] = 1;
     v.cost[PRIORITY_DELAY] = p.weight[j] * v.checkin / 60;
+    // 7.16.2: việc gấp (gần hạn) bị để muộn thì phạt theo giờ check-in; ca chính urgency = 0.
+    const double urgency = j < static_cast<int>(p.urgency.size()) ? p.urgency[j] : 0;
+    v.cost[DEADLINE_URGENCY] = urgency * v.checkin / 60;
     return v;
 }
 

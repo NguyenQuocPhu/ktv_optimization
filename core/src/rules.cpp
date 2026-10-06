@@ -24,6 +24,7 @@ Rules default_rules() {
          {TRAVEL_MINUTES, 0.05},                   //   20 phút đi ≈ 1 km
          {AREA_REENTRY, 2},                        //   quay lại lô 1 lần ≈ 2 km
          {PRIORITY_DELAY, 0.5},                    //   việc P1 làm muộn 1 giờ ≈ 2 km
+         {DEADLINE_URGENCY, 0.5},                  //   việc gấp để muộn 1 giờ ≈ 0,5 km (7.16.2)
          {FINISH, 0.01}},                          //   xong muộn 100 phút ≈ 1 km
     };
     return rules;

@@ -109,6 +109,8 @@ int main() {
             if (value < chosen[t] - 1e-9) never_worse = false;  // tốt hơn mà các tầng trước bằng → sai
         }
     }
+    CHECK(score["tiers"][2]["rules"].contains("DEADLINE_URGENCY"));
+    CHECK(score["tiers"][2]["rules"]["DEADLINE_URGENCY"].get<double>() > 0);  // hóa đơn (ca chèn) còn 2 ngày ≤ K → có urgency
     CHECK(never_worse);
     CHECK(!r["data"].contains("score"));  // mặc định không explain: OUT giữ nguyên contract
 
@@ -117,9 +119,10 @@ int main() {
     early["planned_at"] = "2026-09-10 09:20:00";
     early["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 14:00:00";
     errors.clear();
-    ktv::PlanResult k_filtered = ktv::plan(ktv::parse_message(early, errors), ktv::default_rules(), server_now);
+    ktv::PlanResult k_filtered = ktv::plan(ktv::parse_message(early, errors), ktv::default_rules(), server_now, "", true);
     CHECK(errors.empty());
     CHECK(k_filtered.response["data"]["metrics"]["tasks_total"] == 1);
+    CHECK(k_filtered.response["data"]["score"]["tiers"][2]["rules"]["DEADLINE_URGENCY"].get<double>() == 0);  // chỉ còn ca chính → urgency 0
     const auto& unplaced = k_filtered.response["data"]["ca_vu_khong_chen_duoc"];
     CHECK(unplaced.size() == 1 && unplaced[0] == 5454544);
     for (const auto& cluster : k_filtered.response["data"]["clusters"])

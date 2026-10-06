@@ -133,6 +133,7 @@ struct TaskKind {
     OnTime on_time;
     int priority;
     int handle_minutes;  // Định mức thời gian xử lý khi input để trống. [GIẢ ĐỊNH]
+    bool extra = false;  // 7.16.2: ca chèn (không neo khung giờ) theo catalogue sheet 5 — dùng cho DEADLINE_URGENCY.
 };
 const std::vector<TaskKind>& task_kinds();                                     // Cả bảng (12 loại).
 const TaskKind* find_kind(const std::string& group, const std::string& name);  // Không thấy → nullptr.
