@@ -140,6 +140,37 @@ int main() {
     // Ngày 28/09 (2 ngày làm việc ≤ K) thì hóa đơn vẫn xếp, không ca nào bị lọc — đã kiểm ở trên.
     CHECK(result.unplaced.empty());
 
+    {  // 7.18: ca hẹn ngày sau không xếp (không vào OUT, chỉ unplaced); hẹn ngày đã qua vẫn xếp.
+        const auto run = [&](const char* appointment) {
+            json data = message();
+            data["tasks"]["trien_khai"][0]["appointment"] = appointment;
+            errors.clear();
+            ktv::PlanResult out = ktv::plan(ktv::parse_message(data, errors), ktv::default_rules(), server_now, "");
+            CHECK(errors.empty());
+            return out;
+        };
+        ktv::PlanResult tomorrow = run("2026-09-29 09:00:00");
+        CHECK(tomorrow.unplaced.size() == 1 && tomorrow.unplaced[0] == 5454541);
+        const json& m = tomorrow.response["data"]["metrics"];
+        CHECK(m["tasks_total"] == 1 && m["finish_at"].get<std::string>().substr(0, 10) == "2026-09-28");
+        CHECK(m["overload_minutes"] == 0);
+        for (const auto& cluster : tomorrow.response["data"]["clusters"])
+            for (const auto& row : cluster["schedule"]) {
+                CHECK(row["entry_type"] != "TASK" || row["task_id"] != 5454541);
+                CHECK(row["end_at"].get<std::string>().substr(0, 10) == "2026-09-28");  // không IDLE qua đêm
+            }
+        ktv::PlanResult yesterday = run("2026-09-27 14:00:00");
+        CHECK(yesterday.unplaced.empty() && yesterday.response["data"]["metrics"]["tasks_total"] == 2);
+        ktv::PlanResult late_today = run("2026-09-28 23:30:00");  // cuối ngày chạy vẫn là hôm nay
+        CHECK(late_today.unplaced.empty());
+        // Chỉ còn ca ngày sau → không có việc hôm nay → 422 như danh sách rỗng.
+        json only = message();
+        only["tasks"]["trien_khai"][0]["appointment"] = "2026-09-30 09:00:00";
+        only["tasks"]["hoa_don"] = json::array();
+        errors.clear();
+        CHECK(ktv::plan(ktv::parse_message(only, errors), ktv::default_rules(), server_now, "").response["statuscode"] == "422");
+    }
+
     {  // 7.16.3: gom ca cùng địa chỉ thành một điểm dừng; ca tháng > K vẫn được gom theo ca khác cùng địa chỉ (K không áp).
         json data = message();
         data["planned_at"] = "2026-09-10 09:20:00";

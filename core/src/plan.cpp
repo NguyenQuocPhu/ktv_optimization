@@ -285,9 +285,16 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         result.response = error_response("422", why, message.message_id, server_now);
         return result;
     }
+    // 7.18: ca hẹn ngày SAU ngày chạy không xếp tuyến hôm nay (catalogue mục D); hẹn ngày đã qua vẫn xếp (làm bù).
+    // Lọc trước khi gom: chỉ gom các ca được tính tuyến. Không vào OUT (người dùng chốt) — chỉ ghi unplaced.
+    std::vector<const Task*> today;
+    for (const Task* task : worklist.candidates) {
+        if (task->appointment && start_of_day(*task->appointment) > day) result.unplaced.push_back(task->task_id);
+        else today.push_back(task);
+    }
     // 7.16.3: gom ca cùng địa chỉ thành điểm dừng TRƯỚC khi lọc K (catalogue mục C: K không áp cho ca cùng địa chỉ
     // với ca khác đang được làm). Nhóm không phục vụ liền nhau được → tách từng ca + cảnh báo.
-    std::vector<Stop> stops = build_stops(worklist.candidates, rules);
+    std::vector<Stop> stops = build_stops(today, rules);
     std::vector<Stop> grouped;
     for (Stop& stop : stops) {
         if (stop.tasks.size() > 1 && !group_servable(stop, rules, now)) {
