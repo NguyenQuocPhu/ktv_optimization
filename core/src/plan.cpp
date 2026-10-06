@@ -25,8 +25,6 @@ std::string latlng(Point p, int digits = 4) {
     std::snprintf(text, sizeof text, "%.*f,%.*f", digits, p.lat, digits, p.lng);
     return text;
 }
-ojson or_null(const std::optional<long long>& value) { return value ? ojson(*value) : ojson(nullptr); }
-ojson or_null(const std::optional<std::string>& value) { return value ? ojson(*value) : ojson(nullptr); }
 double round_to(double value, int digits) {
     double scale = std::pow(10, digits);
     return std::round(value * scale) / scale;
@@ -466,8 +464,9 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
                          {"travel_minutes_before", k == 0 ? std::llround(v.travel) : 0},
                          {"travel_km_before", k == 0 ? round_to(v.km, 1) : 0.0},
                          {"handle_minutes", std::llround(service)}, {"projected_sla", sla},
-                         // Như input (người dùng chốt 7.9): số vẫn là số, chuỗi giữ nguyên; không gửi / null → null.
-                         {"contract_id", or_null(task.contract_id)}, {"contract_no", or_null(task.contract_no)}};
+                         // Sheet 03: string; sheet 00: rỗng là "" (không null). Không gửi / null → "" (7.19).
+                         {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
+                         {"contract_no", task.contract_no.value_or("")}};
             rows.push_back(std::move(row));
             row_task.push_back(task_ordinal);
             offset += service;

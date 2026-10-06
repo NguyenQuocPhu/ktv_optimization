@@ -195,15 +195,15 @@ int main() {
         CHECK(with_block && with_block->response["data"]["metrics"]["revisit_count"] == 0);
         CHECK(no_block && order(no_block->response) == (std::vector<long long>{1, 2, 3}));
     }
-    {  // 7.9: dòng TASK có location, latlng (6 chữ số), contract_id / contract_no như input, đúng thứ tự sheet 03.
+    {  // 7.9 + 7.19: dòng TASK có location, latlng (6 chữ số), contract_id / contract_no là string ("" khi không có), đúng thứ tự sheet 03.
         json a = task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0291234,105.8012345", "");
         a["location"] = "Số 12 ngõ 45 Trần Duy Hưng";
         a["contract_id"] = 1126569863;
         a["contract_no"] = "SGABP0236";
         json b = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0301,105.8013", "");
-        b["contract_id"] = nullptr;  // null → null; contract_no không gửi → null
+        b["contract_id"] = nullptr;  // null → ""; contract_no không gửi → ""
         json c = task(3, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0311,105.8014", "");
-        c["contract_no"] = "";       // "" giữ nguyên; contract_id không gửi → null
+        c["contract_no"] = "";       // "" giữ nguyên; contract_id không gửi → ""
         auto r = run(message("2026-09-10 09:00:00", none, json::array({a, b, c}), none, none, none));
         CHECK(r && r->response["statuscode"] == "200");
         std::map<long long, ojson> rows;
@@ -215,9 +215,9 @@ int main() {
         if (rows.size() == 3) {
             const ojson& ra = rows[1];
             CHECK(ra["location"] == "Số 12 ngõ 45 Trần Duy Hưng" && ra["latlng"] == "21.029123,105.801235");
-            CHECK(ra["contract_id"].is_number_integer() && ra["contract_id"] == 1126569863 && ra["contract_no"] == "SGABP0236");
-            CHECK(rows[2]["contract_id"].is_null() && rows[2]["contract_no"].is_null() && rows[2]["location"] == "");
-            CHECK(rows[3]["contract_id"].is_null() && rows[3]["contract_no"] == "");
+            CHECK(ra["contract_id"] == "1126569863" && ra["contract_no"] == "SGABP0236");
+            CHECK(rows[2]["contract_id"] == "" && rows[2]["contract_no"] == "" && rows[2]["location"] == "");
+            CHECK(rows[3]["contract_id"] == "" && rows[3]["contract_no"] == "");
             std::vector<std::string> keys;  // thứ tự field theo sheet 03
             for (auto it = ra.begin(); it != ra.end(); ++it) keys.push_back(it.key());
             const std::vector<std::string> expected = {
