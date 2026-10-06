@@ -666,7 +666,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.13 ✅ | Output `data.priority_type` (workbook API (4)), luôn `0` (default) — chi tiết bên dưới | mọi response có tuyến có `priority_type: 0` ngay sau `staff_id` |
 | 7.12 ✅ | Nhận nhóm thứ 6 `cscd` (CSKH chủ động, workbook API (4)), không bắt buộc; `onsite` chỉ còn `phieu_onsite`, 2 loại CSKH sang `cscd` (tra dự phòng) — chi tiết bên dưới | payload 6 khóa đọc được task `cscd`; payload 5 khóa không cảnh báo |
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
-| 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K**, **7.16.2 ✅ `DEADLINE_URGENCY`**; 7.16.3 gộp điểm dừng cùng địa chỉ chờ — chi tiết bên dưới | việc tháng còn > K không lên tuyến + vào `ca_vu_khong_chen_duoc`; urgency đổi được thứ tự; 2 ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần |
+| 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K**, **7.16.2 ✅ `DEADLINE_URGENCY`**, **7.16.3 ✅ gộp điểm dừng cùng địa chỉ** — chi tiết bên dưới | việc tháng còn > K không lên tuyến (trừ khi cùng địa chỉ với ca khác) + vào `ca_vu_khong_chen_duoc`; urgency đổi được thứ tự; ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1173,8 +1173,9 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 
 **Tiền xử lý (trước QHĐ).** Gom ca thành "điểm dừng gộp" (super-task):
 
-- Khóa nhóm: catalogue là **`maDiemDungGop`** (sheet 4; **OA gán ở bước 7** — OA là bên gom, AI chỉ giữ liền nhau). Repo dùng `ma_diem_dung_gop`. **Fallback [GIẢ ĐỊNH của repo]** khi OA chưa gửi mã: tự gom bằng union-find theo `distance_km ≤ rules.stop_group_radius_m` (50 m — tham số cấu hình của catalogue, sheet 1), tọa độ thiếu/trùng thì so chuỗi `location` đã chuẩn hoá; chỉ gom ca candidate.
-- Super-task: `service` = **Σ handle_minutes** (catalogue: "TGXL chuẩn của điểm dừng gộp = TỔNG"), `opens` = **A sớm nhất của nhóm** (catalogue: "neo theo khung giờ hẹn sớm nhất"), `due` = **B của ca neo** (catalogue: "vẫn phải check-in trước mốc B của ca đó"), `complete_by` = min hạn hoàn tất trong nhóm **[bổ sung của repo — catalogue không nói, để không mất hạn tháng của ca thu hồi/thu bill nằm trong nhóm]**, lô = lô ca neo (cho `AREA_REENTRY`); thứ tự nội bộ = (ưu tiên asc, TGXL asc, task_id) — lưu mảng ca gốc để bung.
+- Khóa nhóm: catalogue là **`maDiemDungGop`** (sheet 4; **OA gán ở bước 7** — OA là bên gom, AI chỉ giữ liền nhau). Repo dùng `ma_diem_dung_gop`. **Fallback [GIẢ ĐỊNH của repo]** khi OA chưa gửi mã: tự gom theo địa chỉ — `distance_km ≤ rules.stop_group_radius_m` (50 m, tham số catalogue sheet 1); riêng **trùng toạ độ** thì phải khớp chuỗi `location` đã chuẩn hoá (dữ liệu giả hay dùng chung tâm phường, không gom hai khách khác nhau chỉ vì chung toạ độ). Ca candidate luôn có toạ độ (normalization đã loại ca thiếu) nên không cần nhánh "toạ độ thiếu".
+- **K và nhóm (catalogue mục C: "ngưỡng K KHÔNG ÁP Ở ĐÂY")**: ca thu hồi/thu bill còn > K ngày vẫn được gom nếu cùng địa chỉ với một ca khác đang được làm ("KTV đã tới tận nơi vì ca khác, không có chuyến đi riêng nào để tiết chế"). Hệ quả hiện thực: **gom nhóm phải chạy TRƯỚC lọc K (7.16.1)** — ca tháng > K chỉ bị lọc khi nhóm của nó không còn ca nào khác được xếp; nhóm toàn ca tháng > K thì lọc cả nhóm (không có chuyến đi riêng). *(7.16.1 hiện đang lọc trước khi gom — phải sửa khi làm 7.16.3.)*
+- Super-task: `service` = **Σ handle_minutes** (catalogue: "TGXL chuẩn của điểm dừng gộp = TỔNG"), `opens` = **A sớm nhất của nhóm** (catalogue: "neo theo khung giờ hẹn sớm nhất"), `due` = **min B trong nhóm** *(chặt hơn câu chữ catalogue "mốc B của ca neo": tuyến tới muộn vẫn không được vi phạm B của ca nào trong nhóm — nhóm hợp lệ thì các B đều ≥ check-in tại mốc neo, nhưng tới muộn hơn thì không)*, `complete_by` = min hạn hoàn tất trong nhóm **[bổ sung của repo — catalogue không nói, để không mất hạn tháng của ca thu hồi/thu bill nằm trong nhóm]**, lô = lô ca neo (cho `AREA_REENTRY`), `weight` = **max trọng số ưu tiên trong nhóm**, `urgency` = **max urgency trong nhóm** **[GIẢ ĐỊNH của repo — nhóm gánh việc gấp nhất; catalogue chỉ nói thứ tự nội bộ + "ưu tiên không bị nâng" khi tranh khoảng trống với địa chỉ khác]**; thứ tự nội bộ = (ưu tiên asc, TGXL asc, task_id) — lưu mảng ca gốc để bung.
 - **Kiểm nhóm hợp lệ — [GIẢ ĐỊNH của repo]**: catalogue chỉ nói "2 hẹn không thể làm liền nhau thì tách", không định nghĩa ngưỡng. Cách kiểm đề xuất: phục vụ liền nhau bắt đầu tại `max(giờ tới, A neo)`; check-in của ca thứ k = giờ bắt đầu + Σ service trước nó; ca nào phải **chờ** > `rules.stop_group_max_wait_minutes` (mặc định 30) hoặc `check-in > B` → **tách nhóm** + cảnh báo `STOP_GROUP_SPLIT` (mã nội bộ). (Cặp 08:00–10:00 và 16:00–18:00 tách; cặp 08:00–10:00 và 10:00–12:00 phải chờ ~1,5h → tách theo ngưỡng mặc định — nếu PO muốn gộp thì nâng ngưỡng.)
 
 **QHĐ** chạy trên super-task (ít điểm hơn; "liền nhau" tự nhiên thoả vì là một điểm; không cắt được nhóm; `dp.cpp` không đổi).
@@ -1184,6 +1185,8 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 - Cùng `at` (giờ tới), giờ `start_at`/`end_at` nối tiếp theo thứ tự nội bộ; `travel_km_before`/`travel_minutes_before` chỉ ghi ở ca đầu; các ca cùng nhóm liền nhau, cùng cụm, `seq` liên tục.
 - `tasks_total` = **số ca** (giữ contract hiện tại); km/travel của nhóm chỉ tính một lần (điểm dừng là một).
 - Echo `ma_diem_dung_gop` trên từng dòng TASK.
+
+**Kết quả 7.16.3 (2026-10-06):** `plan.cpp` gom nhóm **trước** lọc K: theo `ma_diem_dung_gop` (input mới, parse nới lỏng) hoặc tự gom theo địa chỉ (`rules.group_by_address`, `stop_group_radius_m = 50`; trùng toạ độ thì đối chiếu `location`); nhóm không phục vụ liền nhau được (chờ > `stop_group_max_wait_minutes = 30` hoặc quá B của ca nào trong nhóm) → tách từng ca + cảnh báo `STOP_GROUP_SPLIT`; K chỉ áp khi **cả nhóm** đều quá K; QHĐ chạy trên điểm dừng (service = Σ, `due` = min B, `weight`/`urgency` = max); OUT bung từng ca (giờ nối tiếp, km chỉ ca đầu, `projected_sla` tính riêng từng ca) + `ma_diem_dung_gop` (mã OA, hoặc `auto-<n>` khi tự gom). Test: `test_plan` ca gom (2 dòng liền nhau, cùng mã, km 1 lần, ca tháng > K được cứu); `test_invariants` chấp nhận nhóm cứu ca tháng; `test_pipeline` đổi toạ độ fixture (trước trùng nhau nên bị gom). `ctest` 18/18. Demo `sample_in.json` (dời hóa đơn về cùng địa chỉ bảo trì): 1 điểm dừng `auto-1` 10:01→11:16, hóa đơn còn 18 ngày > K vẫn được gom; M000089: cặp Ich Vinh bị tách vì hẹn lệch quá 30′ (đúng ngoại lệ catalogue).
 
 #### 7.16.4 — Output
 
@@ -1224,6 +1227,7 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 3. Ngưỡng `stop_group_max_wait_minutes = 30` — **[GIẢ ĐỊNH của repo]**, catalogue không định nghĩa "không thể làm liền nhau": chốt 30′ hay chờ PO?
 4. Danh sách ngày lễ cho `rules.holidays` lấy ở đâu — hiện để rỗng **[GIẢ ĐỊNH]**; chưa có thì `days_left` lệch quanh ngày lễ.
 5. Fallback tự gom nhóm khi OA chưa gán `maDiemDungGop`: bật mặc định (`rules.group_by_address = true`) hay chỉ gom khi OA có mã?
+6. `weight`/`urgency` của nhóm = **max thành viên** [GIẢ ĐỊNH của repo] — đồng ý hay lấy theo ca neo?
 
 #### 7.16.9 — Rủi ro & rollback
 
