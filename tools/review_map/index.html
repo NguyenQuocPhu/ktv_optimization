@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KTV Routing — review map</title>
+<link rel="stylesheet" href="/vendor/leaflet.css">
+<style>
+  :root {
+    --bg: #f4f6f8; --panel: #fff; --line: #e3e7ee; --text: #16202f; --muted: #6b7686;
+    --accent: #2563eb; --ok: #15803d; --warn: #b45309; --late: #dc2626;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 4px 16px rgba(16, 24, 40, .06);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--bg); }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 16px; }
+  h1 small { margin-left: 8px; font-weight: 400; color: var(--muted); font-size: 12px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  .pill { padding: 3px 10px; border-radius: 999px; background: #eef1f6; color: var(--muted); font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .pill.ok { background: #dcfce7; color: var(--ok); }
+  .pill.late { background: #fee2e2; color: var(--late); }
+  .pill.warn { background: #fef3c7; color: var(--warn); }
+  .pill.blue { background: #dbeafe; color: #1d4ed8; }
+  main { display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 14px; height: calc(100% - 45px); padding: 14px; }
+  aside { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; box-shadow: var(--shadow); }
+  .card h2 { margin: 0 0 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  textarea { width: 100%; min-height: 260px; max-height: 46vh; padding: 10px; border: 1px solid var(--line); border-radius: 8px; resize: vertical;
+             font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #0f172a; background: #fbfcfe; }
+  textarea:focus { outline: 2px solid #bfdbfe; border-color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  button { padding: 8px 14px; font: inherit; font-weight: 600; color: var(--text); background: #eef1f6; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+  button:hover { background: #e2e7ef; }
+  button.primary { color: #fff; background: var(--accent); }
+  button.primary:hover { background: #1d4ed8; }
+  button:disabled { opacity: .55; cursor: progress; }
+  .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-left: auto; }
+  .note { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .stat { padding: 8px 10px; border-radius: 8px; background: #f7f9fc; }
+  .stat b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 11px; color: var(--muted); }
+  #warnings { margin: 0; padding-left: 18px; font-size: 12px; color: var(--warn); }
+  .content { display: grid; grid-template-rows: minmax(320px, 1fr) auto; gap: 12px; min-height: 0; }
+  #map { height: 100%; min-height: 320px; border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); background: #e8edf3; }
+  .outpanel { display: flex; flex-direction: column; height: 264px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
+  .outpanel.collapsed { height: 42px; }
+  .tabs { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); background: #fafbfd; }
+  .tabs button { padding: 5px 12px; font-size: 13px; font-weight: 500; border-radius: 999px; }
+  .tabs button.active { color: #fff; background: var(--accent); }
+  .grow { flex: 1; }
+  .tabbody { flex: 1; min-height: 0; overflow: auto; }
+  pre { margin: 0; padding: 12px 14px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #0f172a; color: #e2e8f0; min-height: 100%; }
+  .tablewrap { overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 5px 9px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { position: sticky; top: 0; background: #fafbfd; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  td.task { min-width: 260px; white-space: normal; }
+  tr.idle td, tr.break td { color: var(--muted); font-style: italic; }
+  .dot { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; vertical-align: baseline; }
+  .pin { width: 26px; height: 26px; border: 2px solid #fff; border-radius: 50%; color: #fff; background: var(--c, #2563eb);
+         font: 700 12px/22px system-ui, sans-serif; text-align: center; box-shadow: 0 1px 5px rgba(0, 0, 0, .35); }
+  .pin.staff { width: auto; height: 24px; padding: 0 9px; border-radius: 8px; background: #0f172a; font-size: 11px; line-height: 20px; }
+  .pinbox { display: flex; flex-direction: column; align-items: center; }
+  .pintime { margin-top: 1px; padding: 0 3px; border-radius: 4px; background: rgba(255, 255, 255, .94); box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+             font: 600 10px/14px system-ui, sans-serif; color: #0f172a; }
+  .leaflet-tooltip.task-tip { max-width: 360px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+                              box-shadow: 0 6px 24px rgba(16, 24, 40, .18); font: 12px/1.45 system-ui, sans-serif; color: var(--text); }
+  .task-tip h3 { margin: 0 0 6px; font-size: 13px; }
+  .task-tip table { border-collapse: collapse; }
+  .task-tip td { padding: 1px 0; border: 0; white-space: normal; vertical-align: top; }
+  .task-tip td.k { padding-right: 10px; color: var(--muted); white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #eef1f6; color: var(--muted); }
+  .badge.ok { background: #dcfce7; color: var(--ok); }
+  .badge.warn { background: #fef3c7; color: var(--warn); }
+  .badge.late { background: #fee2e2; color: var(--late); }
+  .legend { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .96);
+            box-shadow: var(--shadow); font: 12px/1.5 system-ui, sans-serif; }
+  .legend b { display: block; margin-bottom: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; height: auto; } .content { grid-template-rows: 60vh auto; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>KTV Routing <small>message IN → ktv_core → tuyến trên bản đồ</small></h1>
+  <div class="pills" id="pills"><span class="pill">chưa tính</span></div>
+</header>
+
+<main>
+  <aside>
+    <section class="card">
+      <h2>Input — message IN (JSON)</h2>
+      <textarea id="input" spellcheck="false" placeholder="Dán nguyên message IN của Kafka vào đây..."></textarea>
+      <div class="row">
+        <button class="primary" id="run">Tính tuyến</button>
+        <button id="load">Nạp mẫu</button>
+        <label class="check"><input type="checkbox" id="osrm" checked> OSRM</label>
+        <label class="check"><input type="checkbox" id="road" checked> Đường bộ</label>
+        <label class="check"><input type="checkbox" id="explain" checked> Giải thích</label>
+      </div>
+      <p class="note" id="stale" hidden style="color:var(--warn);font-weight:600">⚠ Input đã đổi — bấm “Tính tuyến” để cập nhật OUT.</p>
+      <p class="note" id="note">Mẫu lấy từ message thật staging (all_errors) đã vá staff.latlng/available/status/plots + thêm việc cho đủ nhóm.</p>
+    </section>
+    <section class="card">
+      <h2>Số liệu</h2>
+      <div class="stats" id="stats"><div class="stat"><b>—</b><span>chưa có</span></div></div>
+    </section>
+    <section class="card" id="warncard" hidden>
+      <h2>Cảnh báo dữ liệu</h2>
+      <ul id="warnings"></ul>
+    </section>
+  </aside>
+
+  <section class="content">
+    <div id="map"></div>
+    <div class="outpanel" id="outpanel">
+      <div class="tabs">
+        <button data-tab="json" class="active">JSON OUT</button>
+        <button data-tab="table">Lịch trình</button>
+        <button data-tab="score">Giải thích</button>
+        <button data-tab="log">Log / cảnh báo</button>
+        <span class="grow"></span>
+        <button id="copy">Copy OUT</button>
+        <button id="collapse">Thu gọn</button>
+      </div>
+      <div class="tabbody" id="tab-json"><pre id="json">—</pre></div>
+      <div class="tabbody" id="tab-table" hidden><div class="tablewrap"><table id="table"></table></div></div>
+      <div class="tabbody" id="tab-score" hidden><div id="score"></div></div>
+      <div class="tabbody" id="tab-log" hidden><pre id="log">—</pre></div>
+    </div>
+  </section>
+</main>
+
+<script src="/vendor/leaflet.js"></script>
+<script>
+const COLORS = ["#2563eb", "#7c3aed", "#db2777", "#ea580c", "#0d9488", "#ca8a04", "#4f46e5", "#16a34a"];
+const $ = (id) => document.getElementById(id);
+const input = $("input");
+
+const map = L.map("map").setView([10.75, 106.74], 12);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap" }).addTo(map);
+L.control.scale({ imperial: false }).addTo(map);
+let routeLayer = L.layerGroup().addTo(map);
+let roadLayer = L.layerGroup().addTo(map);
+let renderToken = 0;
+let lastRunText = null;
+let legend = null;
+
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const badgeClass = (sla) => sla === "ON_TIME" ? "ok" : sla === "AT_RISK" ? "warn" : sla === "ON_TIME" || sla === "" ? "" : "late";
+
+async function loadSample() {
+  input.value = await (await fetch("/sample")).text();
+  $("note").textContent = "Mẫu: 1 message thật từ staging (all_errors) đã vá staff.latlng/available/status/plots + thêm việc cho đủ nhóm.";
+}
+
+async function run() {
+  const runButton = $("run");
+  runButton.disabled = true;
+  $("pills").innerHTML = '<span class="pill">đang tính…</span>';
+  const sent = input.value;
+  try {
+    const response = await fetch("/plan", {
+      method: "POST",
+      body: sent,
+      headers: { "X-Use-Osrm": $("osrm").checked ? "1" : "0", "X-Explain": $("explain").checked ? "1" : "0" },
+    });
+    const result = await response.json();
+    if (!result.ok) return showError(result.error);
+    lastRunText = sent;
+    $("stale").hidden = true;
+    render(result);
+  } catch (error) {
+    showError(String(error));
+  } finally {
+    runButton.disabled = false;
+  }
+}
+
+function showError(text) {
+  $("pills").innerHTML = `<span class="pill late">lỗi</span>`;
+  $("json").textContent = text;
+  $("stats").innerHTML = `<div class="stat"><b>—</b><span>lỗi</span></div>`;
+  $("log").textContent = text;
+  routeLayer.clearLayers();
+}
+
+function flattenTasks(message) {
+  const byId = new Map();
+  if (!message) return byId;
+  for (const group of Object.values(message.tasks || {}))
+    for (const task of group) byId.set(String(task.task_id), task);
+  return byId;
+}
+
+function tooltipHtml(row, cluster, color, task, order) {
+  const kv = (k, v) => v ? `<tr><td class="k">${k}</td><td>${v}</td></tr>` : "";
+  const sla = row.projected_sla ? `<span class="badge ${badgeClass(row.projected_sla)}">${row.projected_sla}</span>` : "";
+  const fields = task ? [
+    kv("Nhóm/loại", `${esc(task.task_group_name)} / ${esc(task.task_type_name)}${task.task_sub_name ? " / " + esc(task.task_sub_name) : ""}`),
+    kv("Trạng thái", `${esc(task.task_status_name || "?")} (${task.task_status_id})`),
+    kv("Hẹn khách", esc(task.appointment) || "không hẹn"),
+    kv("SLA / ưu tiên", `${task.sla?.sla_minutes ?? "—"} phút / P${task.sla?.priority_in_day ?? "—"}`),
+    kv("Định mức xử lý", `${row.handle_minutes} phút`),
+    kv("Địa chỉ", esc(task.location) || "—"),
+    kv("Hợp đồng", esc(task.contract_no || "") || "—"),
+  ].join("") : "";
+  return `<div class="task-tip">
+    <h3><span class="dot" style="background:${color}"></span>#${order} toàn tuyến · ${esc(row.task_type_name)} ${sla}</h3>
+    <table>
+      <tr><td class="k">Cụm</td><td>${esc(cluster.cluster_code)} — ${esc(cluster.name.replace(/^Cluster \d+ — /, ""))} · seq ${row.seq} trong cụm</td></tr>
+      <tr><td class="k">Task id</td><td>${row.task_id}</td></tr>
+      ${fields}
+      <tr><td class="k">Check-in → xong</td><td>${esc(row.start_at)} → ${esc(row.end_at)}</td></tr>
+      <tr><td class="k">Chặng tới</td><td>${row.travel_km_before} km · ${row.travel_minutes_before} phút</td></tr>
+      <tr><td class="k">Tọa độ</td><td>${esc(row.latlng)}</td></tr>
+    </table></div>`;
+}
+
+// Giải thích: chi phí từng tầng/rule của tuyến đang chọn + so vài phương án khác (từ core, --explain).
+function scoreHtml(score) {
+  if (!score) return '<p class="note" style="padding:12px 14px">Chưa bật “Giải thích” — tick ô Giải thích ở cột INPUT rồi bấm Tính tuyến.</p>';
+  const th = (cells) => `<tr>${cells.map((c) => `<th>${c}</th>`).join("")}</tr>`;
+  const td = (cells) => `<tr>${cells.map((c) => `<td>${c}</td>`).join("")}</tr>`;
+  let html = `<div style="padding:12px 14px"><h3 style="margin:0 0 8px">Tuyến đang chọn · ${esc(score.sequence_source)}</h3>`;
+  html += `<div class="tablewrap"><table><thead>${th(["tầng", "tổng", "chi tiết rule (đã nhân trọng số)"])}</thead><tbody>`;
+  for (const tier of score.tiers)
+    html += td([`Tầng ${tier.tier}`, `<b>${tier.total}</b>`, Object.entries(tier.rules).map(([k, v]) => `${k} ${v}`).join(" · ")]);
+  html += `</tbody></table></div>`;
+  const raw = score.raw;
+  html += `<p class="note">Số nguyên bản: ${raw.km} km · ${raw.travel_minutes}′ đi · trễ hẹn ${raw.late_checkins} việc (${raw.late_minutes}′ trễ) ·
+    trễ hoàn tất ${raw.late_completions} · quá ca ${raw.after_shift} · quay lại lô ${raw.area_reentries} · xong sau ${raw.finish_minutes}′</p>`;
+  html += `<h3 style="margin:12px 0 8px">Phương án khác</h3><div class="tablewrap"><table><thead>${th(["phương án", "tầng 1", "tầng 2", "tầng 3", "km", "kết luận"])}</thead><tbody>`;
+  for (const alt of score.alternatives)
+    html += td([esc(alt.name), alt.tiers[0] ?? "—", alt.tiers[1] ?? "—", alt.tiers[2] ?? "—", alt.raw ? alt.raw.km : "—", esc(alt.verdict)]);
+  html += `</tbody></table></div>`;
+  html += `<p class="note">Tầng 1 = trễ hẹn (luôn xét trước) · tầng 2 = trễ hoàn tất/quá ca · tầng 3 = km + phút đi + ưu tiên để muộn… (nhỏ hơn = tốt hơn)</p></div>`;
+  return html;
+}
+
+function render(result) {
+  const token = ++renderToken;
+  const out = result.out;
+  const message = (() => { try { return JSON.parse(input.value); } catch { return null; } })();
+  const tasks = flattenTasks(message);
+  $("json").textContent = JSON.stringify(out, null, 2);
+  $("log").textContent = `core ${result.revision || "?"} · binary ${result.binary}\nchạy ${result.ms} ms · exit ${result.exit} · OSRM: ${result.osrm ? "có" : "không"}\n\n${result.stdout || ""}${result.stderr || ""}`;
+
+  routeLayer.clearLayers();
+  roadLayer.clearLayers();
+  if (legend) { map.removeControl(legend); legend = null; }
+  if (!out) return showError("không có OUT");
+
+  const code = out.statuscode;
+  $("pills").innerHTML = [
+    `<span class="pill ${code === "200" ? "ok" : code === "424" ? "warn" : "late"}">statuscode ${esc(code)}</span>`,
+    out.data?.metrics ? `<span class="pill blue">${out.data.metrics.tasks_total} việc · ${out.data.metrics.total_distance_km} km</span>` : "",
+    out.data?.metrics ? `<span class="pill">${out.data.metrics.cluster_count} cụm</span>` : "",
+    `<span class="pill">${result.ms} ms</span>`,
+  ].join("");
+
+  if (!out.data) {
+    $("stats").innerHTML = `<div class="stat"><b>${esc(code)}</b><span>${esc(out.message)}</span></div>`;
+    $("table").innerHTML = "";
+    return;
+  }
+
+  const metrics = out.data.metrics;
+  const stat = (value, label) => `<div class="stat"><b>${value}</b><span>${label}</span></div>`;
+  $("stats").innerHTML = [
+    stat(esc(code), "statuscode"),
+    stat(metrics.tasks_total, "việc đã xếp"),
+    stat(metrics.total_distance_km + " km", "tổng đường"),
+    stat(metrics.total_travel_minutes + "′", "thời gian đi"),
+    stat(metrics.finish_at.slice(11, 16), "xong dự kiến"),
+    stat(metrics.on_time_rate_forecast + "%", "đúng hẹn dự kiến"),
+    stat(metrics.breach_forecast_count, "việc trễ"),
+    stat(metrics.cluster_count, "cụm"),
+    stat(metrics.generated_in_ms + " ms", "thời gian tính"),
+  ].join("");
+
+  const warnings = (result.stderr || "").split("\n").filter((l) => /^\s+\d+ × /.test(l));
+  $("warncard").hidden = warnings.length === 0;
+  $("warnings").innerHTML = warnings.map((l) => `<li>${esc(l.trim())}</li>`).join("");
+
+  // ---- bảng lịch trình (cột # = thứ tự toàn tuyến, giống số trên marker)
+  const rows = [];
+  let order = 0;
+  const clusters = out.data.clusters || [];
+  for (const [index, cluster] of clusters.entries()) {
+    const color = COLORS[index % COLORS.length];
+    for (const row of cluster.schedule) {
+      if (row.entry_type === "TASK") {
+        order += 1;
+        rows.push(`<tr><td><b>${order}</b></td><td><span class="dot" style="background:${color}"></span>${esc(cluster.cluster_code)}</td><td>${row.seq}</td>
+          <td>${esc(row.task_type_name)}</td><td class="task">${row.task_id} · ${esc(row.location || "")}</td>
+          <td>${esc(row.start_at.slice(11, 16))} → ${esc(row.end_at.slice(11, 16))}</td>
+          <td>${row.travel_km_before} km</td><td>${row.handle_minutes}′</td>
+          <td><span class="badge ${badgeClass(row.projected_sla)}">${esc(row.projected_sla)}</span></td></tr>`);
+      } else {
+        rows.push(`<tr class="${row.entry_type.toLowerCase()}"><td></td><td>${esc(cluster.cluster_code)}</td><td>${row.seq}</td>
+          <td>${esc(row.entry_type)}</td><td class="task">${esc(row.label || "")}</td>
+          <td>${esc(row.start_at.slice(11, 16))} → ${esc(row.end_at.slice(11, 16))}</td><td></td>
+          <td>${row.duration_minutes}′</td><td></td></tr>`);
+      }
+    }
+  }
+  $("table").innerHTML = `<thead><tr><th>#</th><th>cụm</th><th>seq</th><th>loại</th><th>việc</th><th>giờ</th><th>chặng</th><th>xử lý</th><th>SLA</th></tr></thead><tbody>${rows.join("")}</tbody>`;
+  $("score").innerHTML = scoreHtml(out.data.score);
+
+  // ---- bản đồ
+  const points = [];
+  const legs = [];
+  const staff = message?.staff?.latlng ? message.staff.latlng.split(",").map(Number) : null;
+  let previous = staff;
+  let routeOrder = 0;
+  for (const [index, cluster] of clusters.entries()) {
+    const color = COLORS[index % COLORS.length];
+    for (const row of cluster.schedule) {
+      if (row.entry_type !== "TASK") continue;
+      const [lat, lng] = row.latlng.split(",").map(Number);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      routeOrder += 1;
+      const here = [lat, lng];
+      points.push(here);
+      if (previous) legs.push({ from: previous, to: here, color, label: `${row.travel_km_before} km · ${row.travel_minutes_before} phút` });
+      L.marker(here, {
+        icon: L.divIcon({
+          className: "",
+          html: `<div class="pinbox"><div class="pin" style="--c:${color}">${routeOrder}</div><span class="pintime">${row.start_at.slice(11, 16)}</span></div>`,
+          iconSize: [46, 42],
+          iconAnchor: [23, 13],
+        }),
+      }).bindTooltip(tooltipHtml(row, cluster, color, tasks.get(String(row.task_id)), routeOrder), { sticky: true, opacity: 1, className: "task-tip" })
+        .addTo(routeLayer);
+      previous = here;
+    }
+  }
+  if (staff) {
+    points.push(staff);
+    const where = `${staff[0].toFixed(5)},${staff[1].toFixed(5)}`;
+    L.marker(staff, {
+      icon: L.divIcon({
+        className: "",
+        html: `<div class="pinbox"><div class="pin staff">KTV</div><span class="pintime">${where}</span></div>`,
+        iconSize: [130, 42],
+        iconAnchor: [65, 12],
+      }),
+    }).bindTooltip(`<b>Vị trí KTV ${esc(message.staff.staff_id)}</b><br>Tọa độ: ${where}<br>Tài khoản: ${esc(message.staff.staff_account || "—")}<br>Ca: ${esc(message.staff.available)}`,
+                   { sticky: true, opacity: 1, className: "task-tip" })
+      .addTo(routeLayer);
+  }
+  if (points.length) map.fitBounds(L.latLngBounds(points).pad(0.18));
+
+  legend = L.control({ position: "bottomright" });
+  legend.onAdd = () => {
+    const div = L.DomUtil.create("div", "legend");
+    div.innerHTML = "<b>cụm</b>" + clusters.map((c, i) =>
+      `<div><span class="dot" style="background:${COLORS[i % COLORS.length]}"></span>${esc(c.cluster_code)} · ${esc(c.name.replace(/^Cluster \d+ — /, ""))} · ${c.task_count} việc · ${c.travel_km_inbound + c.travel_km_internal} km</div>`
+    ).join("") + `<div style="margin:4px 0;color:var(--muted)">số trên marker = thứ tự toàn tuyến · giờ check-in ngay dưới số</div>`
+      + `<div style="color:var(--muted)">tổng ${metrics.total_distance_km} km · ${metrics.tasks_total} việc</div>`;
+    return div;
+  };
+  legend.addTo(map);
+
+  // Đường bộ thật (OSRM /route, từng chặng); chặng lỗi mới nối thẳng.
+  drawRoads(legs, token);
+}
+
+// Chặng không lấy được đường bộ (hoặc tắt ô "Đường bộ"): nối thẳng nét đứt.
+function legFallback(leg) {
+  L.polyline([leg.from, leg.to], { color: leg.color, weight: 3, opacity: .5, dashArray: "5 7" })
+    .bindTooltip(leg.label, { sticky: true })
+    .addTo(routeLayer);
+}
+
+async function drawRoads(legs, token) {
+  if (!$("road").checked || !legs.length) { legs.forEach(legFallback); return; }
+  const pill = document.createElement("span");
+  pill.className = "pill blue";
+  $("pills").appendChild(pill);
+  let drawn = 0;
+  for (const [index, leg] of legs.entries()) {
+    if (token !== renderToken) { pill.remove(); return; }  // có lần tính mới: bỏ lượt vẽ cũ
+    pill.textContent = `đường bộ ${index + 1}/${legs.length}…`;
+    let points = null;
+    try {
+      const result = await (await fetch(`/road?from=${leg.from}&to=${leg.to}`)).json();
+      if (result.points && result.points.length > 1) points = result.points;
+    } catch { /* rơi về nối thẳng */ }
+    if (points) {
+      L.polyline(points, { color: leg.color, weight: 5, opacity: .9 })
+        .bindTooltip(leg.label, { sticky: true })
+        .addTo(roadLayer);
+      drawn += 1;
+    } else {
+      legFallback(leg);
+    }
+  }
+  pill.textContent = `đường bộ ${drawn}/${legs.length} chặng`;
+  setTimeout(() => pill.remove(), 5000);
+}
+
+// tabs + nút
+document.querySelectorAll(".tabs button[data-tab]").forEach((button) => button.onclick = () => {
+  document.querySelectorAll(".tabs button[data-tab]").forEach((b) => b.classList.toggle("active", b === button));
+  for (const name of ["json", "table", "score", "log"]) $("tab-" + name).hidden = name !== button.dataset.tab;
+});
+$("run").onclick = run;
+$("load").onclick = loadSample;
+$("copy").onclick = () => navigator.clipboard.writeText($("json").textContent);
+$("collapse").onclick = () => {
+  const panel = $("outpanel");
+  panel.classList.toggle("collapsed");
+  $("collapse").textContent = panel.classList.contains("collapsed") ? "Mở rộng" : "Thu gọn";
+  setTimeout(() => map.invalidateSize(), 50);
+};
+input.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") run(); });
+input.addEventListener("input", () => { $("stale").hidden = lastRunText === null || input.value === lastRunText; });
+
+loadSample().then(run);
+</script>
+</body>
+</html>
