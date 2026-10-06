@@ -18,11 +18,16 @@ Minutes end_of_month(Minutes t) {
 }
 
 int day_of_month(Minutes t) { return std::stoi(format_datetime(t).substr(8, 2)); }
+int month_index(Minutes t) {  // năm × 12 + tháng: tháng liền trước = index − 1 (qua năm cũng đúng)
+    const std::string text = format_datetime(t);
+    return std::stoi(text.substr(0, 4)) * 12 + std::stoi(text.substr(5, 2));
+}
 
-// Mục E (thu bill): ngày-trong-tháng KH thanh toán kỳ trước trùng ngày chạy → đến hạn hôm nay. Chỉ so ngày, không kiểm
-// tháng (OA chọn lần thanh toán, gửi lần gần nhất — [GIẢ ĐỊNH]); ngày 31 ở tháng 30 ngày → quy về ngày cuối tháng này.
+// Mục E (thu bill): complete_date + 1 tháng == ngày chạy — KH thanh toán ĐÚNG THÁNG TRƯỚC, cùng ngày-trong-tháng
+// (7.17b, người dùng chốt). Ngày 31 ở tháng 30 ngày → quy về ngày cuối tháng này (catalogue).
 bool paid_day_today(Minutes paid, Minutes now) {
-    return std::min(day_of_month(paid), day_of_month(end_of_month(now))) == day_of_month(now);
+    return month_index(paid) + 1 == month_index(now) &&
+           std::min(day_of_month(paid), day_of_month(end_of_month(now))) == day_of_month(now);
 }
 
 }  // namespace

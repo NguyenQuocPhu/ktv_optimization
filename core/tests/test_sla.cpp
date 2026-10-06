@@ -133,7 +133,7 @@ int main() {
         }
     }
 
-    {  // Mục E (7.17): hoa_don thanh toán kỳ trước trùng ngày-trong-tháng ngày chạy → hạn cuối hôm nay.
+    {  // Mục E (7.17b): hoa_don thanh toán đúng tháng trước, cùng ngày-trong-tháng ngày chạy → hạn cuối hôm nay.
         const TaskKind* bill = find_kind("hoa_don", "hoa_don_tra_sau");
         CHECK(bill);
         const auto deadline = [&](const TaskKind& kind, const char* paid, const char* run, bool appointment = false) {
@@ -145,7 +145,9 @@ int main() {
         };
         CHECK(deadline(*bill, "2026-09-12 10:00:00", "2026-10-12 09:00:00") == "2026-10-12 23:59:00");  // trùng 12
         CHECK(deadline(*bill, "2026-09-25 10:00:00", "2026-10-12 09:00:00") == "2026-10-31 23:59:00");  // lệch → cuối tháng
-        CHECK(deadline(*bill, "2026-08-12 10:00:00", "2026-10-12 09:00:00") == "2026-10-12 23:59:00");  // chỉ so ngày, không so tháng
+        CHECK(deadline(*bill, "2026-08-12 10:00:00", "2026-10-12 09:00:00") == "2026-10-31 23:59:00");  // không phải tháng trước
+        CHECK(deadline(*bill, "2026-10-12 10:00:00", "2026-10-12 09:00:00") == "2026-10-31 23:59:00");  // cùng tháng → không áp
+        CHECK(deadline(*bill, "2026-12-05 10:00:00", "2027-01-05 09:00:00") == "2027-01-05 23:59:00");  // qua năm
         CHECK(deadline(*bill, "2026-10-31 10:00:00", "2026-11-30 09:00:00") == "2026-11-30 23:59:00");  // 31 → cuối tháng 30 ngày
         CHECK(deadline(*bill, "2026-10-31 10:00:00", "2026-11-29 09:00:00") != "2026-11-29 23:59:00");  // 29 ≠ 30: không đến hạn hôm nay
         CHECK(deadline(*bill, "2026-09-12 10:00:00", "2026-10-12 09:00:00", true) == "2026-10-12 23:59:00");  // có hẹn: theo hẹn
