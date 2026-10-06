@@ -1,8 +1,10 @@
 #include "ktv/plan.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
+#include <map>
 #include <numeric>
 #include <string>
 
@@ -139,6 +141,126 @@ std::string one_decimal(double value) {
     return text;
 }
 
+// ---- 7.16.3: gom ca cùng địa chỉ thành một điểm dừng (chạy trước QHĐ) ----
+// Một điểm dừng: 1 ca lẻ, hoặc nhóm ca cùng địa chỉ (mã OA `ma_diem_dung_gop`, hoặc tự gom khi thiếu mã).
+struct Stop {
+    std::vector<const Task*> tasks;  // đã sắp thứ tự nội bộ (ưu tiên asc → TGXL asc → task_id)
+    std::string code;                // mã nhóm để trả ra OUT; rỗng = ca lẻ
+};
+
+int stop_service(const Task& task) {
+    const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
+    return task.handle_minutes.value_or(kind.handle_minutes);
+}
+
+// Địa chỉ chuẩn hoá để so khi hai ca trùng toạ độ (catalogue: "toạ độ trùng nhau hoặc thiếu thì đối chiếu địa chỉ").
+std::string normalized_address(const std::string& text) {
+    std::string out;
+    bool space = false;
+    for (char ch : text) {
+        if (std::isspace(static_cast<unsigned char>(ch))) {
+            space = !out.empty();
+            continue;
+        }
+        if (space) {
+            out += ' ';
+            space = false;
+        }
+        out += static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return out;
+}
+
+// Cùng một địa chỉ khách? ≤ bán kính là cùng (catalogue 50 m); riêng trùng toạ độ thì phải khớp địa chỉ
+// (dữ liệu giả hay dùng chung tâm phường — không gom hai khách khác nhau chỉ vì chung toạ độ).
+bool same_address(const Task& a, const Task& b, double radius_km) {
+    const double km = distance_km(*a.latlng, *b.latlng);
+    if (km > radius_km) return false;
+    if (km > 0.001) return true;
+    return normalized_address(a.location) == normalized_address(b.location);
+}
+
+// Thứ tự nội bộ nhóm: ưu tiên trong ngày (1 cao nhất) → TGXL ngắn trước → task_id (tất định).
+void sort_stop_tasks(std::vector<const Task*>& tasks) {
+    std::sort(tasks.begin(), tasks.end(), [](const Task* a, const Task* b) {
+        if (a->priority_in_day != b->priority_in_day) return a->priority_in_day < b->priority_in_day;
+        const int sa = stop_service(*a), sb = stop_service(*b);
+        if (sa != sb) return sa < sb;
+        return a->task_id < b->task_id;
+    });
+}
+
+// Gom nhóm: ưu tiên mã của OA; thiếu mã thì tự gom theo địa chỉ (rules.group_by_address); còn lại là ca lẻ.
+std::vector<Stop> build_stops(const std::vector<const Task*>& tasks, const Rules& rules) {
+    std::vector<Stop> stops;
+    std::vector<bool> used(tasks.size(), false);
+    std::map<std::string, size_t> by_code;
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        const std::string& code = tasks[i]->stop_group;
+        if (code.empty()) continue;
+        auto [found, inserted] = by_code.emplace(code, stops.size());
+        if (inserted) stops.push_back({{}, code});
+        stops[found->second].tasks.push_back(tasks[i]);
+        used[i] = true;
+    }
+    if (rules.group_by_address) {
+        const double radius_km = rules.stop_group_radius_m / 1000.0;
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            if (used[i]) continue;
+            Stop stop{{tasks[i]}, {}};
+            used[i] = true;
+            for (size_t j = i + 1; j < tasks.size(); ++j)
+                if (!used[j] && same_address(*tasks[i], *tasks[j], radius_km)) {
+                    stop.tasks.push_back(tasks[j]);
+                    used[j] = true;
+                }
+            stops.push_back(std::move(stop));
+        }
+    }
+    for (size_t i = 0; i < tasks.size(); ++i)
+        if (!used[i]) stops.push_back({{tasks[i]}, {}});
+    for (Stop& stop : stops)
+        if (stop.tasks.size() > 1) sort_stop_tasks(stop.tasks);
+    return stops;
+}
+
+// Nhóm có phục vụ liền nhau được không: bắt đầu tại mốc A sớm nhất (đến sớm nhất có thể), ca thứ k check-in
+// tại giờ bắt đầu + Σ TGXL trước nó; phải chờ ≤ stop_group_max_wait_minutes và không quá mốc B của chính nó.
+// Không đạt → tách từng ca (ngoại lệ catalogue "2 hẹn không thể làm liền nhau"). [GIẢ ĐỊNH: ngưỡng chờ của repo]
+bool group_servable(const Stop& stop, const Rules& rules, Minutes now) {
+    const Task* anchor = nullptr;
+    for (const Task* task : stop.tasks)
+        if (task->appointment && (!anchor || *task->appointment < *anchor->appointment)) anchor = task;
+    if (!anchor) return true;  // không ca nào có hẹn → phục vụ liền nhau luôn được
+    Minutes clock = *anchor->appointment;
+    for (const Task* task : stop.tasks) {
+        const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);
+        const Deadlines d = resolve_deadlines(*task, kind, now);
+        Minutes checkin = clock;
+        if (d.opens && *d.opens > checkin) checkin = *d.opens;
+        if (checkin - clock > rules.stop_group_max_wait_minutes) return false;
+        if (d.due && checkin > *d.due) return false;
+        clock = checkin + stop_service(*task);
+    }
+    return true;
+}
+
+// Ca neo của điểm dừng: ca có mốc hẹn A sớm nhất (catalogue: "neo theo khung giờ hẹn sớm nhất"); không ai có hẹn → ca đầu.
+const Task& stop_anchor(const Stop& stop) {
+    const Task* anchor = stop.tasks.front();
+    for (const Task* task : stop.tasks)
+        if (task->appointment && (!anchor->appointment || *task->appointment < *anchor->appointment)) anchor = task;
+    return *anchor;
+}
+
+// Ca "hoàn tất trong tháng" còn hơn K ngày làm việc → không xếp (7.16.1; nhóm cùng địa chỉ được xét ở ngoài).
+bool beyond_k(const Task& task, Minutes now, const Rules& rules) {
+    const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
+    if (kind.on_time != OnTime::DoneWithinMonth) return false;
+    const Deadlines d = resolve_deadlines(task, kind, now);
+    return d.complete_by && workdays_until(now, *d.complete_by) > rules.k_month_days;
+}
+
 // Một câu tiếng Việt ngắn vì sao phương án này không được chọn (so với tuyến đang chạy).
 std::string verdict_of(const Explained& chosen, const Alternative& alt) {
     if (!alt.explained.feasible) return "không xếp được: vi phạm luật nghỉ trưa";
@@ -178,21 +300,34 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         result.response = error_response("422", why, message.message_id, server_now);
         return result;
     }
-    // 7.16.1: ca "hoàn tất trong tháng" còn hơn K ngày làm việc thì không xếp; trả về danh sách ca không chèn được.
-    std::vector<const Task*> tasks;
-    std::vector<long long> unplaced;
-    tasks.reserve(worklist.candidates.size());
-    for (const Task* task : worklist.candidates) {
-        const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);
-        const Deadlines deadlines = resolve_deadlines(*task, kind, now);
-        if (kind.on_time == OnTime::DoneWithinMonth && deadlines.complete_by &&
-            workdays_until(now, *deadlines.complete_by) > rules.k_month_days) {
-            unplaced.push_back(task->task_id);
+    // 7.16.3: gom ca cùng địa chỉ thành điểm dừng TRƯỚC khi lọc K (catalogue mục C: K không áp cho ca cùng địa chỉ
+    // với ca khác đang được làm). Nhóm không phục vụ liền nhau được → tách từng ca + cảnh báo.
+    std::vector<Stop> stops = build_stops(worklist.candidates, rules);
+    std::vector<Stop> grouped;
+    for (Stop& stop : stops) {
+        if (stop.tasks.size() > 1 && !group_servable(stop, rules, now)) {
+            result.warnings.push_back({"", "nhóm cùng địa chỉ không phục vụ liền nhau được, tách từng ca", "STOP_GROUP_SPLIT"});
+            for (const Task* task : stop.tasks) grouped.push_back({{task}, {}});
             continue;
         }
-        tasks.push_back(task);
+        grouped.push_back(std::move(stop));
     }
-    result.routed = static_cast<int>(tasks.size());
+    // 7.16.1 + mục C: ca tháng > K bị lọc chỉ khi nhóm của nó không còn ca nào khác được xếp.
+    std::vector<long long> unplaced;
+    std::vector<Stop> routed_stops;
+    int auto_code = 0;
+    for (Stop& stop : grouped) {
+        bool any_kept = false;
+        for (const Task* task : stop.tasks) any_kept |= !beyond_k(*task, now, rules);
+        if (!any_kept) {
+            for (const Task* task : stop.tasks) unplaced.push_back(task->task_id);
+            continue;
+        }
+        if (stop.code.empty() && stop.tasks.size() > 1) stop.code = "auto-" + std::to_string(++auto_code);
+        routed_stops.push_back(std::move(stop));
+    }
+    result.routed = 0;
+    for (const Stop& stop : routed_stops) result.routed += static_cast<int>(stop.tasks.size());
     result.excluded = worklist.stats.excluded_missing_location;
 
     const Minutes shift_start = day + staff.available.front().first;
@@ -200,41 +335,55 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     Minutes start = std::max(now, shift_start);
     if (worklist.current_task) start = std::max(start, now + static_cast<Minutes>(rules.current_task_minutes));
 
-    if (tasks.empty() || tasks.size() > 64) {
-        result.response = error_response("422", tasks.empty() ? "Không có công việc để dựng tuyến" : "Quá 64 việc cho một KTV",
+    if (routed_stops.empty() || routed_stops.size() > 64) {
+        result.response = error_response("422", routed_stops.empty() ? "Không có công việc để dựng tuyến" : "Quá 64 việc cho một KTV",
                                          message.message_id, server_now);
         return result;
     }
 
-    // ---- Bài toán số: mọi mốc giờ đổi về phút kể từ lúc xuất phát.
+    // ---- Bài toán số: mọi mốc giờ đổi về phút kể từ lúc xuất phát. Mỗi điểm dừng = một "việc" của QHĐ.
     Problem p;
     std::vector<Point> points{staff.latlng};
     auto relative = [&](std::optional<Minutes> t) { return t ? static_cast<double>(*t - start) : kNone; };
-    for (const Task* task : tasks) {
-        const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);  // Ngoài danh mục: chỉ lọt qua khi nới lỏng.
-        Deadlines d = resolve_deadlines(*task, kind, now);
-        points.push_back(*task->latlng);
-
-        p.service.push_back(task->handle_minutes.value_or(kind.handle_minutes));
-        p.opens.push_back(relative(d.opens));
-        p.due.push_back(relative(d.due));
-        p.complete_by.push_back(relative(d.complete_by));
-        p.weight.push_back(rules.priority_weight[task->priority_in_day]);
-        // 7.16.2: độ gấp cho ca chèn = K − số ngày làm việc còn lại (ca chính / không có hạn → 0).
-        const int days_left = d.complete_by ? workdays_until(now, *d.complete_by) : 0;
-        p.urgency.push_back(kind.extra && d.complete_by ? std::max(0, rules.k_month_days - days_left) : 0);
+    for (const Stop& stop : routed_stops) {
+        points.push_back(*stop_anchor(stop).latlng);
+        int service = 0;
+        std::optional<Minutes> opens, due, complete_by;
+        double weight = 0, urgency = 0;
+        for (const Task* task : stop.tasks) {
+            const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);  // Ngoài danh mục: chỉ lọt qua khi nới lỏng.
+            const Deadlines d = resolve_deadlines(*task, kind, now);
+            service += task->handle_minutes.value_or(kind.handle_minutes);
+            if (d.opens && (!opens || *d.opens < *opens)) opens = d.opens;
+            // min B (chặt hơn câu chữ catalogue "mốc B của ca neo"): tuyến tới muộn vẫn không vi phạm B của ca nào trong nhóm.
+            if (d.due && (!due || *d.due < *due)) due = d.due;
+            if (d.complete_by && (!complete_by || *d.complete_by < *complete_by)) complete_by = d.complete_by;
+            weight = std::max(weight, rules.priority_weight[task->priority_in_day]);
+            // 7.16.2: độ gấp cho ca chèn = K − số ngày làm việc còn lại (ca chính / không có hạn → 0); nhóm lấy max.
+            const int days_left = d.complete_by ? workdays_until(now, *d.complete_by) : 0;
+            const double own = kind.extra && d.complete_by ? static_cast<double>(std::max(0, rules.k_month_days - days_left)) : 0.0;
+            urgency = std::max(urgency, own);
+        }
+        p.service.push_back(service);
+        p.opens.push_back(relative(opens));
+        p.due.push_back(relative(due));
+        p.complete_by.push_back(relative(complete_by));
+        p.weight.push_back(weight);
+        p.urgency.push_back(urgency);
     }
     // Khu vực cho rule "quay lại khu vực đã rời" (AREA_REENTRY): biết lô → theo lô; lô 0 → lùi xuống block
     // (workbook (3): "không có lô thì tính ưu tiên xuống block_id"), chỉ so với task lô 0 khác; lô 0 + block 0 → không
     // thuộc khu vực nào. Task biết lô không gộp với task lô 0 cùng block (thận trọng, giữ như trước 2026-10-02).
+    // 7.16.3: điểm dừng lấy lô của ca neo (các ca cùng nhóm cùng địa chỉ nên cùng khu vực).
     auto same_area = [](const Task& a, const Task& b) {
         if (a.task_plots_id != 0 || b.task_plots_id != 0) return a.task_plots_id != 0 && a.task_plots_id == b.task_plots_id;
         return a.block_id != 0 && a.block_id == b.block_id;
     };
-    for (size_t i = 0; i < tasks.size(); ++i) {
+    for (size_t i = 0; i < routed_stops.size(); ++i) {
         uint64_t mask = 0;
-        for (size_t j = 0; j < tasks.size(); ++j)
-            if (j != i && same_area(*tasks[i], *tasks[j])) mask |= uint64_t{1} << j;
+        for (size_t j = 0; j < routed_stops.size(); ++j)
+            if (j != i && same_area(stop_anchor(routed_stops[i]), stop_anchor(routed_stops[j])))
+                mask |= uint64_t{1} << j;
         p.same_area.push_back(mask);
     }
     p.shift_end = static_cast<double>(shift_end - start);
@@ -266,14 +415,15 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     const double now_rel = static_cast<double>(now - start);
     int at_risk = 0, breach = 0, completed = 0, revisits = 0;
     double km = 0, travel = 0, handle = 0, idle = 0, rest = 0;
-    std::vector<const Visit*> visits;  // Chỉ các bước tới việc thật (bỏ nghỉ trưa).
+    std::vector<const Visit*> visits;  // Chỉ các bước tới điểm dừng thật (bỏ nghỉ trưa).
     for (const Visit& v : steps)
         if (v.task != kBreak) visits.push_back(&v);
-    const int total = static_cast<int>(visits.size());
+    int total = 0;  // số CA (không phải số điểm dừng) — giữ contract tasks_total
+    for (const Stop& stop : routed_stops) total += static_cast<int>(stop.tasks.size());
 
-    std::vector<ojson> rows;       // IDLE / BREAK / TASK theo đúng thứ tự thời gian.
-    std::vector<int> row_task;     // Với mỗi row: TASK gần nhất tại/trước nó (-1 nếu trước TASK đầu).
-    std::vector<TaskStop> stops;   // Chỉ TASK, cho summarize_clusters.
+    std::vector<ojson> rows;           // IDLE / BREAK / TASK theo đúng thứ tự thời gian.
+    std::vector<int> row_task;         // Với mỗi row: TASK gần nhất tại/trước nó (-1 nếu trước TASK đầu).
+    std::vector<TaskStop> task_stops;  // Chỉ TASK, cho summarize_clusters.
     int task_ordinal = -1;
     for (const Visit& v : steps) {
         if (at(v.checkin) > at(v.arrive)) {  // Tới sớm hơn mốc hẹn / giờ nghỉ: chờ.
@@ -292,35 +442,49 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
             row_task.push_back(task_ordinal);
             continue;
         }
-        const Task& task = *tasks[v.task];
-        const char* sla = projected_sla(v.checkin, v.done, p.due[v.task], p.complete_by[v.task], p.service[v.task], now_rel, rules);
-        at_risk += std::string(sla) == "AT_RISK";
-        breach += std::string(sla) == "WILL_BREACH" || std::string(sla) == "ALREADY_BREACHED";
-        completed += at(v.done) <= shift_end;
-        revisits += static_cast<int>(v.cost[AREA_REENTRY]);
+        // 7.16.3: một điểm dừng = một hoặc nhiều ca cùng địa chỉ; bung từng ca, giờ nối tiếp, km chỉ ở ca đầu.
+        const Stop& stop = routed_stops[v.task];
         km += v.km;
         travel += v.travel;
-        handle += p.service[v.task];
-        ++task_ordinal;
-        stops.push_back({&task, v.km, p.service[v.task]});
-        rows.push_back({{"entry_type", "TASK"}, {"at", hhmm(at(v.checkin))},
-                        {"start_at", format_datetime(at(v.checkin))}, {"end_at", format_datetime(at(v.done))},
-                        {"task_id", task.task_id}, {"location", task.location},
-                        {"latlng", latlng(*task.latlng, 6)},  // task đã qua lọc nên luôn có tọa độ
-                        {"task_group_id", task.task_group_id},
-                        {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
-                        {"task_type_name", task.task_type_name}, {"task_sub_id", task.task_sub_id},
-                        {"task_sub_name", task.task_sub_name}, {"checkindate", ""}, {"checkoutdate", ""},
-                        {"travel_minutes_before", std::llround(v.travel)}, {"travel_km_before", round_to(v.km, 1)},
-                        {"handle_minutes", std::llround(p.service[v.task])}, {"projected_sla", sla},
-                        // Như input (người dùng chốt 7.9): số vẫn là số, chuỗi giữ nguyên; không gửi / null → null.
-                        {"contract_id", or_null(task.contract_id)}, {"contract_no", or_null(task.contract_no)}});
-        row_task.push_back(task_ordinal);
+        revisits += static_cast<int>(v.cost[AREA_REENTRY]);
+        double offset = 0;  // phút kể từ lúc check-in điểm dừng
+        for (size_t k = 0; k < stop.tasks.size(); ++k) {
+            const Task& task = *stop.tasks[k];
+            const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
+            const Deadlines d = resolve_deadlines(task, kind, now);
+            const double service = task.handle_minutes.value_or(kind.handle_minutes);
+            const double checkin = v.checkin + offset;
+            const double done = checkin + service;
+            const char* sla = projected_sla(checkin, done, relative(d.due), relative(d.complete_by), service, now_rel, rules);
+            at_risk += std::string(sla) == "AT_RISK";
+            breach += std::string(sla) == "WILL_BREACH" || std::string(sla) == "ALREADY_BREACHED";
+            completed += at(done) <= shift_end;
+            handle += service;
+            ++task_ordinal;
+            task_stops.push_back({&task, k == 0 ? v.km : 0.0, service});
+            ojson row = {{"entry_type", "TASK"}, {"at", hhmm(at(checkin))},
+                         {"start_at", format_datetime(at(checkin))}, {"end_at", format_datetime(at(done))},
+                         {"task_id", task.task_id}, {"location", task.location},
+                         {"latlng", latlng(*task.latlng, 6)},  // task đã qua lọc nên luôn có tọa độ
+                         {"task_group_id", task.task_group_id},
+                         {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
+                         {"task_type_name", task.task_type_name}, {"task_sub_id", task.task_sub_id},
+                         {"task_sub_name", task.task_sub_name}, {"checkindate", ""}, {"checkoutdate", ""},
+                         {"travel_minutes_before", k == 0 ? std::llround(v.travel) : 0},
+                         {"travel_km_before", k == 0 ? round_to(v.km, 1) : 0.0},
+                         {"handle_minutes", std::llround(service)}, {"projected_sla", sla},
+                         // Như input (người dùng chốt 7.9): số vẫn là số, chuỗi giữ nguyên; không gửi / null → null.
+                         {"contract_id", or_null(task.contract_id)}, {"contract_no", or_null(task.contract_no)}};
+            if (stop.tasks.size() > 1) row["ma_diem_dung_gop"] = stop.code;  // 7.16.3: FE gộp hiển thị
+            rows.push_back(std::move(row));
+            row_task.push_back(task_ordinal);
+            offset += service;
+        }
     }
 
     // ---- Cụm: tóm tắt theo TASK, rồi gắn dòng timeline vào cụm (không đổi thứ tự).
-    const std::vector<ClusterSummary> summaries = summarize_clusters(stops, staff.plots);
-    std::vector<int> cluster_of_task(stops.size());
+    const std::vector<ClusterSummary> summaries = summarize_clusters(task_stops, staff.plots);
+    std::vector<int> cluster_of_task(task_stops.size());
     for (int c = 0; c < static_cast<int>(summaries.size()); ++c)
         for (int k = summaries[c].first_task; k < summaries[c].first_task + summaries[c].task_count; ++k)
             cluster_of_task[k] = c;

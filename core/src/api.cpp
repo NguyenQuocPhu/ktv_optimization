@@ -422,7 +422,7 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                     {"task_id", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
                      "task_sub_name", "task_status_id", "task_status_name", "sla", "appointment", "create_date",
                      "CreateDate", "complete_date", "location", "latlng", "handle_minutes", "task_plots_id", "staff_plots_id",
-                     "staff_role", "block_id", "location_id", "contract_id", "contract_no"});
+                     "staff_role", "block_id", "location_id", "contract_id", "contract_no", "ma_diem_dung_gop"});
             Task t;
             t.task_id = tr.integer<long long>(item, path, "task_id");
             t.task_group_id = tr.integer<int>(item, path, "task_group_id");
@@ -478,6 +478,8 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                 if (item["contract_no"].is_string()) t.contract_no = item["contract_no"].get<std::string>();
                 else tr.fail(path + ".contract_no", "cần chuỗi hoặc null");
             }
+            if (item.contains("ma_diem_dung_gop") && item["ma_diem_dung_gop"].is_string())
+                t.stop_group = item["ma_diem_dung_gop"].get<std::string>();  // 7.16.3: mã nhóm ca cùng địa chỉ (OA gán)
             if (!item.contains("latlng")) {
                 tr.fail(path + ".latlng", "thiếu field bắt buộc");
             } else if (const json& value = item["latlng"]; !(value.is_string() && value.get_ref<const std::string&>().empty())) {

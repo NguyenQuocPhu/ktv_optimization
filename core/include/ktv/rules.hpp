@@ -59,6 +59,10 @@ struct Rules {
     int max_exact_tasks = 12;      // Tới ngần này việc thì QHĐ ra thứ tự tốt nhất; nhiều hơn dùng tham lam (12 việc: chậm nhất ~0,1 s).
     int max_labels = 32;           // Mỗi trạng thái QHĐ giữ tối đa ngần này nhãn; vượt thì kết quả gần đúng.
     int k_month_days = 5;          // 7.16.1: ca "hoàn tất trong tháng" còn hơn ngần này ngày làm việc thì không xếp (K theo catalogue). [GIẢ ĐỊNH]
+    // 7.16.3 — gộp điểm dừng cùng địa chỉ (catalogue mục C).
+    bool group_by_address = true;          // OA chưa gán mã nhóm → tự gom theo địa chỉ. [GIẢ ĐỊNH: bật]
+    double stop_group_radius_m = 50;       // Bán kính coi là cùng địa chỉ (tham số cấu hình catalogue, sheet 1).
+    int stop_group_max_wait_minutes = 30;  // Ca trong nhóm phải chờ quá ngần này thì tách nhóm. [GIẢ ĐỊNH của repo]
     double current_task_minutes = 30;  // Việc đang làm còn bao lâu nữa xong. [GIẢ ĐỊNH]
     double average_speed_kmh = 30;     // Đổi km chim bay ra phút khi không dùng OSRM.
     double at_risk_minutes = 20;       // projected_sla = AT_RISK khi còn dư dưới ngần này phút...

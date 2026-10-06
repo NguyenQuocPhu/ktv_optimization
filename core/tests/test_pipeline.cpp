@@ -135,20 +135,20 @@ int main() {
         auto r2 = run(without);
         CHECK(r2 && first_sla(r2->response) == "ON_TIME");
     }
-    {  // Hơn max_exact_tasks → heuristic, vẫn phủ đủ mọi việc.
+    {  // Hơn max_exact_tasks → heuristic, vẫn phủ đủ mọi việc. (Toạ độ cách ~1,1 km để không bị gom điểm dừng 7.16.3.)
         json tasks = json::array();
         for (int i = 0; i < 13; ++i)
             tasks.push_back(task(100 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "",
-                                 ("21.03" + std::to_string(i) + ",105.81").c_str(), ""));
+                                 ("21." + std::to_string(30 + i) + ",105.81").c_str(), ""));
         auto r = run(message("2026-09-10 09:00:00", none, tasks, none, none, none));
         CHECK(r && r->source == ktv::Source::Heuristic);
         CHECK(r && r->response["data"]["metrics"]["tasks_total"] == 13);
     }
-    {  // Quá 64 việc → 422.
+    {  // Quá 64 điểm dừng → 422.
         json tasks = json::array();
         for (int i = 0; i < 65; ++i)
             tasks.push_back(task(200 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "",
-                                 ("21.03" + std::to_string(i) + ",105.82").c_str(), ""));
+                                 ("21." + std::to_string(30 + i) + ",105.82").c_str(), ""));
         auto r = run(message("2026-09-10 09:00:00", none, tasks, none, none, none));
         CHECK(r && r->response["statuscode"] == "422" && r->response["data"].is_null());
     }

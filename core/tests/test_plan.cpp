@@ -131,6 +131,31 @@ int main() {
     // Ngày 28/09 (2 ngày làm việc ≤ K) thì hóa đơn vẫn xếp, danh sách không chèn được rỗng — đã kiểm ở trên.
     CHECK(r["data"]["ca_vu_khong_chen_duoc"].empty());
 
+    {  // 7.16.3: gom ca cùng địa chỉ thành một điểm dừng; ca tháng > K vẫn được gom theo ca khác cùng địa chỉ (K không áp).
+        json data = message();
+        data["planned_at"] = "2026-09-10 09:20:00";
+        data["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 14:00:00";
+        json& hoa = data["tasks"]["hoa_don"][0];
+        hoa["latlng"] = "21.0122,105.7995";  // trùng toạ độ với việc triển khai
+        hoa["location"] = "Trần Duy Hưng";
+        hoa["ma_diem_dung_gop"] = "g1";  // mã nhóm do OA gán (parse + echo)
+        data["tasks"]["trien_khai"][0]["ma_diem_dung_gop"] = "g1";
+        errors.clear();
+        ktv::PlanResult grouped = ktv::plan(ktv::parse_message(data, errors), ktv::default_rules(), server_now, "", true);
+        CHECK(errors.empty());
+        CHECK(grouped.response["data"]["metrics"]["tasks_total"] == 2);
+        CHECK(grouped.response["data"]["ca_vu_khong_chen_duoc"].empty());  // hóa đơn còn 14 ngày > K nhưng được gom nên không lọc
+        std::vector<json> task_rows;
+        for (const auto& cluster : grouped.response["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row["entry_type"] == "TASK") task_rows.push_back(row);
+        CHECK(task_rows.size() == 2);
+        CHECK(task_rows[0]["task_id"] == 5454541 && task_rows[1]["task_id"] == 5454544);  // trong nhóm: ưu tiên P3 trước P4
+        CHECK(task_rows[0]["ma_diem_dung_gop"] == "g1" && task_rows[1]["ma_diem_dung_gop"] == "g1");
+        CHECK(task_rows[0]["end_at"] == task_rows[1]["start_at"]);
+        CHECK(task_rows[1]["travel_km_before"] == 0.0);  // km chỉ tính ở ca đầu của điểm dừng
+    }
+
     if (failures) std::cerr << failures << " lỗi\n" << r.dump(2) << "\n";
     else std::cout << "test_plan: OK\n";
     return failures != 0;
