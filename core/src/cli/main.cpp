@@ -1,6 +1,6 @@
 // CLI của lõi C++ (adapter local, chưa có Kafka).
 // Input: một object JSON (pretty-printed) hoặc file JSONL, mỗi record là một message API (một KTV).
-//   ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"] [--out responses.jsonl]
+//   ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"] [--out responses.jsonl] [--explain]
 //   ktv_core validate <input>
 //   ktv_core print-rules
 // Output mỗi record là một response OUT prototype (message_id, run_code, trigger, ..., data).
@@ -20,7 +20,7 @@ namespace {
 
 
 int usage() {
-    std::cerr << "cách dùng:\n  ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"] [--out responses.jsonl]\n"
+    std::cerr << "cách dùng:\n  ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"] [--out responses.jsonl] [--explain]\n"
                  "  ktv_core validate <input>\n  ktv_core print-rules\n";
     return 2;
 }
@@ -31,12 +31,14 @@ int main(int argc, char** argv) {
     if (argc < 2) return usage();
     std::string command = argv[1];
     std::string input, rules_path, out_path, osrm_url, at;
+    bool explain = false;
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--rules" && i + 1 < argc) rules_path = argv[++i];
         else if (arg == "--out" && i + 1 < argc) out_path = argv[++i];
         else if (arg == "--osrm" && i + 1 < argc) osrm_url = argv[++i];
         else if (arg == "--at" && i + 1 < argc) at = argv[++i];
+        else if (arg == "--explain") explain = true;
         else if (input.empty() && arg[0] != '-') input = arg;
         else return usage();
     }
@@ -92,7 +94,7 @@ int main(int argc, char** argv) {
             response = ktv::bad_request(errors, envelope.message_id, server_now);
             if (shown++ < 20) std::cerr << "record " << i + 1 << ": " << response["message"].get<std::string>() << "\n";
         } else if (command == "plan") {
-            ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url);
+            ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url, explain);
             response = std::move(result.response);
             for (const ktv::Error& warning : result.warnings) ++issues[ktv::issue_key(warning)];
             if (response["success"]) {

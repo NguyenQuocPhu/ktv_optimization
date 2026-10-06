@@ -44,7 +44,10 @@ struct PlanResult {
 
 // HÀM CHÍNH. server_now: giờ VN hiện tại, dùng khi message không có planned_at và cho server_time.
 // osrm_url rỗng: chim bay. Có: gọi OSRM; lỗi thì chim bay × 1,3 và trả mã 424 (vẫn có tuyến).
-PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, const std::string& osrm_url = "");
+// explain = true: thêm data.score (chi phí từng tầng/rule + vài phương án so sánh) — cho bước giải thích,
+// không đổi thứ tự; mặc định false để OUT giữ nguyên contract.
+PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, const std::string& osrm_url = "",
+                bool explain = false);
 
 // Response lỗi (sheet 07): success = false, data = null.
 nlohmann::ordered_json error_response(const std::string& statuscode, const std::string& text,

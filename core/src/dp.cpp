@@ -304,6 +304,8 @@ Solution solve(const Problem& p, const Rules& rules) {
     return result;
 }
 
+std::vector<Visit> simulate(const Problem& p, const std::vector<int>& order) { return walk(p, order); }
+
 std::vector<double> objective(const Problem& p, const Rules& rules, const std::vector<int>& order) {
     Search s(p, rules);
     Key k = s.evaluate(order);

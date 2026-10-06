@@ -93,6 +93,10 @@ struct Solution {
 // HÀM CHÍNH: chọn thứ tự làm việc.
 Solution solve(const Problem& p, const Rules& rules);
 
+// Mô phỏng một thứ tự có sẵn (kể cả phương án so sánh): từng bước + giờ, dùng đúng luật của solve().
+// Thứ tự phạm luật nghỉ trưa vẫn ra số; chỉ objective() mới biết hợp lệ hay không (trả vô cực).
+std::vector<Visit> simulate(const Problem& p, const std::vector<int>& order);
+
 // Điểm phạt của một thứ tự, từng tầng (tầng 1 trước). Nhỏ hơn = tốt hơn; so như so từ điển.
 std::vector<double> objective(const Problem& p, const Rules& rules, const std::vector<int>& order);
 

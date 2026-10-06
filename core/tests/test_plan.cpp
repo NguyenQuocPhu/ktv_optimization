@@ -1,4 +1,5 @@
 // Một message API đi hết đường: đọc → xếp → output đúng dạng file API (sheet 03, 04).
+#include <cmath>
 #include <iostream>
 
 #include "ktv/plan.hpp"
@@ -85,6 +86,31 @@ int main() {
     errors.clear();
     ktv::PlanResult none = ktv::plan(ktv::parse_message(empty, errors), ktv::default_rules(), server_now);
     CHECK(none.response["statuscode"] == "422" && none.response["data"].is_null());
+
+    // --explain: thêm data.score (chi phí từng tầng/rule + phương án so sánh); tuyến QHĐ không thua phương án nào.
+    ktv::PlanResult explained = ktv::plan(parsed, ktv::default_rules(), server_now, "", true);
+    const auto& score = explained.response["data"]["score"];
+    CHECK(score.is_object() && score["tiers"].size() == 3 && score["alternatives"].size() == 3);
+    CHECK(score["sequence_source"] == "OPTIMAL");
+    CHECK(score["raw"]["km"].get<double>() == explained.response["data"]["metrics"]["total_distance_km"].get<double>());
+    for (const auto& tier : score["tiers"]) {  // tổng tầng = tổng các rule trong tầng (chi tiết phải khớp số đã chấm)
+        double sum = 0;
+        for (auto it = tier["rules"].begin(); it != tier["rules"].end(); ++it) sum += it.value().get<double>();
+        CHECK(std::abs(sum - tier["total"].get<double>()) < 0.02);
+    }
+    const double chosen[3] = {score["tiers"][0]["total"].get<double>(), score["tiers"][1]["total"].get<double>(),
+                              score["tiers"][2]["total"].get<double>()};
+    bool never_worse = true;
+    for (const auto& alt : score["alternatives"]) {
+        if (!alt["feasible"].get<bool>()) continue;
+        for (int t = 0; t < 3; ++t) {
+            const double value = alt["tiers"][t].get<double>();
+            if (value > chosen[t] + 1e-9) break;               // tệ hơn ở tầng này → QHĐ thắng, đúng
+            if (value < chosen[t] - 1e-9) never_worse = false;  // tốt hơn mà các tầng trước bằng → sai
+        }
+    }
+    CHECK(never_worse);
+    CHECK(!r["data"].contains("score"));  // mặc định không explain: OUT giữ nguyên contract
 
     if (failures) std::cerr << failures << " lỗi\n" << r.dump(2) << "\n";
     else std::cout << "test_plan: OK\n";
