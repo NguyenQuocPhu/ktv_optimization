@@ -43,12 +43,13 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 - ~~Bảng trạng thái của `hoa_don` và `onsite`~~ — đã có trong workbook (4) (xem Nhật ký). Còn: bảng trạng thái của nhóm `cscd` (workbook (4) thêm nhóm 6 nhưng chưa có bảng); mã lạ vẫn đoán theo `task_status_name`.
 - Nhóm `cscd` (workbook (4) nhóm 6): tên khóa đúng là `cscd`? Danh sách loại việc và bảng trạng thái của `cscd`? (Đang tạm: 2 loại `ngung_ket_noi_4h`, `chap_chon_suy_hao`; trạng thái đoán theo tên.)
 - `onsite`: workbook (4) cùng một dòng ghi cả "Hoàn tất trong ngày hẹn" lẫn "rule như bao_tri" (check-in trước mốc B). Đang theo "như bao_tri" (Phase 7.15) — xác nhận? Hai loại `ngung_ket_noi_4h`, `chap_chon_suy_hao` (CSKH chủ động) còn thuộc `onsite` không, hay đã sang `cscd`?
-- `complete_date` (workbook (3): "ngày hoàn tất ca vụ trước đó, ngày thu bill trước"): có cần dùng để tính hạn không, VD hạn thu bill kỳ này = kỳ trước + 1 tháng? Hiện chỉ đọc vào, không dùng (IMPLEMENTATION_SPEC 7.8). Có nhóm nào vẫn dùng `complete_date` theo nghĩa cũ "task này đã xong" mà không đổi `task_status_id` không?
+- `complete_date`: từ 7.17 dùng cho `hoa_don` (mục E). Còn hỏi: có nhóm nào vẫn dùng `complete_date` theo nghĩa cũ "task này đã xong" mà không đổi `task_status_id` không? Nhóm khác (`thu_hoi`…) gửi `complete_date` thì nghĩa là gì (hiện bỏ qua)?
 - Việc đang làm: OA gửi được **giờ check-in** của `staff.current_task` không? Có thì tính được thời gian còn lại (định mức − đã làm) thay vì luôn 30 phút (IMPLEMENTATION_SPEC 7.7–7.10, ghi chú việc đang làm).
 - OA có gửi message IN mới cho KTV **mỗi khi task đổi trạng thái** (check-in, hoàn tất, gán thêm, đổi hẹn) không, hay chỉ khi gán việc? Route (worker lẫn `replan`) chỉ biết danh sách việc trong IN mới nhất: nếu OA không gửi lại, việc KTV đã làm xong vẫn nằm trong tuyến tới IN kế tiếp. (Đã chốt 2026-10-01: IN mới thì worker tính luôn — IMPLEMENTATION_SPEC Phase 7.)
 - Kafka timestamp của topic IN là `CreateTime` (giờ OA gửi) hay `LogAppendTime`? Version của state dùng timestamp này (Phase 7.3).
 - **Danh sách ngày lễ** (7.16.1): "số ngày làm việc còn lại" tính theo T2–T6 **trừ ngày lễ** (catalogue, tham số #2), nhưng chưa có danh sách lễ → hiện tính bỏ qua lễ (`rules.holidays` để rỗng). Cần lễ chính thức để `days_left` (lọc K, urgency) khỏi lệch quanh lễ.
-- **Thu bill trúng ngày thanh toán tháng trước** (7.16.1, catalogue mục E): OA có gửi `ngayThanhToanThangTruoc`/cờ "đến hạn hôm nay" không? Hiện chưa dùng — thu bill tính như ca tháng bình thường (chỉ tranh chỗ khi còn ≤ K ngày làm việc).
+- **Thu bill trúng ngày thanh toán tháng trước** (catalogue mục E, làm ở 7.17): AI đọc `complete_date` của `hoa_don` là ngày KH thanh toán kỳ trước, chỉ so **ngày-trong-tháng** với ngày chạy (không kiểm tháng). [GIẢ ĐỊNH] KH thanh toán nhiều lần → OA gửi lần gần nhất (AI chỉ nhận một ngày). Xác nhận: OA có gửi đúng ngày này vào `complete_date` không, hay sẽ có cờ `denHanHomNay` riêng?
+- **Ca tồn từ tháng trước** (thu hồi / thu bill, IMPLEMENTATION_SPEC 7.17): ca tạo tháng trước chưa làm xong, sang tháng này có tính là đã trễ không? Hiện (người dùng chốt tạm giữ 2026-10-06): hạn = cuối tháng của `create_date` → `ALREADY_BREACHED`, luôn chèn và gấp nhất. Nếu không tính trễ → đổi hạn về cuối tháng của ngày chạy.
 - Các câu nghiệp vụ Q1–Q26 ở [BUSINESS_RULES.md](BUSINESS_RULES.md) mục 11.
 
 ## Nhật ký trả lời
@@ -59,6 +60,7 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 | 2026-10-02 | `staff_plots_id = 0` | Sheet 02: "không có default 0, tính ưu tiên xuống `block_id`" | Task lô 0 lùi xuống block trong rule quay lại khu vực |
 | 2026-10-02 | Ý nghĩa `task_status_id` | Sheet 05: bảng trạng thái theo nhóm `trien_khai`/`bao_tri`/`thu_hoi` (chưa có `hoa_don`/`onsite`) | Lọc theo (nhóm, status), Phase 7.7 |
 | 2026-10-02 | `complete_date` | Sheet 02: "ngày hoàn tất ca vụ trước đó (ngày thu bill trước)" | Không còn loại task, Phase 7.8 |
+| 2026-10-06 | `complete_date` cho thu bill | Người dùng chốt: áp mục E cho `hoa_don`, so ngày-trong-tháng; `thu_hoi` không áp | Hạn thu bill = cuối hôm nay khi trùng ngày, Phase 7.17 |
 | 2026-10-02 | Tên `create_date` | Sheet 02 ghi `CreateDate` | Nhận cả hai tên, Phase 7.10 |
 | 2026-10-02 | Nhóm `cscd` | Workbook (4) sheet 05: nhóm 6 "CSKH chủ động" | Nhận `cscd` (không bắt buộc), 2 loại CSKH chuyển từ `onsite`, tra dự phòng — Phase 7.12 |
 | 2026-10-02 | Luật hạn của `onsite` | Workbook (4) sheet 05 nhóm 5: "rule như bao_tri" (SLA 60, P2) | `phieu_onsite` → check-in trước B, Phase 7.15 |

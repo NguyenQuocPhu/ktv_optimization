@@ -667,6 +667,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.12 ✅ | Nhận nhóm thứ 6 `cscd` (CSKH chủ động, workbook API (4)), không bắt buộc; `onsite` chỉ còn `phieu_onsite`, 2 loại CSKH sang `cscd` (tra dự phòng) — chi tiết bên dưới | payload 6 khóa đọc được task `cscd`; payload 5 khóa không cảnh báo |
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
 | 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K**, **7.16.2 ✅ `DEADLINE_URGENCY`**, **7.16.3 ✅ gộp điểm dừng cùng địa chỉ** (hợp đồng IN/OUT theo `API-Goi-y-cong-viec (1).xlsx`) — chi tiết bên dưới | việc tháng còn > K không lên tuyến (trừ khi cùng địa chỉ với ca khác); urgency đổi được thứ tự; ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần, `task_role`/`insert_reason` đúng workbook |
+| 7.17 ✅ | Mục E thu bill: `hoa_don` không hẹn có `complete_date` trùng ngày-trong-tháng với ngày chạy → đến hạn hôm nay — chi tiết bên dưới | thu bill trúng ngày thanh toán được xếp ngay dù còn > K ngày, urgency max; `thu_hoi` không đổi |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1235,6 +1236,15 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 - Lọc K làm mất việc khỏi tuyến so với trước → nếu OA chưa gửi `so_ngay_lam_viec_con_lai`, AI tự tính có thể lệch lễ; cứu bằng cách đặt `k_month_days` rất lớn (tắt lọc) hoặc bỏ field.
 - Nhóm sai khi tự gom (địa chỉ gần nhau nhưng khác nhà) → hiện luôn gom theo `stop_group_radius_m`, chưa có cờ tắt (nếu PO muốn tắt gom nhóm thì thêm lại `rules.group_by_address`).
 - Rollback = revert `plan.cpp` + `dp.cpp` + rules; không có migration dữ liệu.
+
+##### 7.17 — Mục E: thu bill theo ngày thanh toán kỳ trước (người dùng chốt 2026-10-06)
+
+- **Luật**: `hoa_don`, không hẹn, có `complete_date` (ngày KH thanh toán kỳ trước, workbook (3)): ngày-trong-tháng của `complete_date` trùng ngày chạy (`planned_at`) → `complete_by` = cuối hôm nay ⇒ `days_left = 0`: không bị lọc K, `DEADLINE_URGENCY` = K (max). Không trùng / không có `complete_date` → hạn cuối tháng như cũ. Có hẹn → theo hẹn.
+- **Chỉ so ngày, không kiểm tháng** (người dùng chốt): OA chọn lần thanh toán. [GIẢ ĐỊNH] nhiều lần thanh toán → OA gửi lần gần nhất. Ngày thanh toán > số ngày tháng này (VD 31) → quy về ngày cuối tháng này (catalogue).
+- **`thu_hoi` không áp** (catalogue mục E chỉ ghi Thu bill; workbook định nghĩa `complete_date` là ngày thu bill trước): giữ hạn cuối tháng, K, urgency, gom cùng địa chỉ; `complete_date` nếu có thì bỏ qua.
+- **File**: `sla.cpp` (`paid_day_today` + một nhánh trong `resolve_deadlines`), comment `api.hpp`/`sla.hpp`. `plan.cpp`/`dp.cpp` không đổi — lọc K và urgency tự đọc `complete_by` mới.
+- **Test**: `test_sla` (trùng ngày, lệch ngày, khác tháng vẫn áp, 31 → 30/11, có hẹn, `thu_hoi` không áp, không `complete_date`); `test_plan` (10/09, thanh toán 10/08 → hóa đơn không bị lọc, urgency > 0). Test mới fail trên code cũ (4 + 3 kiểm). `ctest` 18/18.
+- **Ca tồn từ tháng trước — người dùng chốt 2026-10-06: TẠM GIỮ NGUYÊN.** Ca "hoàn tất trong tháng" không hẹn có hạn = cuối tháng **của `create_date`**; ca tạo tháng trước còn tồn sang tháng này → hạn đã qua → `days_left = 0`: luôn được xếp (không lọc K), urgency max, `projected_sla = ALREADY_BREACHED` (áp cả `thu_hoi` lẫn `hoa_don`). Đo trên ca `thu_hoi` tạo 20/09: chạy 24/09, 28/09 → `ON_TIME`; chạy 05/10, 26/10 → `ALREADY_BREACHED`. Phương án đã cân nhắc, chưa làm: (a) hạn = cuối tháng của ngày chạy (ca tồn chỉ tranh chỗ khi tháng mới còn ≤ K; ~1 dòng `sla.cpp`). Đổi khi nghiệp vụ xác nhận ca tồn KHÔNG tính là trễ.
 
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 

@@ -27,7 +27,7 @@
 | `task_status_id/name` | ✔ | Prototype chỉ xử lý `6` và `10`: `6=ROUTABLE`, `10=CURRENT` | Mã khác `6/10` được coi `EXCLUDED`, không xếp tuyến. Nếu `10` không khớp `staff.current_task`, không route như task chờ và ghi cảnh báo |
 | `sla.{sla_minutes, priority_in_day}` | ✔ | `sla_minutes`: int > 0 hoặc null. `priority`: 1–4 | 400 nếu sai. Phải khớp bảng 05 |
 | `appointment` | – | `""` hoặc `"YYYY-MM-DD HH:mm:ss"`. `""` = AI tự xếp | 400 nếu sai format |
-| `create_date, complete_date` | – | Cùng format trên. `""` = chưa có ngày | `complete_date` được hiểu là ngày hoàn thành. Có giá trị thì task đã hoàn thành và không đưa vào tuyến; `create_date` được giữ trong domain data để áp rule cần ngày tạo |
+| `create_date, complete_date` | – | Cùng format trên. `""` = chưa có ngày | `complete_date` = ngày hoàn tất ca vụ **trước đó** (ngày thu bill kỳ trước, workbook (3)) — KHÔNG loại task (7.8); chỉ `hoa_don` dùng cho mục E (7.17). `create_date` dùng cho hạn "trong ngày tạo phiếu / trong tháng" |
 | `location` | – | string tự do (địa chỉ staging khá bẩn) | Cho qua, chỉ hiển thị |
 | `latlng` | ✔ | `"lat,lng"` VN hoặc `""` (= thiếu tọa độ → loại khỏi tuyến, Rule cứng 4) | 400 nếu format sai; `""` thì loại + vẫn đếm SLA |
 | `handle_minutes` | – | số nguyên dương, `0` hoặc `null` | `0` / `null` nghĩa là dùng định mức theo task type. Giá trị âm hoặc sai kiểu là dữ liệu lỗi |
@@ -99,7 +99,7 @@ Quy ước retry/DLQ và format lỗi cuối cùng sẽ chốt cùng Infra. Hai 
 1. Domain chỉ cần ba nhóm status cho prototype: `ROUTABLE` (mã `6`, task được xếp), `CURRENT` (mã `10` khớp `staff.current_task`, dùng làm điểm/giờ xuất phát, không xếp thành stop thứ hai), `EXCLUDED` (mọi mã khác `6/10`, coi như không cần xếp). Nếu task status `10` không khớp `staff.current_task`, không route task đó và ghi cảnh báo.
 2. Data xác nhận `staff_plots_id=0` + `staff_role=0` nghĩa là KTV không thuộc lô nào cho task đó. Xử lý trường hợp này đang deferred; parser hiện không nhận role 0. `task_plots_id=0` không được xem là cùng lô với task 0 khác.
 3. `staff.status=3` là off nên không sinh tuyến; `1` và `2` vẫn xử lý.
-4. `complete_date` khác rỗng là task hoàn tất và bị loại khỏi candidates; `handle_minutes=0/null` dùng định mức.
+4. `complete_date` không loại task (việc xong/hủy theo `task_status_id`); `hoa_don` dùng nó cho mục E (7.17); `handle_minutes=0/null` dùng định mức.
 5. Row task có cùng ID với `current_task` bổ sung dữ liệu cho việc đang làm. Nếu không có row khớp, dùng thông tin tối thiểu trong `current_task` và vị trí hiện tại của staff; không tạo stop trùng.
 6. `contract_id` / `contract_no` được hiểu theo mô tả mới: ObjID và số hợp đồng; giữ trong task model nhưng không dùng trong scoring.
 7. Envelope và key Kafka trong tài liệu là quy ước local prototype; khi có broker chỉ cập nhật adapter/config nếu contract nguồn khác.

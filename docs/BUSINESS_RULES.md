@@ -40,7 +40,7 @@ Bảng dưới lấy nguyên từ sheet "#Bảng KPI, SLA Tác vụ" **[TÀI LI�
 | 6 | Bảo trì | Vật lý | 60 phút | Check-in trước B | **1** | `due_at` = B |
 | 7 | Bảo trì | Logic | 60 phút | Check-in trước B | 2 | `due_at` = B |
 | 8 | Thu hồi | Thu hồi thiết bị | N/A | Hoàn tất trong tháng | 4 | `complete_by` = cuối tháng |
-| 9 | Thu bill | Thu bill trả trước, sau | N/A | Hoàn tất trong tháng | 4 | `complete_by` = cuối tháng |
+| 9 | Thu bill | Thu bill trả trước, sau | N/A | Hoàn tất trong tháng | 4 | `complete_by` = cuối tháng; **mục E (7.17)**: không hẹn + `complete_date` (ngày KH thanh toán kỳ trước) trùng ngày-trong-tháng với ngày chạy → cuối hôm nay (còn 0 ngày). Thu hồi không có ngoại lệ này |
 | 10 | Onsite | Phiếu Onsite | 60 phút | **Check-in trước mốc hẹn cuối** (workbook API (4): "rule như bao_tri", từ 2026-10-02; trước: hoàn tất trong tháng) | 2 | `due_at` = hẹn + SLA input; không hẹn → không hạn |
 | 11 | CSKH chủ động (`cscd`, từ 2026-10-02; trước: `onsite`) | Ngưng kết nối 4H | N/A | Hoàn tất trong ngày tạo phiếu | 2 | `complete_by` = cuối ngày tạo |
 | 12 | CSKH chủ động (`cscd`) | Mạng chập chờn, suy hao cao | N/A | Hoàn tất trong ngày tạo phiếu | 4 | `complete_by` = cuối ngày tạo |
