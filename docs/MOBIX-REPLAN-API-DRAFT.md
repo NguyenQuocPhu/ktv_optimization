@@ -100,8 +100,8 @@ API (3) sheet 03:
 |---|---|---|
 | `location` | string | Địa chỉ khách, đúng như input (`""` nếu input rỗng) |
 | `latlng` | string `lat,lng` | Tọa độ task, 6 chữ số thập phân (~0,1 m), VD `"21.029123,105.801235"` — marker trên map |
-| `contract_id` | như input | Số nguyên ObjID; `null` khi input không gửi hoặc `null` |
-| `contract_no` | như input | Chuỗi (kể cả `""`); `null` khi input không gửi hoặc `null` |
+| `contract_id` | như input | Chuỗi (ObjID dạng số → chuỗi); `""` khi input không gửi hoặc `null` (7.19) |
+| `contract_no` | như input | Chuỗi (kể cả `""`); `""` khi input không gửi hoặc `null` (7.19) |
 
 Thứ tự field: `task_id, location, latlng, task_group_*, task_type_*, task_sub_*, checkindate, checkoutdate,
 travel_minutes_before, travel_km_before, handle_minutes, projected_sla, contract_id, contract_no`. Lưu ý: workbook ghi

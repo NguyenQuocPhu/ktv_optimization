@@ -669,6 +669,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K**, **7.16.2 ✅ `DEADLINE_URGENCY`**, **7.16.3 ✅ gộp điểm dừng cùng địa chỉ** (hợp đồng IN/OUT theo `API-Goi-y-cong-viec (1).xlsx`) — chi tiết bên dưới | việc tháng còn > K không lên tuyến (trừ khi cùng địa chỉ với ca khác); urgency đổi được thứ tự; ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần, `task_role`/`insert_reason` đúng workbook |
 | 7.17 ✅ | Mục E thu bill: `hoa_don` không hẹn có `complete_date` trùng ngày-trong-tháng với ngày chạy → đến hạn hôm nay — chi tiết bên dưới | thu bill trúng ngày thanh toán được xếp ngay dù còn > K ngày, urgency max; `thu_hoi` không đổi |
 | 7.18 ✅ | Ca hẹn ngày SAU ngày chạy không xếp tuyến hôm nay (catalogue mục D); hẹn ngày đã qua vẫn xếp; ca không xếp **không vào OUT** — chi tiết bên dưới | không còn `IDLE` qua đêm, `finish_at`/km/`overload_minutes` chỉ tính hôm nay |
+| 7.19 | Soát OUTPUT so với workbook API (4): **7.19.1 ✅** `contract_id`/`contract_no` là string, `""` khi không có; 7.19.2–7.19.5 chờ chốt — chi tiết bên dưới | OUT không còn `null` ngoài `data` khi lỗi (sheet 00/07) |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1266,6 +1267,25 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 **Chưa làm / còn mở.**
 - Ca **đã check-in** (vế còn lại của mục D): hiện chỉ có `staff.current_task` (1 việc đang làm, không thành dòng OUT, lùi giờ xuất phát `current_task_minutes`). Check-in nhiều ca cùng lúc: catalogue nói mọi ca đã check-in đều không tính tuyến — core dựa vào `task_status_id` theo bảng sheet 05 (status "đang làm" ngoài `current_task` → không xếp). Chưa đối chiếu riêng.
 - Dấu vân tay chống tính lại (bỏ qua event không đổi đầu vào xếp tuyến — xem phân loại trigger E-01 → E-12): cần 7.18 trước; chưa lên plan.
+
+##### 7.19 — Soát OUTPUT so với `API-Goi-y-cong-viec (4).xlsx` (2026-10-06)
+
+**Cách soát.** (a) Chạy input JSON mẫu sheet 08 qua core, so key/kiểu với sheet 03/04 + JSON mẫu output sheet 08. (b) Kiểm chéo 400 biến thể ngẫu nhiên của `tools/review_map/sample_in.json` (giờ chạy, hẹn, toạ độ, hợp đồng): seq, `task_count`, km cụm, tổng metrics = tổng dòng, SLA đếm, `finish_at`, ngân sách thời gian (travel + handle + idle + break = start→finish).
+
+**Khớp:** vỏ ngoài (`success`/`statuscode`/`message`/`trace_id`/`server_time`), `data` là object, `clusters[]` đủ 10 field, `metrics` đủ 17/17, BREAK/IDLE có `duration_minutes`/`label`; lỗi → `data = null` (sheet 07). Ngân sách thời gian, seq, `task_count`, `handle_minutes`, `tasks_total`, `cluster_count`, đếm SLA, `on_time_rate_forecast`, `tasks_forecast_completed`, `finish_at` đúng trên cả 400 message.
+
+**Giữ có chủ đích (người dùng chốt):**
+- `entry_type` (sheet 03), không đổi sang `type` (JSON mẫu sheet 08 ghi `type` — workbook tự mâu thuẫn).
+- Envelope Kafka OUT `message_id`/`run_code`/`trigger`/`planned_at`/`schema_version`: pipeline là Kafka IN → core → Kafka OUT, giữ.
+- `priority` (float, sheet 03): chưa phát; sẽ ánh xạ từ điểm (score) của mình — người dùng nghĩ công thức sau.
+
+**7.19.1 ✅ `contract_id`/`contract_no`** — sheet 03: string; sheet 00: rỗng là `""`, không dùng null. Trước: số / `null`. Sau: `contract_id` = ObjID dạng chuỗi (`"1126569863"`), không gửi / null → `""`; `contract_no` không gửi / null → `""`. Input vẫn nhận `contract_id` số nguyên như cũ. File: `plan.cpp` (bỏ `or_null`), `test_pipeline`, comment `api.hpp`, `MOBIX-REPLAN-API-DRAFT.md`. `ctest` 18/18.
+
+**Còn lệch — chờ chốt (chưa sửa):**
+- **7.19.2 IDLE nằm ở cụm trước.** Dòng IDLE "Chờ tới khung hẹn HH:MM" của ca đầu cụm sau bị gắn vào cụm trước (`row_task` lấy TASK liền trước) — 216/400 message. VD cụm CL-3 kết thúc bằng "Chờ tới khung hẹn 11:30" nhưng ca 11:30 ở CL-4. KTV chờ ở **điểm đến** → IDLE thuộc cụm của ca nó chờ. BREAK giữ ở cụm hiện tại (nghỉ tại chỗ). Đề xuất: IDLE gắn theo TASK **kế tiếp**.
+- **7.19.3 Tổng metrics ≠ tổng dòng do làm tròn.** Sheet 04: `total_distance_km` "bằng tổng `travel_km_before`". Hiện cộng số chưa làm tròn rồi mới làm tròn → lệch 0,1 km (194/400), `total_travel_minutes` lệch 1′ (189/400), `idle_minutes` lệch 1′ (37/400), `travel_km_internal` lệch 0,1 (8/400). Đề xuất: tính metrics/cụm từ đúng giá trị đã làm tròn ở dòng.
+- **7.19.4 Field luôn rỗng / một giá trị.** `checkindate`, `checkoutdate` luôn `""` (sheet 03 tự mâu thuẫn: "giờ check-in **dự kiến**; `""` khi chưa check-in"; giờ dự kiến đã có ở `start_at`/`end_at`) — hỏi OA: là giờ thật (echo từ OA) hay bỏ? `priority_type` luôn 0 (chờ Phase 8 mode). `trace_id` = `message_id`.
+- **7.19.5 Nghĩa chưa chắc.** `task_role` theo **loại việc** (`TaskKind.extra`), không theo việc có thực sự được chèn: thu hồi xếp đầu tuyến lúc 08:05 vẫn là `inserted`. `name` cụm lấy tên lô KTV → nhiều cụm cùng tên (VD 5 cụm đều "Phú Mỹ"); workbook mẫu đặt tên theo phường/đường. Cắt cụm theo chặng > 2 km → 6 việc ra 5 cụm khá phổ biến. Chặng 0,1 km ra 0 phút (làm tròn).
 
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
