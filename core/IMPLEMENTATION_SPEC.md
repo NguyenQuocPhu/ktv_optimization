@@ -668,6 +668,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
 | 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K**, **7.16.2 ✅ `DEADLINE_URGENCY`**, **7.16.3 ✅ gộp điểm dừng cùng địa chỉ** (hợp đồng IN/OUT theo `API-Goi-y-cong-viec (1).xlsx`) — chi tiết bên dưới | việc tháng còn > K không lên tuyến (trừ khi cùng địa chỉ với ca khác); urgency đổi được thứ tự; ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần, `task_role`/`insert_reason` đúng workbook |
 | 7.17 ✅ | Mục E thu bill: `hoa_don` không hẹn có `complete_date` trùng ngày-trong-tháng với ngày chạy → đến hạn hôm nay — chi tiết bên dưới | thu bill trúng ngày thanh toán được xếp ngay dù còn > K ngày, urgency max; `thu_hoi` không đổi |
+| 7.18 ✅ | Ca hẹn ngày SAU ngày chạy không xếp tuyến hôm nay (catalogue mục D); hẹn ngày đã qua vẫn xếp; ca không xếp **không vào OUT** — chi tiết bên dưới | không còn `IDLE` qua đêm, `finish_at`/km/`overload_minutes` chỉ tính hôm nay |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1245,6 +1246,26 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 - **File**: `sla.cpp` (`paid_day_today` + một nhánh trong `resolve_deadlines`), comment `api.hpp`/`sla.hpp`. `plan.cpp`/`dp.cpp` không đổi — lọc K và urgency tự đọc `complete_by` mới.
 - **Test**: `test_sla` (trùng ngày, lệch ngày, khác tháng vẫn áp, 31 → 30/11, có hẹn, `thu_hoi` không áp, không `complete_date`); `test_plan` (10/09, thanh toán 10/08 → hóa đơn không bị lọc, urgency > 0). Test mới fail trên code cũ (4 + 3 kiểm). `ctest` 18/18.
 - **Ca tồn từ tháng trước — người dùng chốt 2026-10-06: TẠM GIỮ NGUYÊN.** Ca "hoàn tất trong tháng" không hẹn có hạn = cuối tháng **của `create_date`**; ca tạo tháng trước còn tồn sang tháng này → hạn đã qua → `days_left = 0`: luôn được xếp (không lọc K), urgency max, `projected_sla = ALREADY_BREACHED` (áp cả `thu_hoi` lẫn `hoa_don`). Đo trên ca `thu_hoi` tạo 20/09: chạy 24/09, 28/09 → `ON_TIME`; chạy 05/10, 26/10 → `ALREADY_BREACHED`. Phương án đã cân nhắc, chưa làm: (a) hạn = cuối tháng của ngày chạy (ca tồn chỉ tranh chỗ khi tháng mới còn ≤ K; ~1 dòng `sla.cpp`). Đổi khi nghiệp vụ xác nhận ca tồn KHÔNG tính là trễ.
+
+##### 7.18 — Lọc ca hẹn ngày sau (người dùng chốt 2026-10-06)
+
+**Bối cảnh / lỗi.** Core chỉ coi `appointment` là mốc "không tới trước giờ này", không so ngày hẹn với ngày chạy → ca hẹn ngày mai vẫn vào tuyến hôm nay, xếp cuối, sinh `IDLE` qua đêm. Đo trên `tools/review_map/sample_in.json` chạy thứ Sáu 26/06 + 1 ca hẹn thứ Hai 29/06 09:00: tuyến kéo sang 29/06, `IDLE 26/06 15:55 → 29/06 09:00`, `idle_minutes` 55 → 3.960, `overload_minutes` 0 → 3.870, km 46,4 → 53,5, `finish_at` 29/06 10:00. Hệ quả phụ: mọi event chạm ca ngày khác (hẹn lại, hủy, điều chuyển) đều làm đổi OUT → không bỏ qua được lần tính lại nào.
+
+**Quyết định (người dùng chốt):**
+1. Ca có `appointment` mà **ngày hẹn > ngày chạy** (`planned_at`) → không đưa vào bài toán (catalogue mục D: `tinhTuyen = FALSE`, lý do "hẹn ngày khác").
+2. Ca hẹn **ngày đã qua** → **vẫn xếp** (làm bù, như cũ; thường ra `ALREADY_BREACHED`).
+3. Ca không xếp (hẹn ngày sau, lọc K…) **không trả về trong OUT** — workbook API (4) không có field (sheet 03: mọi dòng TASK bắt buộc `seq`/`at`/`start_at`; `tasks_total` = "số việc đưa vào tuyến"). Mảng `khongTinhTuyen[]` của catalogue ISC chỉ tham khảo; OA có IN gốc, tự ghép danh sách đủ ca tồn cho FE nếu cần.
+
+**Hiện thực.**
+- `plan.cpp`: lọc ngay sau `normalize_worklist`, **trước** gom cùng địa chỉ (catalogue bước 7: chỉ gom ca được tính tuyến) và trước lọc K. So theo ngày: `start_of_day(appointment) > start_of_day(now)`; hẹn 23:30 cùng ngày vẫn là hôm nay.
+- Ca bị lọc → `PlanResult.unplaced` (chỉ log/test, như 7.16.1). Chỉ còn ca ngày sau → `routed_stops` rỗng → `422` "Không có công việc để dựng tuyến" (như danh sách rỗng).
+- Không đổi `dp.cpp`, `sla.cpp`, hợp đồng IN/OUT.
+
+**Test** (`test_plan`): hẹn mai → không có dòng TASK, có trong `unplaced`, `finish_at` cùng ngày, `overload_minutes = 0`, không dòng nào qua đêm; hẹn hôm qua → vẫn xếp, `unplaced` rỗng; hẹn 23:30 hôm nay → vẫn xếp; chỉ còn ca ngày sau → `422`. Test mới fail trên code cũ (7 kiểm). `ctest` 18/18.
+
+**Chưa làm / còn mở.**
+- Ca **đã check-in** (vế còn lại của mục D): hiện chỉ có `staff.current_task` (1 việc đang làm, không thành dòng OUT, lùi giờ xuất phát `current_task_minutes`). Check-in nhiều ca cùng lúc: catalogue nói mọi ca đã check-in đều không tính tuyến — core dựa vào `task_status_id` theo bảng sheet 05 (status "đang làm" ngoài `current_task` → không xếp). Chưa đối chiếu riêng.
+- Dấu vân tay chống tính lại (bỏ qua event không đổi đầu vào xếp tuyến — xem phân loại trigger E-01 → E-12): cần 7.18 trước; chưa lên plan.
 
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 

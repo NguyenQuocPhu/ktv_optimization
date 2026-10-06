@@ -95,6 +95,10 @@ Hợp đồng chi tiết ở `docs/CONTRACT.md`. Routing kiểm tra request trư
 | Quá nhiều job cho QHĐ | Dùng heuristic | `SEQUENCE_NOT_OPTIMAL` | [GIẢ ĐỊNH] |
 | `previous_sequence` có job không còn trong request, hoặc lặp | Bỏ job đó, giữ lần xuất hiện đầu | – | [GIẢ ĐỊNH] |
 
+**Không xếp tuyến hôm nay, không cảnh báo, KHÔNG trả về trong OUT** (người dùng chốt 2026-10-06; workbook API (4) không có field):
+- Ca hẹn **ngày sau** ngày chạy (catalogue ISC mục D, Phase 7.18). Ca hẹn ngày **đã qua** vẫn xếp (làm bù).
+- Ca "hoàn tất trong tháng" còn > K = 5 ngày làm việc và không cùng địa chỉ với ca khác (Phase 7.16.1).
+
 ## 5. Xử lý dữ liệu nguồn (phần team data sẽ làm thật)
 
 Phần này hiện nằm trong simulator vì chưa có hệ thống thật. Nó ghi lại cách export QOS được hiểu. Team data làm thật thì đối chiếu từng dòng.
