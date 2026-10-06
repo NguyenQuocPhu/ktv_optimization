@@ -401,7 +401,10 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     auto at = [&](double minutes) { return start + static_cast<Minutes>(std::llround(minutes)); };
     const double now_rel = static_cast<double>(now - start);
     int at_risk = 0, breach = 0, completed = 0, revisits = 0;
-    double km = 0, travel = 0, handle = 0, idle = 0, rest = 0;
+    // 7.19.3: tổng = cộng đúng giá trị đã làm tròn ở dòng (sheet 04: total_distance_km = Σ travel_km_before).
+    double km = 0, handle = 0;
+    long long travel = 0, idle = 0, rest = 0;
+    std::vector<double> row_km;  // travel_km_before (đã làm tròn) theo thứ tự TASK, cho km cụm
     std::vector<const Visit*> visits;  // Chỉ các bước tới điểm dừng thật (bỏ nghỉ trưa).
     for (const Visit& v : steps)
         if (v.task != kBreak) visits.push_back(&v);
@@ -414,15 +417,16 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     int task_ordinal = -1;
     for (const Visit& v : steps) {
         if (at(v.checkin) > at(v.arrive)) {  // Tới sớm hơn mốc hẹn / giờ nghỉ: chờ.
-            idle += v.checkin - v.arrive;
+            idle += at(v.checkin) - at(v.arrive);
             rows.push_back({{"entry_type", "IDLE"}, {"at", hhmm(at(v.arrive))},
                             {"start_at", format_datetime(at(v.arrive))}, {"end_at", format_datetime(at(v.checkin))},
                             {"duration_minutes", at(v.checkin) - at(v.arrive)},
                             {"label", (v.task == kBreak ? "Chờ tới giờ nghỉ trưa " : "Chờ tới khung hẹn ") + hhmm(at(v.checkin))}});
-            row_task.push_back(task_ordinal);
+            // 7.19.2: chờ khung hẹn = chờ tại điểm đến → thuộc cụm của TASK kế tiếp; chờ nghỉ trưa → tại chỗ, cụm hiện tại.
+            row_task.push_back(v.task == kBreak ? task_ordinal : task_ordinal + 1);
         }
         if (v.task == kBreak) {
-            rest += v.done - v.checkin;
+            rest += at(v.done) - at(v.checkin);
             rows.push_back({{"entry_type", "BREAK"}, {"at", hhmm(at(v.checkin))},
                             {"start_at", format_datetime(at(v.checkin))}, {"end_at", format_datetime(at(v.done))},
                             {"duration_minutes", at(v.done) - at(v.checkin)}, {"label", "Nghỉ trưa"}});
@@ -431,8 +435,8 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         }
         // 7.16.3: một điểm dừng = một hoặc nhiều ca cùng địa chỉ; bung từng ca, giờ nối tiếp, km chỉ ở ca đầu.
         const Stop& stop = routed_stops[v.task];
-        km += v.km;
-        travel += v.travel;
+        km += round_to(v.km, 1);
+        travel += std::llround(v.travel);
         revisits += static_cast<int>(v.cost[AREA_REENTRY]);
         double offset = 0;  // phút kể từ lúc check-in điểm dừng
         for (size_t k = 0; k < stop.tasks.size(); ++k) {
@@ -448,7 +452,8 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
             completed += at(done) <= shift_end;
             handle += service;
             ++task_ordinal;
-            task_stops.push_back({&task, k == 0 ? v.km : 0.0, service});
+            task_stops.push_back({&task, k == 0 ? v.km : 0.0, service});  // km thô: cắt cụm theo chặng thật
+            row_km.push_back(k == 0 ? round_to(v.km, 1) : 0.0);
             ojson row = {{"entry_type", "TASK"}, {"at", hhmm(at(checkin))},
                          {"start_at", format_datetime(at(checkin))}, {"end_at", format_datetime(at(done))},
                          {"task_id", task.task_id}, {"location", task.location},
@@ -493,11 +498,13 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     ojson clusters = ojson::array();
     for (int c = 0; c < static_cast<int>(summaries.size()); ++c) {
         const ClusterSummary& summary = summaries[c];
+        double internal_km = 0;  // 7.19.3: km cụm cộng từ travel_km_before đã làm tròn (khớp dòng TASK)
+        for (int k = summary.first_task + 1; k < summary.first_task + summary.task_count; ++k) internal_km += row_km[k];
         clusters.push_back({{"cluster_seg", summary.seg}, {"cluster_code", summary.code}, {"name", summary.name},
                             {"center", latlng(summary.center)}, {"radius_m", std::llround(summary.radius_km * 1000)},
                             {"task_count", summary.task_count},
-                            {"travel_km_inbound", round_to(summary.travel_km_inbound, 1)},
-                            {"travel_km_internal", round_to(summary.travel_km_internal, 1)},
+                            {"travel_km_inbound", row_km[summary.first_task]},
+                            {"travel_km_internal", round_to(internal_km, 1)},
                             {"handle_minutes", std::llround(summary.handle_minutes)},
                             {"schedule", cluster_schedule[c]}});
     }
@@ -505,7 +512,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     const Minutes finish = at(visits.back()->done);  // Xong việc cuối (nghỉ ở cuối tuyến không tính).
     ojson metrics = {
         {"total_distance_km", round_to(km, 1)},
-        {"total_travel_minutes", std::llround(travel)},
+        {"total_travel_minutes", travel},
         {"total_handle_minutes", std::llround(handle)},
         {"start_at", format_datetime(start)},
         {"finish_at", format_datetime(finish)},
@@ -514,8 +521,8 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         {"breach_forecast_count", breach},
         {"cluster_count", static_cast<int>(summaries.size())},
         {"revisit_count", revisits},
-        {"idle_minutes", std::llround(idle)},
-        {"break_minutes", std::llround(rest)},
+        {"idle_minutes", idle},
+        {"break_minutes", rest},
         {"tasks_total", total},
         {"tasks_forecast_completed", completed},
         {"shift_end_at", format_datetime(shift_end)},

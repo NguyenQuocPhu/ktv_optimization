@@ -137,6 +137,9 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
 
     long long task_rows = 0;
     long long cluster_tasks = 0;
+    // 7.19.3: tổng metrics/cụm = tổng dòng (km tính theo phần mười để tránh sai số float).
+    long long tenths = 0, travel = 0, handle = 0, idle = 0, rest = 0;
+    auto tenth = [](const ojson& value) { return std::llround(value.get<double>() * 10); };
     std::set<long long> seen;
     std::string last_time;
     for (size_t c = 0; c < clusters.size(); ++c) {
@@ -146,7 +149,25 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
         cluster_tasks += cluster["task_count"].get<long long>();
         CHECK(cluster["radius_m"].get<long long>() >= 0);
         int expected_seq = 1;
-        for (const auto& row : cluster["schedule"]) {
+        long long cluster_tenths = 0, cluster_handle = 0, first_tenths = -1;
+        const auto& schedule = cluster["schedule"];
+        for (size_t i = 0; i < schedule.size(); ++i) {
+            const auto& row = schedule[i];
+            const std::string type = row["entry_type"].get<std::string>();
+            if (type == "IDLE") idle += row["duration_minutes"].get<long long>();
+            if (type == "BREAK") rest += row["duration_minutes"].get<long long>();
+            // 7.19.2: IDLE chờ khung hẹn nằm cùng cụm với TASK nó chờ (dòng ngay sau).
+            if (type == "IDLE" && row["label"].get<std::string>().rfind("Chờ tới khung hẹn", 0) == 0)
+                CHECK(i + 1 < schedule.size() && schedule[i + 1]["entry_type"] == "TASK");
+            if (type == "TASK") {
+                const long long leg = tenth(row["travel_km_before"]);
+                if (first_tenths < 0) first_tenths = leg;
+                else cluster_tenths += leg;
+                tenths += leg;
+                travel += row["travel_minutes_before"].get<long long>();
+                handle += row["handle_minutes"].get<long long>();
+                cluster_handle += row["handle_minutes"].get<long long>();
+            }
             CHECK(row["seq"] == expected_seq++);
             CHECK(row.contains("entry_type") && !row.contains("type"));
             const std::string entry = row["entry_type"].get<std::string>();
@@ -161,7 +182,15 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
                 CHECK(ps == "ON_TIME" || ps == "AT_RISK" || ps == "WILL_BREACH" || ps == "ALREADY_BREACHED");
             }
         }
+        CHECK(tenth(cluster["travel_km_inbound"]) == first_tenths);
+        CHECK(tenth(cluster["travel_km_internal"]) == cluster_tenths);
+        CHECK(cluster["handle_minutes"].get<long long>() == cluster_handle);
     }
+    CHECK(tenth(metrics["total_distance_km"]) == tenths);
+    CHECK(metrics["total_travel_minutes"].get<long long>() == travel);
+    CHECK(metrics["total_handle_minutes"].get<long long>() == handle);
+    CHECK(metrics["idle_minutes"].get<long long>() == idle);
+    CHECK(metrics["break_minutes"].get<long long>() == rest);
     std::set<long long> beyond;
     for (const ktv::Task* candidate : worklist.candidates)
         if (beyond_k(*candidate, now, rules)) beyond.insert(candidate->task_id);
