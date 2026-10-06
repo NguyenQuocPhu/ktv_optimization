@@ -221,10 +221,10 @@ int main() {
             std::vector<std::string> keys;  // thứ tự field theo sheet 03
             for (auto it = ra.begin(); it != ra.end(); ++it) keys.push_back(it.key());
             const std::vector<std::string> expected = {
-                "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_group_id",
-                "task_group_name", "task_type_id", "task_type_name", "task_sub_id", "task_sub_name", "checkindate",
-                "checkoutdate", "travel_minutes_before", "travel_km_before", "handle_minutes", "projected_sla",
-                "contract_id", "contract_no"};
+                "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role",
+                "insert_reason", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
+                "task_sub_name", "checkindate", "checkoutdate", "travel_minutes_before", "travel_km_before",
+                "handle_minutes", "projected_sla", "contract_id", "contract_no"};
             if (keys != expected) {
                 std::cerr << "  thứ tự field TASK:";
                 for (const auto& k : keys) std::cerr << " " << k;
@@ -238,7 +238,7 @@ int main() {
             std::vector<std::string> data_keys;
             for (auto it = data.begin(); it != data.end(); ++it) data_keys.push_back(it.key());
             CHECK(data["priority_type"] == 0);
-            CHECK(data_keys == (std::vector<std::string>{"staff_id", "priority_type", "clusters", "metrics", "ca_vu_khong_chen_duoc"}));
+            CHECK(data_keys == (std::vector<std::string>{"staff_id", "priority_type", "clusters", "metrics"}));
         }
         // Tâm cụm vẫn 4 chữ số.
         if (r) CHECK(r->response["data"]["clusters"][0]["center"].get<std::string>().size() == std::string("21.0301,105.8013").size());

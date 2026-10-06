@@ -99,7 +99,6 @@ struct Task {
     int task_plots_id = 0, staff_plots_id = 0, staff_role = 0, block_id = 0;  // staff_role 0 = không khớp lô nào của KTV.
     std::optional<long long> contract_id;    // ObjID hợp đồng. Không gửi / null = không có. Chỉ truy vết, ra output như input.
     std::optional<std::string> contract_no;  // Số hợp đồng, VD "SGABP0236" ("" giữ nguyên). Không gửi / null = không có.
-    std::string stop_group;                  // 7.16.3: mã nhóm ca cùng địa chỉ do OA gán (input `ma_diem_dung_gop`). Rỗng = chưa có.
 };
 
 // Cả message = input của một lần gọi AI cho một KTV.

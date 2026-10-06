@@ -40,6 +40,7 @@ struct PlanResult {
     const char* travel = "HAVERSINE";   // OSRM, HAVERSINE, hoặc ESTIMATED (OSRM lỗi → chim bay × 1,3).
     std::vector<Error> warnings;        // Cảnh báo của bước lọc (trạng thái task). Log + /healthz, không vào OUT.
     NormalizationStats stats;           // Đếm task theo lý do bị loại (log: vì sao 422 "không có việc").
+    std::vector<long long> unplaced;    // 7.16.1: task không xếp được (lọc K, không cùng địa chỉ với ca nào khác). Chỉ để log/test — workbook không có field OUT.
 };
 
 // HÀM CHÍNH. server_now: giờ VN hiện tại, dùng khi message không có planned_at và cho server_time.

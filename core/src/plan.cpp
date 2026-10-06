@@ -4,7 +4,6 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
-#include <map>
 #include <numeric>
 #include <string>
 
@@ -142,10 +141,9 @@ std::string one_decimal(double value) {
 }
 
 // ---- 7.16.3: gom ca cùng địa chỉ thành một điểm dừng (chạy trước QHĐ) ----
-// Một điểm dừng: 1 ca lẻ, hoặc nhóm ca cùng địa chỉ (mã OA `ma_diem_dung_gop`, hoặc tự gom khi thiếu mã).
+// Một điểm dừng: 1 ca lẻ, hoặc nhóm ca cùng địa chỉ (workbook không có mã nhóm → AI tự gom theo địa chỉ).
 struct Stop {
     std::vector<const Task*> tasks;  // đã sắp thứ tự nội bộ (ưu tiên asc → TGXL asc → task_id)
-    std::string code;                // mã nhóm để trả ra OUT; rỗng = ca lẻ
 };
 
 int stop_service(const Task& task) {
@@ -190,35 +188,22 @@ void sort_stop_tasks(std::vector<const Task*>& tasks) {
     });
 }
 
-// Gom nhóm: ưu tiên mã của OA; thiếu mã thì tự gom theo địa chỉ (rules.group_by_address); còn lại là ca lẻ.
+// Gom nhóm theo địa chỉ (workbook không có mã nhóm — AI tự gom, `rules.stop_group_radius_m`); còn lại là ca lẻ.
 std::vector<Stop> build_stops(const std::vector<const Task*>& tasks, const Rules& rules) {
     std::vector<Stop> stops;
     std::vector<bool> used(tasks.size(), false);
-    std::map<std::string, size_t> by_code;
+    const double radius_km = rules.stop_group_radius_m / 1000.0;
     for (size_t i = 0; i < tasks.size(); ++i) {
-        const std::string& code = tasks[i]->stop_group;
-        if (code.empty()) continue;
-        auto [found, inserted] = by_code.emplace(code, stops.size());
-        if (inserted) stops.push_back({{}, code});
-        stops[found->second].tasks.push_back(tasks[i]);
+        if (used[i]) continue;
+        Stop stop{{tasks[i]}};
         used[i] = true;
+        for (size_t j = i + 1; j < tasks.size(); ++j)
+            if (!used[j] && same_address(*tasks[i], *tasks[j], radius_km)) {
+                stop.tasks.push_back(tasks[j]);
+                used[j] = true;
+            }
+        stops.push_back(std::move(stop));
     }
-    if (rules.group_by_address) {
-        const double radius_km = rules.stop_group_radius_m / 1000.0;
-        for (size_t i = 0; i < tasks.size(); ++i) {
-            if (used[i]) continue;
-            Stop stop{{tasks[i]}, {}};
-            used[i] = true;
-            for (size_t j = i + 1; j < tasks.size(); ++j)
-                if (!used[j] && same_address(*tasks[i], *tasks[j], radius_km)) {
-                    stop.tasks.push_back(tasks[j]);
-                    used[j] = true;
-                }
-            stops.push_back(std::move(stop));
-        }
-    }
-    for (size_t i = 0; i < tasks.size(); ++i)
-        if (!used[i]) stops.push_back({{tasks[i]}, {}});
     for (Stop& stop : stops)
         if (stop.tasks.size() > 1) sort_stop_tasks(stop.tasks);
     return stops;
@@ -307,23 +292,20 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     for (Stop& stop : stops) {
         if (stop.tasks.size() > 1 && !group_servable(stop, rules, now)) {
             result.warnings.push_back({"", "nhóm cùng địa chỉ không phục vụ liền nhau được, tách từng ca", "STOP_GROUP_SPLIT"});
-            for (const Task* task : stop.tasks) grouped.push_back({{task}, {}});
+            for (const Task* task : stop.tasks) grouped.push_back({{task}});
             continue;
         }
         grouped.push_back(std::move(stop));
     }
     // 7.16.1 + mục C: ca tháng > K bị lọc chỉ khi nhóm của nó không còn ca nào khác được xếp.
-    std::vector<long long> unplaced;
     std::vector<Stop> routed_stops;
-    int auto_code = 0;
     for (Stop& stop : grouped) {
         bool any_kept = false;
         for (const Task* task : stop.tasks) any_kept |= !beyond_k(*task, now, rules);
         if (!any_kept) {
-            for (const Task* task : stop.tasks) unplaced.push_back(task->task_id);
+            for (const Task* task : stop.tasks) result.unplaced.push_back(task->task_id);
             continue;
         }
-        if (stop.code.empty() && stop.tasks.size() > 1) stop.code = "auto-" + std::to_string(++auto_code);
         routed_stops.push_back(std::move(stop));
     }
     result.routed = 0;
@@ -466,6 +448,10 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
                          {"start_at", format_datetime(at(checkin))}, {"end_at", format_datetime(at(done))},
                          {"task_id", task.task_id}, {"location", task.location},
                          {"latlng", latlng(*task.latlng, 6)},  // task đã qua lọc nên luôn có tọa độ
+                         // Workbook (1): vai trò ca (main = ca chính theo hẹn SLA, inserted = ca chèn) + lý do chèn
+                         // (ca chèn cùng địa chỉ với ca khác → "same_address"; chưa có lý do khác → "").
+                         {"task_role", kind.extra ? "inserted" : "main"},
+                         {"insert_reason", kind.extra && stop.tasks.size() > 1 ? "same_address" : ""},
                          {"task_group_id", task.task_group_id},
                          {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
                          {"task_type_name", task.task_type_name}, {"task_sub_id", task.task_sub_id},
@@ -475,7 +461,6 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
                          {"handle_minutes", std::llround(service)}, {"projected_sla", sla},
                          // Như input (người dùng chốt 7.9): số vẫn là số, chuỗi giữ nguyên; không gửi / null → null.
                          {"contract_id", or_null(task.contract_id)}, {"contract_no", or_null(task.contract_no)}};
-            if (stop.tasks.size() > 1) row["ma_diem_dung_gop"] = stop.code;  // 7.16.3: FE gộp hiển thị
             rows.push_back(std::move(row));
             row_task.push_back(task_ordinal);
             offset += service;
@@ -535,8 +520,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     metrics["generated_in_ms"] = ms;
 
     const bool estimated = !travel_error.empty();  // Sheet 07: bản đồ lỗi vẫn trả tuyến, mã 424.
-    ojson data = {{"staff_id", staff.staff_id}, {"priority_type", 0}, {"clusters", clusters}, {"metrics", metrics},
-                  {"ca_vu_khong_chen_duoc", unplaced}};
+    ojson data = {{"staff_id", staff.staff_id}, {"priority_type", 0}, {"clusters", clusters}, {"metrics", metrics}};
     if (explain) {  // --explain: chi phí từng tầng/rule + vài phương án so sánh (không đổi thứ tự).
         const Explained chosen = explain_order(p, rules, solution.order);
         ojson tiers = ojson::array();

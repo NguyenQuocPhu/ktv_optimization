@@ -81,10 +81,6 @@ Rules rules_from_json(const nlohmann::json& data) {
     double group_wait = rules.stop_group_max_wait_minutes;
     number("stop_group_max_wait_minutes", group_wait, 0);
     rules.stop_group_max_wait_minutes = static_cast<int>(group_wait);
-    if (data.contains("group_by_address")) {
-        if (!data["group_by_address"].is_boolean()) fail("group_by_address cần true/false");
-        rules.group_by_address = data["group_by_address"].get<bool>();
-    }
     number("current_task_minutes", rules.current_task_minutes, 0);
     number("average_speed_kmh", rules.average_speed_kmh, 1);
     number("at_risk_minutes", rules.at_risk_minutes, 0);
@@ -126,7 +122,6 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"max_exact_tasks", rules.max_exact_tasks},
         {"max_labels_per_state", rules.max_labels},
         {"k_month_days", rules.k_month_days},
-        {"group_by_address", rules.group_by_address},
         {"stop_group_radius_m", rules.stop_group_radius_m},
         {"stop_group_max_wait_minutes", rules.stop_group_max_wait_minutes},
         {"current_task_minutes", rules.current_task_minutes},

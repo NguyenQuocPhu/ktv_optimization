@@ -279,7 +279,6 @@ function render(result) {
     stat(metrics.breach_forecast_count, "việc trễ"),
     stat(metrics.cluster_count, "cụm"),
     stat(metrics.generated_in_ms + " ms", "thời gian tính"),
-    ...(out.data.ca_vu_khong_chen_duoc?.length ? [stat(out.data.ca_vu_khong_chen_duoc.length, "không chèn được (K)")] : []),
   ].join("");
 
   const warnings = (result.stderr || "").split("\n").filter((l) => /^\s+\d+ × /.test(l));

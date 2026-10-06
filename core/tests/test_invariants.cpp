@@ -120,7 +120,7 @@ static bool beyond_k(const ktv::Task& task, ktv::Minutes now, const ktv::Rules& 
 
 // Kiểm bất biến của một lần plan so với danh sách candidate từ normalization (đã trừ ca bị lọc K).
 static void check_invariants(const ktv::Message& message, const ojson& response, const ktv::NormalizedWorklist& worklist,
-                             ktv::Minutes now, const ktv::Rules& rules) {
+                             ktv::Minutes now, const ktv::Rules& rules, const std::vector<long long>& unplaced) {
     const std::string code = response["statuscode"].get<std::string>();
     CHECK(code == "200" || code == "422" || code == "424");
     if (code == "422") {
@@ -167,9 +167,8 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
         if (beyond_k(*candidate, now, rules)) beyond.insert(candidate->task_id);
     CHECK(task_rows == metrics["tasks_total"].get<long long>());
     CHECK(cluster_tasks == task_rows);
-    // ca_vu_khong_chen_duoc = các ca bị lọc K; nhóm cùng địa chỉ có thể "cứu" ca tháng > K (7.16.3) nên chỉ kiểm tập con.
-    std::set<long long> listed;
-    for (const auto& item : data["ca_vu_khong_chen_duoc"]) listed.insert(item.get<long long>());
+    // unplaced = các ca bị lọc K; nhóm cùng địa chỉ có thể "cứu" ca tháng > K (7.16.3) nên chỉ kiểm tập con.
+    std::set<long long> listed(unplaced.begin(), unplaced.end());
     for (long long id : listed) CHECK(beyond.count(id) == 1);
     std::set<long long> expected_ids;
     for (const ktv::Task* candidate : worklist.candidates)
@@ -208,11 +207,9 @@ int main(int argc, char** argv) {
             if (!errors.empty()) continue;
             ktv::NormalizedWorklist worklist = ktv::normalize_worklist(message);
             ktv::PlanResult result = ktv::plan(message, rules, now);
-            check_invariants(message, result.response, worklist, now, rules);
-            if (result.response["statuscode"] == "200" || result.response["statuscode"] == "424") {
-                const int unplaced = static_cast<int>(result.response["data"]["ca_vu_khong_chen_duoc"].size());
-                CHECK(result.routed == static_cast<int>(worklist.candidates.size()) - unplaced);
-            }
+            check_invariants(message, result.response, worklist, now, rules, result.unplaced);
+            if (result.response["statuscode"] == "200" || result.response["statuscode"] == "424")
+                CHECK(result.routed == static_cast<int>(worklist.candidates.size()) - static_cast<int>(result.unplaced.size()));
             CHECK(result.excluded == worklist.stats.excluded_missing_location);
             if (seed % 10 == 0) {  // 300 bài kiểm tất định
                 // generated_in_ms là thời gian đo bằng đồng hồ (máy bận: 0 → 1 ms) → bỏ ra trước khi so, không thì test chập chờn.
@@ -243,7 +240,7 @@ int main(int argc, char** argv) {
             }
             ktv::NormalizedWorklist worklist = ktv::normalize_worklist(message);
             ktv::PlanResult result = ktv::plan(message, rules, now);
-            check_invariants(message, result.response, worklist, now, rules);
+            check_invariants(message, result.response, worklist, now, rules, result.unplaced);
             if (result.response["statuscode"] == "200" || result.response["statuscode"] == "424") ++ok;
             else ++no_task;
         }
