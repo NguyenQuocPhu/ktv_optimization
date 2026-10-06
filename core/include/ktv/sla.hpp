@@ -9,6 +9,8 @@
 //   Rồi dự báo projected_sla: ON_TIME / AT_RISK / WILL_BREACH / ALREADY_BREACHED.
 //
 // Quy tắc "trong ngày tạo phiếu" và "trong tháng" lấy theo create_date nếu có, không thì planned_at.
+// Ngoại lệ thu bill (mục E): hoa_don không hẹn có complete_date (ngày KH thanh toán kỳ trước) trùng ngày-trong-tháng
+// với ngày chạy → hạn cuối hôm nay (còn 0 ngày). thu_hoi không có ngoại lệ này.
 // Module này KHÔNG đổi cách QHĐ chọn thứ tự; chỉ cung cấp số cho bước dựng Problem và output.
 //
 // Phụ thuộc: api (Task/TaskKind/OnTime), rules (ngưỡng AT_RISK).

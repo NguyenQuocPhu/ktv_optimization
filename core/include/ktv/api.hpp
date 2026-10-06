@@ -92,7 +92,7 @@ struct Task {
     std::optional<Minutes> appointment;  // Mốc hẹn A. Không có = khách không hẹn.
     std::optional<Minutes> create_date;  // Ngày phát sinh ca vụ. Input tên "create_date" hoặc "CreateDate" (cùng một field).
     std::optional<Minutes> complete_date;// Ngày hoàn tất ca vụ TRƯỚC ĐÓ, VD ngày thu bill kỳ trước (workbook (3)).
-                                          // Không phải "task này đã xong" (đó là task_status_id). Chưa dùng khi xếp.
+                                          // Không phải "task này đã xong" (đó là task_status_id). Chỉ hoa_don dùng: mục E (sla.cpp).
     std::string location;                // Địa chỉ, chỉ để hiển thị.
     std::optional<Point> latlng;         // Không có = thiếu tọa độ → bị loại khỏi tuyến.
     std::optional<int> handle_minutes;   // Không có / 0 = dùng định mức theo loại việc.

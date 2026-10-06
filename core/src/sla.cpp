@@ -1,5 +1,6 @@
 #include "ktv/sla.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -16,6 +17,14 @@ Minutes end_of_month(Minutes t) {
     return *parse_datetime(next) - 1;
 }
 
+int day_of_month(Minutes t) { return std::stoi(format_datetime(t).substr(8, 2)); }
+
+// Mục E (thu bill): ngày-trong-tháng KH thanh toán kỳ trước trùng ngày chạy → đến hạn hôm nay. Chỉ so ngày, không kiểm
+// tháng (OA chọn lần thanh toán, gửi lần gần nhất — [GIẢ ĐỊNH]); ngày 31 ở tháng 30 ngày → quy về ngày cuối tháng này.
+bool paid_day_today(Minutes paid, Minutes now) {
+    return std::min(day_of_month(paid), day_of_month(end_of_month(now))) == day_of_month(now);
+}
+
 }  // namespace
 
 Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes planned_at) {
@@ -30,6 +39,9 @@ Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes plan
     const Minutes base = task.create_date.value_or(planned_at);
     if (kind.on_time == OnTime::DoneSameCreatedDay || kind.on_time == OnTime::DoneSameAppointmentDay)
         d.complete_by = start_of_day(base) + 1439;
+    else if (kind.on_time == OnTime::DoneWithinMonth && std::string(kind.group) == "hoa_don" && task.complete_date &&
+             paid_day_today(*task.complete_date, planned_at))
+        d.complete_by = start_of_day(planned_at) + 1439;  // Mục E: còn 0 ngày → chèn ngay trong ngày.
     else if (kind.on_time == OnTime::DoneWithinMonth)
         d.complete_by = end_of_month(base);
     return d;  // Loại "check-in trước B" mà không hẹn: chưa có B, không tính trễ.

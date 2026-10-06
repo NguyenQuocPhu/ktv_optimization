@@ -133,6 +133,28 @@ int main() {
         }
     }
 
+    {  // Mục E (7.17): hoa_don thanh toán kỳ trước trùng ngày-trong-tháng ngày chạy → hạn cuối hôm nay.
+        const TaskKind* bill = find_kind("hoa_don", "hoa_don_tra_sau");
+        CHECK(bill);
+        const auto deadline = [&](const TaskKind& kind, const char* paid, const char* run, bool appointment = false) {
+            Task t;
+            t.create_date = parse_datetime("2026-10-01 08:00:00");
+            t.complete_date = parse_datetime(paid);
+            if (appointment) t.appointment = parse_datetime(std::string(run).substr(0, 10) + " 14:00:00");
+            return when(resolve_deadlines(t, kind, *parse_datetime(run)).complete_by);
+        };
+        CHECK(deadline(*bill, "2026-09-12 10:00:00", "2026-10-12 09:00:00") == "2026-10-12 23:59:00");  // trùng 12
+        CHECK(deadline(*bill, "2026-09-25 10:00:00", "2026-10-12 09:00:00") == "2026-10-31 23:59:00");  // lệch → cuối tháng
+        CHECK(deadline(*bill, "2026-08-12 10:00:00", "2026-10-12 09:00:00") == "2026-10-12 23:59:00");  // chỉ so ngày, không so tháng
+        CHECK(deadline(*bill, "2026-10-31 10:00:00", "2026-11-30 09:00:00") == "2026-11-30 23:59:00");  // 31 → cuối tháng 30 ngày
+        CHECK(deadline(*bill, "2026-10-31 10:00:00", "2026-11-29 09:00:00") != "2026-11-29 23:59:00");  // 29 ≠ 30: không đến hạn hôm nay
+        CHECK(deadline(*bill, "2026-09-12 10:00:00", "2026-10-12 09:00:00", true) == "2026-10-12 23:59:00");  // có hẹn: theo hẹn
+        CHECK(deadline(*month, "2026-09-12 10:00:00", "2026-10-12 09:00:00") == "2026-10-31 23:59:00");  // thu_hoi: không áp
+        Task no_paid;  // hoa_don không complete_date → cuối tháng như cũ
+        no_paid.create_date = parse_datetime("2026-10-01 08:00:00");
+        CHECK(when(resolve_deadlines(no_paid, *bill, *parse_datetime("2026-10-12 09:00:00")).complete_by) == "2026-10-31 23:59:00");
+    }
+
     {  // workdays_until (7.16.1): T2–T6, không tính ngày bắt đầu, tính ngày hạn; hạn hôm nay/đã qua → 0.
         const auto at = [](const char* text) { return *ktv::parse_datetime(text); };
         CHECK(ktv::workdays_until(at("2026-09-10 09:00:00"), at("2026-09-10 23:00:00")) == 0);  // cùng ngày (thứ Năm)

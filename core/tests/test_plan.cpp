@@ -127,6 +127,16 @@ int main() {
     for (const auto& cluster : k_filtered.response["data"]["clusters"])
         for (const auto& row : cluster["schedule"])
             CHECK(row["entry_type"] != "TASK" || row["task_id"] != 5454544);
+    {  // 7.17 mục E: cùng ngày 10/09, KH thanh toán kỳ trước ngày 10 → hóa đơn đến hạn hôm nay: không lọc K, urgency max.
+        json paid = early;
+        paid["tasks"]["hoa_don"][0]["complete_date"] = "2026-08-10 16:00:00";
+        errors.clear();
+        ktv::PlanResult due_today = ktv::plan(ktv::parse_message(paid, errors), ktv::default_rules(), server_now, "", true);
+        CHECK(errors.empty());
+        CHECK(due_today.unplaced.empty());
+        CHECK(due_today.response["data"]["metrics"]["tasks_total"] == 2);
+        CHECK(due_today.response["data"]["score"]["tiers"][2]["rules"]["DEADLINE_URGENCY"].get<double>() > 0);
+    }
     // Ngày 28/09 (2 ngày làm việc ≤ K) thì hóa đơn vẫn xếp, không ca nào bị lọc — đã kiểm ở trên.
     CHECK(result.unplaced.empty());
 
