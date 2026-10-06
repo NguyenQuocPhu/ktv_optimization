@@ -666,7 +666,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.13 ✅ | Output `data.priority_type` (workbook API (4)), luôn `0` (default) — chi tiết bên dưới | mọi response có tuyến có `priority_type: 0` ngay sau `staff_id` |
 | 7.12 ✅ | Nhận nhóm thứ 6 `cscd` (CSKH chủ động, workbook API (4)), không bắt buộc; `onsite` chỉ còn `phieu_onsite`, 2 loại CSKH sang `cscd` (tra dự phòng) — chi tiết bên dưới | payload 6 khóa đọc được task `cscd`; payload 5 khóa không cảnh báo |
 | 7.14 ✅ | Log có cấu trúc: một dòng JSON mỗi message (lý do lỗi đầy đủ, đếm task, payload IN theo `--log-payload`), gateway log mỗi request — chi tiết bên dưới | log `400` thấy đủ lỗi + payload trên một dòng |
-| 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K**, **7.16.2 ✅ `DEADLINE_URGENCY`**, **7.16.3 ✅ gộp điểm dừng cùng địa chỉ** — chi tiết bên dưới | việc tháng còn > K không lên tuyến (trừ khi cùng địa chỉ với ca khác) + vào `ca_vu_khong_chen_duoc`; urgency đổi được thứ tự; ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần |
+| 7.16 | Bám Event Catalogue v2.0 (`ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx`, mục B + C): **7.16.1 ✅ lọc K**, **7.16.2 ✅ `DEADLINE_URGENCY`**, **7.16.3 ✅ gộp điểm dừng cùng địa chỉ** (hợp đồng IN/OUT theo `API-Goi-y-cong-viec (1).xlsx`) — chi tiết bên dưới | việc tháng còn > K không lên tuyến (trừ khi cùng địa chỉ với ca khác); urgency đổi được thứ tự; ca cùng nhóm luôn liền nhau, TGXL cộng, km tính 1 lần, `task_role`/`insert_reason` đúng workbook |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1128,14 +1128,14 @@ benchmark 5.332 message giữ 5202/130, không cảnh báo.
 
 ##### 7.16 — Bám Event Catalogue v2.0: ngưỡng K, DEADLINE_URGENCY, gộp điểm dừng cùng địa chỉ (người dùng chốt hướng 2026-10-06)
 
-**Bối cảnh.** `ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx` (event catalogue v2.0) đổi cách nhìn "ca chính / ca chèn": mục B (ca chèn tranh khoảng trống: số ngày còn lại → ưu tiên → thuận tuyến; ngưỡng K = 5 ngày làm việc) và mục C (ca cùng địa chỉ khách hàng: gom ≤ 50 m thành một điểm dừng, xếp liền nhau, TGXL cộng dồn, neo theo hẹn sớm nhất, K không áp). Sheet "4. Payload tối thiểu" cho thấy OA làm sẵn phần nặng: `soNgayLamViecConLai` (bước 6), `maDiemDungGop` (bước 7), `tinhTuyen`, `tgxlChuan`, `doUuTien`; AI phải trả `isExtra`, `caVuKhongChenDuoc`, `maDiemDungGop`.
+**Bối cảnh.** `ISC_MobiX_EventCatalogue_AIGoiycavu_v1.0.xlsx` (event catalogue v2.0) đổi cách nhìn "ca chính / ca chèn": mục B (ca chèn tranh khoảng trống: số ngày còn lại → ưu tiên → thuận tuyến; ngưỡng K = 5 ngày làm việc) và mục C (ca cùng địa chỉ khách hàng: gom ≤ 50 m thành một điểm dừng, xếp liền nhau, TGXL cộng dồn, neo theo hẹn sớm nhất, K không áp). Sheet "4. Payload tối thiểu" cho thấy OA làm sẵn phần nặng: `soNgayLamViecConLai` (bước 6), `maDiemDungGop` (bước 7), `tinhTuyen`, `tgxlChuan`, `doUuTien`; AI phải trả `isExtra`, `caVuKhongChenDuoc`, `maDiemDungGop`. **Người dùng chốt 2026-10-06: hợp đồng IN/OUT theo `API-Goi-y-cong-viec (1).xlsx`; các field riêng của ISC (`isExtra`, `caVuKhongChenDuoc`, `maDiemDungGop`, `soNgayLamViecConLai`) chỉ tham khảo — xem 7.16.4.**
 
 **Hướng chốt (người dùng 2026-10-06).** Giữ thuật toán QHĐ, không chuyển sang engine chèn Rule 5 riêng. Các luật catalogue diễn đạt bằng ba thứ: (1) bộ lọc trước QHĐ, (2) một rule mới ở tầng 3, (3) tiền/hậu xử lý quanh QHĐ. **Không sửa `objective`, không đổi thứ tự các tầng hiện có, không sửa `dp.cpp` phần chọn thứ tự.**
 
 #### 7.16.1 — Ngưỡng K (bộ lọc trước QHĐ)
 
 - `Rules` thêm `k_month_days = 5` (rules.json khóa `k_month_days`, ≥ 0).
-- Ca có `OnTime::DoneWithinMonth` (thu hồi thiết bị, thu bill) với `days_left > K` → **không vào bài toán**, đưa vào `data.ca_vu_khong_chen_duoc` (mảng id — 7.16.4). Việc lọc đặt ở `plan.cpp` (sau `normalize_worklist`, trước dựng `Problem`).
+- Ca có `OnTime::DoneWithinMonth` (thu hồi thiết bị, thu bill) với `days_left > K` → **không vào bài toán**, ghi vào `PlanResult.unplaced` (không vào OUT — 7.16.4). Việc lọc đặt ở `plan.cpp` (sau `normalize_worklist`, trước dựng `Problem`).
 - Nguồn `days_left` — **suy từ chính input, không cần field mới**:
   1. `days_left` = số ngày làm việc (T2–T6, trừ `rules.holidays`) từ `planned_at` tới **hạn cuối của ca**, lấy từ `resolve_deadlines` đã có: "hoàn tất trong tháng" → cuối tháng; "hoàn tất trong ngày hẹn" → hết ngày hẹn (fallback ngày tạo như hiện tại). Ca chính không cần (urgency = 0).
   2. `rules.holidays` (mảng "YYYY-MM-DD", mặc định rỗng) — **[GIẢ ĐỊNH của repo]**: catalogue ghi lịch "T2–T6 trừ ngày lễ" nhưng chưa có danh sách lễ; thiếu lễ thì `days_left` hơi lệch → câu hỏi cho team data.
@@ -1147,7 +1147,7 @@ benchmark 5.332 message giữ 5202/130, không cảnh báo.
 
 **Tạm không làm (người dùng chốt 2026-10-06):** (1) **danh sách ngày lễ** — `rules.holidays` để rỗng, `days_left` bỏ qua lễ; (2) **thu bill trúng ngày thanh toán lịch sử** — không dùng, thu bill tính như ca tháng bình thường. Cả hai đã ghi thành câu hỏi ở `docs/DATA_QUESTIONS.md` (tài liệu là tham khảo, input thiếu thì không cố).
 
-**Kết quả 7.16.1 (2026-10-06):** `rules.k_month_days = 5` (rules.json, `print-rules` in ra); `sla::workdays_until()` (T2–T6, không tính ngày chạy, tính ngày hạn; hạn hôm nay/đã qua → 0); lọc trong `plan()` sau normalization, trước dựng Problem; OUT thêm `data.ca_vu_khong_chen_duoc` (mảng id, luôn có, rỗng khi không lọc). Test: `test_sla` 5 kiểm cho `workdays_until`; `test_plan` thêm ca chạy 10/09 (hóa đơn còn 14 ngày > K → không xếp + có trong danh sách) và mặc định 28/09 (2 ngày ≤ K → vẫn xếp, danh sách rỗng); `test_invariants` kiểm danh sách khớp đúng tập bị lọc trên 3.000 message ngẫu nhiên; các fixture cũ đổi ngày chạy sang 28/09 để không bị lọc. `ctest` 18/18. **Mốc benchmark 5.332 đổi** (phân bố `200/422` sẽ khác 5.202/130 — test chỉ còn assert tổng + in phân bố; đo lại khi có file). Demo `tools/review_map/sample_in.json`: chạy 05/06 → thu hồi + hóa đơn vào `ca_vu_khong_chen_duoc` (4 việc xếp); chạy 26/06 → 6 việc, danh sách rỗng.
+**Kết quả 7.16.1 (2026-10-06):** `rules.k_month_days = 5` (rules.json, `print-rules` in ra); `sla::workdays_until()` (T2–T6, không tính ngày chạy, tính ngày hạn; hạn hôm nay/đã qua → 0); lọc trong `plan()` sau normalization, trước dựng Problem; danh sách ca bị lọc ở `PlanResult.unplaced` *(bản đầu để trong OUT `data.ca_vu_khong_chen_duoc` — đã bỏ 2026-10-06 vì workbook (1) không có field)*. Test: `test_sla` 5 kiểm cho `workdays_until`; `test_plan` thêm ca chạy 10/09 (hóa đơn còn 14 ngày > K → không xếp, có trong `unplaced`) và mặc định 28/09 (2 ngày ≤ K → vẫn xếp, `unplaced` rỗng); `test_invariants` kiểm `unplaced` khớp tập bị lọc trên 3.000 message ngẫu nhiên; các fixture cũ đổi ngày chạy sang 28/09 để không bị lọc. `ctest` 18/18. **Mốc benchmark 5.332 đổi** (phân bố `200/422` sẽ khác 5.202/130 — test chỉ còn assert tổng + in phân bố; đo lại khi có file). Demo `tools/review_map/sample_in.json`: chạy 05/06 → thu hồi + hóa đơn bị lọc (4 việc xếp); chạy 26/06 → 6 việc, `unplaced` rỗng.
 
 #### 7.16.2 — Rule `DEADLINE_URGENCY` (tầng 3, có trọng số)
 
@@ -1173,7 +1173,7 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 
 **Tiền xử lý (trước QHĐ).** Gom ca thành "điểm dừng gộp" (super-task):
 
-- Khóa nhóm: catalogue là **`maDiemDungGop`** (sheet 4; **OA gán ở bước 7** — OA là bên gom, AI chỉ giữ liền nhau). Repo dùng `ma_diem_dung_gop`. **Fallback [GIẢ ĐỊNH của repo]** khi OA chưa gửi mã: tự gom theo địa chỉ — `distance_km ≤ rules.stop_group_radius_m` (50 m, tham số catalogue sheet 1); riêng **trùng toạ độ** thì phải khớp chuỗi `location` đã chuẩn hoá (dữ liệu giả hay dùng chung tâm phường, không gom hai khách khác nhau chỉ vì chung toạ độ). Ca candidate luôn có toạ độ (normalization đã loại ca thiếu) nên không cần nhánh "toạ độ thiếu".
+- Khóa nhóm: workbook (1) **không có mã nhóm** (ISC `maDiemDungGop` chỉ tham khảo) → AI tự gom theo địa chỉ: `distance_km ≤ rules.stop_group_radius_m` (50 m, tham số catalogue sheet 1); riêng **trùng toạ độ** thì phải khớp chuỗi `location` đã chuẩn hoá (dữ liệu giả hay dùng chung tâm phường, không gom hai khách khác nhau chỉ vì chung toạ độ). Ca candidate luôn có toạ độ (normalization đã loại ca thiếu).
 - **K và nhóm (catalogue mục C: "ngưỡng K KHÔNG ÁP Ở ĐÂY")**: ca thu hồi/thu bill còn > K ngày vẫn được gom nếu cùng địa chỉ với một ca khác đang được làm ("KTV đã tới tận nơi vì ca khác, không có chuyến đi riêng nào để tiết chế"). Hệ quả hiện thực: **gom nhóm phải chạy TRƯỚC lọc K (7.16.1)** — ca tháng > K chỉ bị lọc khi nhóm của nó không còn ca nào khác được xếp; nhóm toàn ca tháng > K thì lọc cả nhóm (không có chuyến đi riêng). *(7.16.1 hiện đang lọc trước khi gom — phải sửa khi làm 7.16.3.)*
 - Super-task: `service` = **Σ handle_minutes** (catalogue: "TGXL chuẩn của điểm dừng gộp = TỔNG"), `opens` = **A sớm nhất của nhóm** (catalogue: "neo theo khung giờ hẹn sớm nhất"), `due` = **min B trong nhóm** *(chặt hơn câu chữ catalogue "mốc B của ca neo": tuyến tới muộn vẫn không được vi phạm B của ca nào trong nhóm — nhóm hợp lệ thì các B đều ≥ check-in tại mốc neo, nhưng tới muộn hơn thì không)*, `complete_by` = min hạn hoàn tất trong nhóm **[bổ sung của repo — catalogue không nói, để không mất hạn tháng của ca thu hồi/thu bill nằm trong nhóm]**, lô = lô ca neo (cho `AREA_REENTRY`), `weight` = **max trọng số ưu tiên trong nhóm**, `urgency` = **max urgency trong nhóm** **[GIẢ ĐỊNH của repo — nhóm gánh việc gấp nhất; catalogue chỉ nói thứ tự nội bộ + "ưu tiên không bị nâng" khi tranh khoảng trống với địa chỉ khác]**; thứ tự nội bộ = (ưu tiên asc, TGXL asc, task_id) — lưu mảng ca gốc để bung.
 - **Kiểm nhóm hợp lệ — [GIẢ ĐỊNH của repo]**: catalogue chỉ nói "2 hẹn không thể làm liền nhau thì tách", không định nghĩa ngưỡng. Cách kiểm đề xuất: phục vụ liền nhau bắt đầu tại `max(giờ tới, A neo)`; check-in của ca thứ k = giờ bắt đầu + Σ service trước nó; ca nào phải **chờ** > `rules.stop_group_max_wait_minutes` (mặc định 30) hoặc `check-in > B` → **tách nhóm** + cảnh báo `STOP_GROUP_SPLIT` (mã nội bộ). (Cặp 08:00–10:00 và 16:00–18:00 tách; cặp 08:00–10:00 và 10:00–12:00 phải chờ ~1,5h → tách theo ngưỡng mặc định — nếu PO muốn gộp thì nâng ngưỡng.)
@@ -1184,17 +1184,18 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 
 - Cùng `at` (giờ tới), giờ `start_at`/`end_at` nối tiếp theo thứ tự nội bộ; `travel_km_before`/`travel_minutes_before` chỉ ghi ở ca đầu; các ca cùng nhóm liền nhau, cùng cụm, `seq` liên tục.
 - `tasks_total` = **số ca** (giữ contract hiện tại); km/travel của nhóm chỉ tính một lần (điểm dừng là một).
-- Echo `ma_diem_dung_gop` trên từng dòng TASK.
+- Echo `task_role` / `insert_reason` trên từng dòng TASK (workbook (1) sheet 03; `insert_reason = "same_address"` cho ca chèn được gom theo địa chỉ).
 
-**Kết quả 7.16.3 (2026-10-06):** `plan.cpp` gom nhóm **trước** lọc K: theo `ma_diem_dung_gop` (input mới, parse nới lỏng) hoặc tự gom theo địa chỉ (`rules.group_by_address`, `stop_group_radius_m = 50`; trùng toạ độ thì đối chiếu `location`); nhóm không phục vụ liền nhau được (chờ > `stop_group_max_wait_minutes = 30` hoặc quá B của ca nào trong nhóm) → tách từng ca + cảnh báo `STOP_GROUP_SPLIT`; K chỉ áp khi **cả nhóm** đều quá K; QHĐ chạy trên điểm dừng (service = Σ, `due` = min B, `weight`/`urgency` = max); OUT bung từng ca (giờ nối tiếp, km chỉ ca đầu, `projected_sla` tính riêng từng ca) + `ma_diem_dung_gop` (mã OA, hoặc `auto-<n>` khi tự gom). Test: `test_plan` ca gom (2 dòng liền nhau, cùng mã, km 1 lần, ca tháng > K được cứu); `test_invariants` chấp nhận nhóm cứu ca tháng; `test_pipeline` đổi toạ độ fixture (trước trùng nhau nên bị gom). `ctest` 18/18. Demo `sample_in.json` (dời hóa đơn về cùng địa chỉ bảo trì): 1 điểm dừng `auto-1` 10:01→11:16, hóa đơn còn 18 ngày > K vẫn được gom; M000089: cặp Ich Vinh bị tách vì hẹn lệch quá 30′ (đúng ngoại lệ catalogue).
+**Kết quả 7.16.3 (2026-10-06):** `plan.cpp` gom nhóm **trước** lọc K: tự gom theo địa chỉ (`rules.stop_group_radius_m = 50`; trùng toạ độ thì đối chiếu `location`); nhóm không phục vụ liền nhau được (chờ > `stop_group_max_wait_minutes = 30` hoặc quá B của ca nào trong nhóm) → tách từng ca + cảnh báo `STOP_GROUP_SPLIT`; K chỉ áp khi **cả nhóm** đều quá K; QHĐ chạy trên điểm dừng (service = Σ, `due` = min B, `weight`/`urgency` = max); OUT bung từng ca (giờ nối tiếp, km chỉ ca đầu, `projected_sla` tính riêng từng ca) + `task_role`/`insert_reason` theo workbook (1). *(Bản đầu có input `ma_diem_dung_gop` + echo mã nhóm/`auto-<n>` — đã bỏ 2026-10-06 vì workbook (1) không có; xem 7.16.4.)* Test: `test_plan` ca gom (2 dòng liền nhau, role/insert_reason, km 1 lần, ca tháng > K được cứu); `test_invariants` chấp nhận nhóm cứu ca tháng; `test_pipeline` đổi toạ độ fixture (trước trùng nhau nên bị gom) + thứ tự field TASK. `ctest` 18/18. Demo `sample_in.json` (dời hóa đơn về cùng địa chỉ bảo trì): 1 điểm dừng 10:01→11:16, hóa đơn `inserted`/`same_address`, còn 18 ngày > K vẫn được gom; M000089: cặp Ich Vinh bị tách vì hẹn lệch quá 30′ (đúng ngoại lệ catalogue).
 
-#### 7.16.4 — Output
+#### 7.16.4 — Output (người dùng chốt 2026-10-06: hợp đồng IN/OUT theo `API-Goi-y-cong-viec (1).xlsx`; ISC chỉ tham khảo)
 
-- `data.ca_vu_khong_chen_duoc`: **mảng id ca vụ** — đúng catalogue (`caVuKhongChenDuoc[]`, `Array<String>`, VÙNG B: "ca AI không tìm được chỗ chèn trong ngày"). Không kèm lý do. Ca bị lọc K nằm trong đây (không tham gia = không chèn được).
-- Mỗi dòng TASK thêm `is_extra` (bool — catalogue `isExtra` trong `orderedTasks`: ca chèn theo bảng vai trò ở sheet 5) và `ma_diem_dung_gop` (catalogue `maDiemDungGop`, "trả lại mã nhóm để FE gộp hiển thị"; chỉ ghi khi ca thuộc nhóm).
-- **Bảng tên field** (catalogue camelCase ↔ repo snake_case; chốt ở 7.16.8): `maDiemDungGop` ↔ `ma_diem_dung_gop` · `isExtra` ↔ `is_extra` · `caVuKhongChenDuoc[]` ↔ `data.ca_vu_khong_chen_duoc`. (`soNgayLamViecConLai` là đường tắt optional — có thì nhận; `ngayThanhToanThangTruoc`/`denHanHomNay` cũng optional, không có thì bỏ qua ngoại lệ thu bill.)
-- `data.score` (`--explain`) tự có `DEADLINE_URGENCY` trong tầng 3 — không phải sửa gì thêm.
-- **Không làm ở phase này** (các field còn lại của response catalogue v2.0, để dành khi chốt contract): `khongTinhTuyen[]`, `nhanLyDo`, `thoiDiemPhaiRoiDi`, `mapData`, `estimatedMetrics`, `optMode`, `routeVersion`, `tinhTuyen` (OA quyết), điểm khởi hành 3 bậc, ràng buộc cứng mốc B, KTV lịch trực off vẫn tính tuyến.
+- **Bỏ** `data.ca_vu_khong_chen_duoc` và `ma_diem_dung_gop` khỏi OUT — workbook (1) không có 2 field này. Danh sách ca bị lọc K giữ ở `PlanResult.unplaced` (C++, chỉ để log/test).
+- **Bỏ** input `ma_diem_dung_gop` — workbook (1) sheet 02 không có → nhóm chỉ còn tự gom theo địa chỉ.
+- Mỗi dòng TASK thêm theo workbook (1) sheet 03: `task_role` (`main` = ca chính theo hẹn SLA · `inserted` = ca chèn) và `insert_reason` (`"same_address"` khi ca chèn được gom theo địa chỉ, `""` khi chưa có lý do khác).
+- `data.score` (`--explain`) giữ nguyên — chỉ bật khi test/review, không vào OUT production.
+- **Chưa làm (chờ chốt)**: `data.change_id` + `data.trace_id` (sheet 03 đánh ✔ — thuộc luồng cache gateway, cần chốt ngữ nghĩa), `priority` (chưa có công thức), và hình dạng `data` (sheet 03 ghi `data[]` array, dòng A2 + code hiện tại là object).
+- **Không làm ở phase này** (các field còn lại của catalogue ISC — chỉ tham khảo): `khongTinhTuyen[]`, `nhanLyDo`, `thoiDiemPhaiRoiDi`, `mapData`, `estimatedMetrics`, `optMode`, `routeVersion`, `tinhTuyen`, điểm khởi hành 3 bậc, ràng buộc cứng mốc B, KTV lịch trực off vẫn tính tuyến.
 
 #### 7.16.5 — File chạm
 
@@ -1202,16 +1203,16 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 |---|---|
 | `core/include/ktv/dp.hpp`, `core/src/dp.cpp` | enum `DEADLINE_URGENCY`, `kRuleCodes`, `Problem.urgency`, cost trong `visit()` |
 | `core/include/ktv/rules.hpp`, `core/src/rules.cpp` | `k_month_days`, `stop_group_radius_m`, `stop_group_max_wait_minutes`, `holidays`; parse/print |
-| `core/include/ktv/api.hpp`, `core/src/api.cpp` | input optional `so_ngay_lam_viec_con_lai`, `ma_diem_dung_gop`; vai trò ca chèn trong `TaskKind`; cảnh báo `DAYS_LEFT_MISSING` |
+| `core/include/ktv/api.hpp`, `core/src/api.cpp` | vai trò ca chèn trong `TaskKind` (`extra`); cảnh báo `DAYS_LEFT_MISSING` |
 | `core/src/plan.cpp` | lọc K, tính `urgency`, gom/tách nhóm (tiền/hậu), output mới |
 | `core/tests/test_plan.cpp`, `test_dp.cpp`, `test_api.cpp`, `test_pipeline.cpp` | test bên dưới |
 | `docs/DATA_QUESTIONS.md`, `docs/BUSINESS_RULES.md` | ghi luật mới + câu hỏi |
 
 #### 7.16.6 — Test
 
-1. **K**: việc tháng còn 6 ngày → không lên tuyến + có trong `ca_vu_khong_chen_duoc`; còn 5 ngày → lên tuyến — `days_left` **tự tính từ `create_date`/`planned_at`** (đường chính, không cần field mới). Có `so_ngay_lam_viec_con_lai` → dùng đúng số đó (đường tắt).
+1. **K**: việc tháng còn 6 ngày → không lên tuyến (có trong `PlanResult.unplaced`); còn 5 ngày → lên tuyến — `days_left` **tự tính từ `create_date`/`planned_at`** (đường chính, không cần field mới).
 2. **Urgency**: cùng bài, đổi `days_left` 0 ↔ 5 → thứ tự đổi; đổi weight 0 → thứ tự về như cũ; ca chính (theo vai trò) không đổi thứ tự khi đổi weight; `test_dp` thêm bài có urgency so vét cạn.
-3. **Nhóm**: 2 ca cùng `ma_diem_dung_gop` → luôn liền nhau, `handle_minutes` cộng, km 1 lần, 2 dòng cùng `at`; nhóm có hẹn → neo A sớm nhất, check-in trước B của ca neo; cặp hẹn lệch (08–10 vs 16–18) → tách + `STOP_GROUP_SPLIT`; tự gom theo toạ độ ≤ 50 m khi OA chưa gán mã; ca bị loại (không phải candidate) không gom.
+3. **Nhóm**: 2 ca cùng địa chỉ → luôn liền nhau, `handle_minutes` cộng, km 1 lần, 2 dòng cùng `at`, ca chèn có `task_role=inserted` + `insert_reason=same_address`; nhóm có hẹn → neo A sớm nhất, check-in trước B của ca neo; cặp hẹn lệch (08–10 vs 16–18) → tách + `STOP_GROUP_SPLIT`; tự gom theo toạ độ ≤ 50 m; ca bị loại (không phải candidate) không gom.
 4. **Hồi quy**: benchmark 5.332 message không có field mới → giữ nguyên 5202/130 và mọi thứ tự; `ctest` 18/18 + test mới.
 
 #### 7.16.7 — Exit gate
@@ -1222,17 +1223,17 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 
 #### 7.16.8 — Quyết định cần chốt (đang theo đề xuất)
 
-1. Tên field repo: dùng snake_case theo bảng mapping ở 7.16.4 (đề xuất) hay giữ nguyên camelCase của catalogue?
-2. Trọng số `DEADLINE_URGENCY = 0.5` — chốt số này hay để backtest chỉnh trước khi phát hành?
-3. Ngưỡng `stop_group_max_wait_minutes = 30` — **[GIẢ ĐỊNH của repo]**, catalogue không định nghĩa "không thể làm liền nhau": chốt 30′ hay chờ PO?
-4. Danh sách ngày lễ cho `rules.holidays` lấy ở đâu — hiện để rỗng **[GIẢ ĐỊNH]**; chưa có thì `days_left` lệch quanh ngày lễ.
-5. Fallback tự gom nhóm khi OA chưa gán `maDiemDungGop`: bật mặc định (`rules.group_by_address = true`) hay chỉ gom khi OA có mã?
+1. **Hình dạng `data`**: object (code hiện tại + dòng A2 của sheet 03) hay array 1 phần tử (dòng `data[]` sheet 03 + JSON mẫu sheet 08)? Cần chốt trước khi đổi OUT.
+2. **`data.change_id` + `data.trace_id`** (sheet 03 đánh ✔, chưa làm): worker luôn `"yes"`; gateway trả cache thì `"no"` + `trace_id` lần tính trước — chốt ngữ nghĩa rồi làm (thuộc luồng cache).
+3. Trọng số `DEADLINE_URGENCY = 0.5` — chốt số này hay để backtest chỉnh trước khi phát hành?
+4. Ngưỡng `stop_group_max_wait_minutes = 30` — **[GIẢ ĐỊNH của repo]**, catalogue không định nghĩa "không thể làm liền nhau": chốt 30′ hay chờ PO?
+5. Danh sách ngày lễ cho `rules.holidays` lấy ở đâu — hiện để rỗng **[GIẢ ĐỊNH]**; chưa có thì `days_left` lệch quanh ngày lễ.
 6. `weight`/`urgency` của nhóm = **max thành viên** [GIẢ ĐỊNH của repo] — đồng ý hay lấy theo ca neo?
 
 #### 7.16.9 — Rủi ro & rollback
 
 - Lọc K làm mất việc khỏi tuyến so với trước → nếu OA chưa gửi `so_ngay_lam_viec_con_lai`, AI tự tính có thể lệch lễ; cứu bằng cách đặt `k_month_days` rất lớn (tắt lọc) hoặc bỏ field.
-- Nhóm sai khi tự gom (OA chưa gán `ma_diem_dung_gop`; địa chỉ gần nhau nhưng khác nhà) → cờ `rules.group_by_address` (mặc định bật); tắt thì chỉ gom khi OA có gán mã.
+- Nhóm sai khi tự gom (địa chỉ gần nhau nhưng khác nhà) → hiện luôn gom theo `stop_group_radius_m`, chưa có cờ tắt (nếu PO muốn tắt gom nhóm thì thêm lại `rules.group_by_address`).
 - Rollback = revert `plan.cpp` + `dp.cpp` + rules; không có migration dữ liệu.
 
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
