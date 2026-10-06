@@ -73,6 +73,9 @@ Rules rules_from_json(const nlohmann::json& data) {
     if (exact > 16) fail("max_exact_tasks tối đa 16");  // Bộ nhớ QHĐ tăng theo 2^n.
     rules.max_exact_tasks = static_cast<int>(exact);
     rules.max_labels = static_cast<int>(labels);
+    double k_month = rules.k_month_days;
+    number("k_month_days", k_month, 0);
+    rules.k_month_days = static_cast<int>(k_month);
     number("current_task_minutes", rules.current_task_minutes, 0);
     number("average_speed_kmh", rules.average_speed_kmh, 1);
     number("at_risk_minutes", rules.at_risk_minutes, 0);
@@ -113,6 +116,7 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"default_priority_weight", rules.priority_weight[0]},
         {"max_exact_tasks", rules.max_exact_tasks},
         {"max_labels_per_state", rules.max_labels},
+        {"k_month_days", rules.k_month_days},
         {"current_task_minutes", rules.current_task_minutes},
         {"average_speed_kmh", rules.average_speed_kmh},
         {"at_risk_minutes", rules.at_risk_minutes},

@@ -178,7 +178,20 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         result.response = error_response("422", why, message.message_id, server_now);
         return result;
     }
-    const std::vector<const Task*>& tasks = worklist.candidates;
+    // 7.16.1: ca "hoàn tất trong tháng" còn hơn K ngày làm việc thì không xếp; trả về danh sách ca không chèn được.
+    std::vector<const Task*> tasks;
+    std::vector<long long> unplaced;
+    tasks.reserve(worklist.candidates.size());
+    for (const Task* task : worklist.candidates) {
+        const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);
+        const Deadlines deadlines = resolve_deadlines(*task, kind, now);
+        if (kind.on_time == OnTime::DoneWithinMonth && deadlines.complete_by &&
+            workdays_until(now, *deadlines.complete_by) > rules.k_month_days) {
+            unplaced.push_back(task->task_id);
+            continue;
+        }
+        tasks.push_back(task);
+    }
     result.routed = static_cast<int>(tasks.size());
     result.excluded = worklist.stats.excluded_missing_location;
 
@@ -355,7 +368,8 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     metrics["generated_in_ms"] = ms;
 
     const bool estimated = !travel_error.empty();  // Sheet 07: bản đồ lỗi vẫn trả tuyến, mã 424.
-    ojson data = {{"staff_id", staff.staff_id}, {"priority_type", 0}, {"clusters", clusters}, {"metrics", metrics}};
+    ojson data = {{"staff_id", staff.staff_id}, {"priority_type", 0}, {"clusters", clusters}, {"metrics", metrics},
+                  {"ca_vu_khong_chen_duoc", unplaced}};
     if (explain) {  // --explain: chi phí từng tầng/rule + vài phương án so sánh (không đổi thứ tự).
         const Explained chosen = explain_order(p, rules, solution.order);
         ojson tiers = ojson::array();

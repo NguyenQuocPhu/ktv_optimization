@@ -123,12 +123,13 @@ int main() {
                 CHECK(row["entry_type"] != "TASK" || row["task_id"] != 99);
     }
     {  // create_date quyết định hạn "trong tháng": tháng 6 đã qua → trễ hoàn tất; thiếu create_date lấy planned_at.
-        json with = message("2026-09-10 09:00:00", none, none,
+       // (Chạy ngày 28/09 — 2 ngày làm việc tới hạn tháng ≤ K, nếu chạy 10/09 thì bị lọc K ở 7.16.1.)
+        json with = message("2026-09-28 09:00:00", none, none,
                             json::array({task(1, "thu_hoi", 3, "thu_hoi_thiet_bi", 1, nullptr, 4, "", here, "", "2026-06-03 08:00:00")}),
                             none, none);
         auto r1 = run(with);
         CHECK(r1 && first_sla(r1->response) == "ALREADY_BREACHED");
-        json without = message("2026-09-10 09:00:00", none, none,
+        json without = message("2026-09-28 09:00:00", none, none,
                                json::array({task(1, "thu_hoi", 3, "thu_hoi_thiet_bi", 1, nullptr, 4, "", here, "")}),
                                none, none);
         auto r2 = run(without);
@@ -237,7 +238,7 @@ int main() {
             std::vector<std::string> data_keys;
             for (auto it = data.begin(); it != data.end(); ++it) data_keys.push_back(it.key());
             CHECK(data["priority_type"] == 0);
-            CHECK(data_keys == (std::vector<std::string>{"staff_id", "priority_type", "clusters", "metrics"}));
+            CHECK(data_keys == (std::vector<std::string>{"staff_id", "priority_type", "clusters", "metrics", "ca_vu_khong_chen_duoc"}));
         }
         // Tâm cụm vẫn 4 chữ số.
         if (r) CHECK(r->response["data"]["clusters"][0]["center"].get<std::string>().size() == std::string("21.0301,105.8013").size());

@@ -57,6 +57,7 @@ struct Rules {
     double priority_weight[5] = {1, 4, 3, 2, 1};  // [0] = việc không có ưu tiên; [1..4] = P1..P4.
     int max_exact_tasks = 12;      // Tới ngần này việc thì QHĐ ra thứ tự tốt nhất; nhiều hơn dùng tham lam (12 việc: chậm nhất ~0,1 s).
     int max_labels = 32;           // Mỗi trạng thái QHĐ giữ tối đa ngần này nhãn; vượt thì kết quả gần đúng.
+    int k_month_days = 5;          // 7.16.1: ca "hoàn tất trong tháng" còn hơn ngần này ngày làm việc thì không xếp (K theo catalogue). [GIẢ ĐỊNH]
     double current_task_minutes = 30;  // Việc đang làm còn bao lâu nữa xong. [GIẢ ĐỊNH]
     double average_speed_kmh = 30;     // Đổi km chim bay ra phút khi không dùng OSRM.
     double at_risk_minutes = 20;       // projected_sla = AT_RISK khi còn dư dưới ngần này phút...

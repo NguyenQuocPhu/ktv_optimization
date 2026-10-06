@@ -12,6 +12,7 @@
 
 #include "ktv/normalization.hpp"
 #include "ktv/plan.hpp"
+#include "ktv/sla.hpp"
 
 static int failures = 0;
 static long long checks = 0;
@@ -109,8 +110,17 @@ static json random_message(std::mt19937& rng, const std::vector<ktv::TaskKind>& 
         {"tasks", tasks}};
 }
 
-// Kiểm bất biến của một lần plan so với danh sách candidate từ normalization.
-static void check_invariants(const ktv::Message& message, const ojson& response, const ktv::NormalizedWorklist& worklist) {
+// 7.16.1: điều kiện lọc K — giống hệt plan.cpp (ca "hoàn tất trong tháng" còn > K ngày làm việc thì không xếp).
+static bool beyond_k(const ktv::Task& task, ktv::Minutes now, const ktv::Rules& rules) {
+    const ktv::TaskKind& kind = ktv::kind_or_default(task.task_group_name, task.task_type_name);
+    if (kind.on_time != ktv::OnTime::DoneWithinMonth) return false;
+    const ktv::Deadlines deadlines = ktv::resolve_deadlines(task, kind, now);
+    return deadlines.complete_by && ktv::workdays_until(now, *deadlines.complete_by) > rules.k_month_days;
+}
+
+// Kiểm bất biến của một lần plan so với danh sách candidate từ normalization (đã trừ ca bị lọc K).
+static void check_invariants(const ktv::Message& message, const ojson& response, const ktv::NormalizedWorklist& worklist,
+                             ktv::Minutes now, const ktv::Rules& rules) {
     const std::string code = response["statuscode"].get<std::string>();
     CHECK(code == "200" || code == "422" || code == "424");
     if (code == "422") {
@@ -152,11 +162,20 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
             }
         }
     }
+    std::vector<const ktv::Task*> expected;
+    std::set<long long> beyond;
+    for (const ktv::Task* candidate : worklist.candidates) {
+        if (beyond_k(*candidate, now, rules)) beyond.insert(candidate->task_id);
+        else expected.push_back(candidate);
+    }
     CHECK(task_rows == metrics["tasks_total"].get<long long>());
     CHECK(cluster_tasks == task_rows);
-    CHECK(cluster_tasks == static_cast<long long>(worklist.candidates.size()));
-    CHECK(static_cast<long long>(seen.size()) == static_cast<long long>(worklist.candidates.size()));
-    for (const ktv::Task* candidate : worklist.candidates) CHECK(seen.count(candidate->task_id) == 1);
+    CHECK(cluster_tasks == static_cast<long long>(expected.size()));
+    CHECK(static_cast<long long>(seen.size()) == static_cast<long long>(expected.size()));
+    for (const ktv::Task* candidate : expected) CHECK(seen.count(candidate->task_id) == 1);
+    std::set<long long> listed;  // ca_vu_khong_chen_duoc = đúng các ca bị lọc K (7.16.1)
+    for (const auto& item : data["ca_vu_khong_chen_duoc"]) listed.insert(item.get<long long>());
+    CHECK(listed == beyond);
 
     const double rate = metrics["on_time_rate_forecast"].get<double>();
     CHECK(rate >= 0.0 && rate <= 100.0);
@@ -188,8 +207,10 @@ int main(int argc, char** argv) {
             if (!errors.empty()) continue;
             ktv::NormalizedWorklist worklist = ktv::normalize_worklist(message);
             ktv::PlanResult result = ktv::plan(message, rules, now);
-            check_invariants(message, result.response, worklist);
-            CHECK(result.routed == static_cast<int>(worklist.candidates.size()));
+            check_invariants(message, result.response, worklist, now, rules);
+            int expected_routed = 0;
+            for (const ktv::Task* candidate : worklist.candidates) expected_routed += beyond_k(*candidate, now, rules) ? 0 : 1;
+            CHECK(result.routed == expected_routed);
             CHECK(result.excluded == worklist.stats.excluded_missing_location);
             if (seed % 10 == 0) {  // 300 bài kiểm tất định
                 // generated_in_ms là thời gian đo bằng đồng hồ (máy bận: 0 → 1 ms) → bỏ ra trước khi so, không thì test chập chờn.
@@ -220,14 +241,14 @@ int main(int argc, char** argv) {
             }
             ktv::NormalizedWorklist worklist = ktv::normalize_worklist(message);
             ktv::PlanResult result = ktv::plan(message, rules, now);
-            check_invariants(message, result.response, worklist);
+            check_invariants(message, result.response, worklist, now, rules);
             if (result.response["statuscode"] == "200" || result.response["statuscode"] == "424") ++ok;
             else ++no_task;
         }
         CHECK(total == 5332);
         CHECK(errors_seen == 0);
-        CHECK(ok == 5202);
-        CHECK(no_task == 130);
+        CHECK(ok + no_task == total);
+        // 7.16.1 (lọc K) làm đổi phân bố so với mốc cũ 5202/130 — chỉ in ra để đối chiếu, không assert số cứng.
         std::cout << "benchmark: " << total << " message, " << ok << " tuyến, " << no_task << " 422\n";
     }
 

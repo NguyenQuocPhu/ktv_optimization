@@ -168,7 +168,8 @@ int main() {
         CHECK(w.warnings.size() == 2 && warned(w, "CURRENT_NOT_MATCHED") && warned(w, "TASK_STATUS_UNKNOWN"));
 
         // Plan: 101, 102, 105 thành TASK; cảnh báo đi theo PlanResult (worker log + /healthz).
-        ktv::PlanResult r = ktv::plan(message, ktv::default_rules(), *ktv::parse_datetime("2026-09-10 09:00:05"));
+        message.planned_at = *ktv::parse_datetime("2026-09-28 09:00:05");  // 7.16.1: gần cuối tháng để ca tháng không bị lọc K
+        ktv::PlanResult r = ktv::plan(message, ktv::default_rules(), *ktv::parse_datetime("2026-09-28 09:00:05"));
         CHECK(r.response["success"] == true && r.response["statuscode"] == "200");
         CHECK(r.routed == 3);
         CHECK(r.warnings.size() == 2);

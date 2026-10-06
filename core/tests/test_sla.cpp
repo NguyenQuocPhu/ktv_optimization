@@ -133,6 +133,15 @@ int main() {
         }
     }
 
+    {  // workdays_until (7.16.1): T2–T6, không tính ngày bắt đầu, tính ngày hạn; hạn hôm nay/đã qua → 0.
+        const auto at = [](const char* text) { return *ktv::parse_datetime(text); };
+        CHECK(ktv::workdays_until(at("2026-09-10 09:00:00"), at("2026-09-10 23:00:00")) == 0);  // cùng ngày (thứ Năm)
+        CHECK(ktv::workdays_until(at("2026-09-10 09:00:00"), at("2026-09-11 23:00:00")) == 1);  // thứ Sáu
+        CHECK(ktv::workdays_until(at("2026-09-10 09:00:00"), at("2026-09-13 23:00:00")) == 1);  // T7/CN không tính
+        CHECK(ktv::workdays_until(at("2026-09-10 09:00:00"), at("2026-09-30 23:00:00")) == 14);  // 11 · 14–18 · 21–25 · 28–30
+        CHECK(ktv::workdays_until(at("2026-09-10 09:00:00"), at("2026-09-01 23:00:00")) == 0);  // đã qua
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_sla: OK\n";
     return failures != 0;

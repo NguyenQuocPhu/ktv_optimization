@@ -47,4 +47,16 @@ const char* projected_sla(double checkin, double done, double due, double comple
     return "ON_TIME";
 }
 
+int workdays_until(Minutes from, Minutes deadline) {
+    const long long from_day = start_of_day(from) / 1440;
+    const long long deadline_day = start_of_day(deadline) / 1440;
+    if (deadline_day <= from_day) return 0;  // hạn trong ngày hôm nay hoặc đã qua
+    int count = 0;
+    for (long long day = from_day + 1; day <= deadline_day; ++day) {
+        const int weekday = static_cast<int>((day + 4) % 7);  // 0 = CN; 1970-01-01 là thứ Năm
+        if (weekday >= 1 && weekday <= 5) ++count;
+    }
+    return count;
+}
+
 }  // namespace ktv

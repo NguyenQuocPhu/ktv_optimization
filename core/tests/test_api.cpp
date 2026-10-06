@@ -416,7 +416,8 @@ int main() {
         CHECK(m.tasks[1].task_group_name == "hoa_don" && m.tasks[1].task_group_id == 4);
         const int norm = ktv::find_kind("hoa_don", "hoa_don_tra_sau")->handle_minutes;
         CHECK(norm != 60);  // nếu bằng 60 thì test không phân biệt được với loại mặc định
-        ktv::PlanResult r = ktv::plan(m, ktv::default_rules(), *ktv::parse_datetime("2026-09-10 09:00:00"));
+        m.planned_at = *ktv::parse_datetime("2026-09-28 09:00:00");  // 7.16.1: chạy gần cuối tháng, hóa đơn không bị lọc K
+        ktv::PlanResult r = ktv::plan(m, ktv::default_rules(), *ktv::parse_datetime("2026-09-28 09:00:00"));
         bool found = false;
         for (const auto& cluster : r.response["data"]["clusters"])
             for (const auto& row : cluster["schedule"])
