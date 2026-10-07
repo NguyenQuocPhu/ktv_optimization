@@ -122,6 +122,7 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
         fingerprint = in_fingerprint(in, message.staff.latlng, envelope.planned_at);
         if (std::optional<nlohmann::ordered_json> reused = reuse_cached(*store, staff_id, fingerprint, envelope, now, rules)) {
             result.cached = true;
+            result.stats = normalize_worklist(message).stats;  // log vẫn đủ số đếm task (không gọi plan())
             result.status = (*reused)["statuscode"].get<std::string>();
             result.out = std::move(*reused);
             if (send_out && reply_on_cache) {

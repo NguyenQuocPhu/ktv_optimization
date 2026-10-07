@@ -339,8 +339,26 @@ int main(int argc, char** argv) {
             log["errors"] = ktv::errors_json(published.errors);
             log["warnings"] = nlohmann::ordered_json::array();
             for (const ktv::Error& warning : warnings) log["warnings"].push_back(ktv::issue_key(warning));
+            // 7.20.5: routed = số dòng TASK thật sự xếp (trước: candidates, chưa trừ ca hẹn ngày sau / lọc K);
+            // deferred = số dòng DEFERRED theo lý do (VD {"NEXT_DAY":1,"BEYOND_K":2}) — ca không xếp nhìn được trên log.
+            long long routed = 0;
+            nlohmann::ordered_json deferred = nlohmann::ordered_json::object();
+            if (published.out) {
+                const nlohmann::ordered_json& body = ktv::out_data(*published.out);
+                if (body.is_object() && body.contains("clusters"))
+                    for (const auto& cluster : body["clusters"])
+                        for (const auto& row : cluster["schedule"]) {
+                            const std::string entry = row.value("entry_type", "");
+                            if (entry == "TASK") ++routed;
+                            if (entry == "DEFERRED") {
+                                const std::string reason = row.value("insert_reason", "");
+                                deferred[reason] = deferred.value(reason, 0) + 1;
+                            }
+                        }
+            }
             log["tasks"] = {{"received", published.stats.tasks},
-                            {"routed", published.stats.candidates},
+                            {"routed", routed},
+                            {"deferred", deferred},
                             {"skipped_status", published.stats.excluded_status},
                             {"current", published.stats.excluded_current},
                             {"missing_location", published.stats.excluded_missing_location}};

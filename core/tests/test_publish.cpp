@@ -213,6 +213,7 @@ int main() {
             b_in["trigger"] = "TRAFFIC";
             const ktv::Published b = go(b_in);
             CHECK(b.cached && !b.route_stored && b.status == "200");
+            CHECK(b.stats.tasks == 2 && b.stats.candidates == 2);  // 7.20.5: trả cache vẫn có số đếm task cho log
             CHECK((*b.out)["message_id"] == "m-b" && (*b.out)["trigger"] == "TRAFFIC" && (*b.out)["planned_at"] == "2026-10-01 09:05:00");
             CHECK(data_of(b)["change_id"] == "no" && data_of(b)["trace_id"] == "m-a");
             CHECK(data_of(b)["clusters"] == data_of(a)["clusters"]);
