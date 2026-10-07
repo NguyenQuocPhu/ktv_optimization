@@ -675,6 +675,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.22 ✅ | Việc đang làm (`staff.current_task`) còn **½ định mức** thay vì hằng 30′ — chi tiết bên dưới | giờ xuất phát lùi theo loại việc đang làm (việc 120′ → +60′, việc 20′ → +10′) |
 | 7.23 ✅ | Hai chế độ sắp xếp qua `priority_type` ở gốc IN (0/1 SLA = bộ tầng hiện tại, 2 Tuyến = R2) + điểm `priority` 0–100 từng ca — chi tiết bên dưới | IN `priority_type: 2` → OUT `data.priority_type: 2`, KM lên tầng 2; mọi dòng TASK/DEFERRED có `priority` |
 | 7.24 ✅ | Điều kiện 3 catalogue (ca thu bill / thu hồi ngoài K vẫn chèn khi KTV có khoảng trống thật): QHĐ có **ca tuỳ chọn** + rule `SKIP_OPTIONAL` — chi tiết bên dưới | ca ngoài K gần tuyến lên tuyến `SPARE_TIME`, số ca trễ không tăng; không có ca ngoài K → như cũ |
+| 7.25 ✅ | Định mức thời gian xử lý (khi input bỏ trống `handle_minutes`) theo TGXL chuẩn catalogue ISC sheet 5 — chi tiết bên dưới | 7 loại đổi số; 7.22 (việc đang làm còn ½ định mức) đổi theo |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1487,6 +1488,25 @@ Số ca dự báo trễ **không đổi ở mọi mức** (đúng thiết kế);
 
 **Test:** `test_dp` — 300 bài có ca tuỳ chọn khớp vét cạn mọi tập con ⊇ bắt buộc × mọi hoán vị × chỗ nghỉ; ca tuỳ chọn luôn xong trong ca; tham lam + chèn/gỡ vs tối ưu (40 bài 8–12 việc, ~35% tuỳ chọn): lệch tầng 1 TB 0,175, trùng tầng 1+2 33/40; `solve_from` không tệ hơn tuyến xuất phát. `test_plan` — hóa đơn ngoài K gần tuyến, sáng trống → TASK `SPARE_TIME`, số ca trễ như khi không chèn; xa ~12 km → `DEFERRED BEYOND_K`; SKIP = 0 → như trước 7.24; ca hết 09:35 → không chèn (cả mode Tuyến). `test_invariants` — 1.000 message: tầng 1 (và tầng 2 khi tầng 1 bằng) với SKIP mặc định ≤ khi tắt; dòng `SPARE_TIME` luôn là ca ngoài K, xong trong ca (55 dòng gặp). `ctest` 18/18.
 **Hỏi:** ngưỡng BR-16 thật (km / phút đi thêm?); mã `insert_reason` cho ca chèn vào khoảng trống (repo dùng `SPARE_TIME`).
+
+##### 7.25 — Soát tham số tính toán; định mức TGXL theo catalogue ISC (2026-10-07)
+
+**Soát tham số** (người dùng hỏi "tham số lấy đều có cơ sở?"). Có nguồn: SLA + ưu tiên lấy từ **input** từng ca (bảng loại trong code chỉ để cảnh báo `CATALOG_MISMATCH`); luật đúng hẹn theo loại + onsite "như bảo trì" (workbook (4)/(5)); `AT_RISK` 20′ / 20% (workbook (5) sheet 05); K = 5 ngày làm việc T2–T6 (ISC; **chưa trừ ngày lễ**); bán kính gom 50 m (ISC); nghỉ trưa 45′ (chỉ ví dụ JSON mẫu workbook — khung 11:30–13:30 là giả định). Giả định repo (không có trong tài liệu): trọng số tầng / km tương đương, trọng số P1..P4 = 4/3/2/1, `SKIP_OPTIONAL` 2 (BR-I6 chỉ có công thức), 30 km/h khi không OSRM, cắt cụm 2 km, chờ gom 30′, việc đang làm ½ định mức (7.22), cache 30′, vị trí Mobix 60′, khung KTV off 08:00–17:30, công thức `priority` (7.23).
+**Lệch tìm thấy:** (1) định mức TGXL — sửa ở 7.25; (2) **loại con `task_sub` bị bỏ qua**: workbook (5) sheet 05 coi swap / gsafe / giao_thiet_bi_cam là loại con của `trien_khai_box` với luật riêng (gsafe: không SLA, hoàn tất trong ngày hẹn, ca chèn), code chỉ tra theo `task_type_name` (type 5/6 "swap" / "giao_thiet_bi_cam" tự đặt) → `trien_khai_box` + sub `gsafe` bị áp luật box — **chưa sửa** (người dùng chưa chọn); (3) hệ số đường bộ khi OSRM lỗi 1,3 trong khi repo đo 1,54 (`core/README.md`) — **chưa sửa**; (4) `cscd` 30′ / 40′ không có nguồn.
+
+**Sửa (người dùng chốt: chỉ mục TGXL):** cột định mức trong `task_kinds()` (`api.cpp`) = TGXL chuẩn ISC sheet 5 — số nghiệp vụ, đúng vai trò "tham khảo nghiệp vụ" của ISC; không đụng IN/OUT.
+
+| Loại | Trước | Sau (ISC) |
+|---|---|---|
+| trien_khai_box / box_cam_only | 60 | 120 |
+| swap | 45 | 60 |
+| giao_thiet_bi_cam | 30 | 60 |
+| bao_tri_logic | 45 | 60 |
+| thu_hoi_thiet_bi | 20 | 15 |
+| phieu_onsite | 45 | 60 |
+| trien_khai_net 120 · bao_tri_vat_ly 60 · hoa_don 15 | giữ | khớp sẵn |
+
+Chỉ có hiệu lực khi input bỏ trống / 0 `handle_minutes` (sheet 02: "server dùng định mức theo task_type_id"), và kéo theo 7.22 (việc đang làm còn ½ định mức), dòng `DEFERRED` `handle_minutes`. Test: `test_api` khoá 11 loại theo ISC (fail 7 kiểm trên số cũ); các fixture khác gửi sẵn `handle_minutes` nên không đổi. `ctest` 18/18.
 
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 

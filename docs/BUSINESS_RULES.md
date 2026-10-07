@@ -46,6 +46,7 @@ Bảng dưới lấy nguyên từ sheet "#Bảng KPI, SLA Tác vụ" **[TÀI LI�
 | 12 | CSKH chủ động (`cscd`) | Mạng chập chờn, suy hao cao | N/A | Hoàn tất trong ngày tạo phiếu | 4 | `complete_by` = cuối ngày tạo |
 
 - "Ưu tiên trong ngày": 1 là gấp nhất, 4 là thấp nhất. **[TÀI LIỆU]**
+- **Thời gian xử lý khi input bỏ trống `handle_minutes`** (Phase 7.25) = TGXL chuẩn catalogue ISC sheet 5 (tham khảo nghiệp vụ; workbook API không có số): triển khai NET / Box 120′ · Swap 60′ · Giao thiết bị Cam 60′ · Bảo trì vật lý / logic 60′ · Thu hồi 15′ · Thu bill 15′ · Onsite 60′. Gsafe (120′) chưa có dòng riêng — loại con chưa được tra (xem 7.25). Hai loại `cscd` giữ 30′ / 40′ **không có nguồn** [GIẢ ĐỊNH].
 - Export QOS **chỉ có `CASE_TYPE = MAINTENANCE`** (METADATA: "ca vụ: default MAINTENANCE"), không nói là Vật lý hay Logic. Simulator tạm cho MAINTENANCE **ưu tiên 2**. **[GIẢ ĐỊNH]** (Q1)
 - Bản trước coi "Ngưng kết nối 4H" và "Mạng chập chờn" là việc xử lý từ xa, không xếp tuyến. Tài liệu liệt kê hai loại này trong bảng gợi ý công việc, nên nay **vẫn xếp tuyến**. **[GIẢ ĐỊNH]** (Q2)
 - Loại tác vụ không có trong bảng: không hạn, ưu tiên 3. **[GIẢ ĐỊNH]**
