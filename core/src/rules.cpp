@@ -25,13 +25,14 @@ Rules default_rules() {
          {AREA_REENTRY, 2},                        //   quay lại lô 1 lần ≈ 2 km
          {PRIORITY_DELAY, 0.5},                    //   việc P1 làm muộn 1 giờ ≈ 2 km
          {DEADLINE_URGENCY, 0.5},                  //   việc gấp để muộn 1 giờ ≈ 0,5 km (7.16.2)
-         {FINISH, 0.01}},                          //   xong muộn 100 phút ≈ 1 km
+         {FINISH, 0.01},                           //   xong muộn 100 phút ≈ 1 km
+         {SKIP_OPTIONAL, 2}},                      //   7.24: bỏ 1 ca tuỳ chọn ≈ 2 km — chèn khi tốn thêm < 2 [GIẢ ĐỊNH, BR-16]
     };
     // 7.23 mode Tuyến (R2): tầng 1 giữ "không thêm ca trễ hẹn"; tầng 2 là quãng đường; SLA còn lại + ưu tiên xuống tầng 3.
     // Đo 400 biến thể sample_in (chim bay): km −14%, số ca dự báo trễ không tăng (R1 thuần km: −29% km nhưng trễ +87%).
     rules.route_tiers = {
         {{LATE_CHECKIN, 1}},
-        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}},
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 2}},
         {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1}, {LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5},
          {FINISH, 0.01}},
     };

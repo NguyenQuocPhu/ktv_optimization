@@ -211,6 +211,90 @@ int main() {
         }
     }
 
+    {  // 7.24: ca tuỳ chọn — QHĐ chọn tập con + thứ tự tốt nhất, khớp vét cạn mọi tập con ⊇ bắt buộc × mọi hoán vị × chỗ nghỉ.
+        std::mt19937 opt_rng(17);
+        int compared = 0;
+        for (int round = 0; round < 300; ++round) {
+            const int n = 2 + round % 5;
+            Problem p = random_problem(opt_rng, n);
+            p.optional.assign(n, 0);
+            for (int j = 0; j < n; ++j) p.optional[j] = unit(opt_rng) < 0.4;
+            if (round % 2) {
+                p.break_open = 60 + unit(opt_rng) * 200;
+                p.break_latest = p.break_open + 45;
+                p.break_minutes = 45;
+            }
+            Solution s = solve(p, rules);
+            std::vector<double> best;
+            for (uint64_t subset = 0; subset < (uint64_t{1} << n); ++subset) {
+                bool ok = true;
+                std::vector<int> order;
+                for (int j = 0; j < n; ++j) {
+                    if (subset >> j & 1) order.push_back(j);
+                    else if (!p.optional[j]) ok = false;
+                }
+                if (!ok) continue;
+                do {
+                    for (int at = -1; at <= static_cast<int>(order.size()); ++at) {
+                        std::vector<int> candidate = order;
+                        if (at >= 0) candidate.insert(candidate.begin() + at, kBreak);
+                        auto k = objective(p, rules, candidate);
+                        if (best.empty() || k < best) best = k;
+                    }
+                } while (std::next_permutation(order.begin(), order.end()));
+            }
+            auto got = objective(p, rules, s.order);
+            bool same = got.size() == best.size();
+            for (size_t t = 0; same && t < got.size(); ++t) same = std::abs(got[t] - best[t]) < 1e-9;
+            CHECK(same);
+            for (const Visit& v : s.steps)  // ca tuỳ chọn được làm luôn xong trong ca (ràng buộc cứng)
+                if (v.task != kBreak && p.optional[v.task]) CHECK(!(v.done > p.shift_end));
+            ++compared;
+        }
+        CHECK(compared == 300);
+
+        // Tham lam + chèn/gỡ so với tối ưu (QHĐ chính xác) trên 8–12 việc có ca tuỳ chọn: không bao giờ tốt hơn tối ưu,
+        // lệch tầng 1 trung bình nhỏ. In số đo để theo dõi.
+        Rules exact_rules = default_rules();
+        Rules heuristic_rules = default_rules();
+        heuristic_rules.max_exact_tasks = 0;
+        double gap1 = 0, gap3 = 0;
+        int same_tier12 = 0, samples = 0;
+        for (int k = 0; k < 40; ++k) {
+            const int n = 8 + k % 5;
+            Problem p = random_problem(opt_rng, n);
+            p.optional.assign(n, 0);
+            for (int j = 0; j < n; ++j) p.optional[j] = unit(opt_rng) < 0.35;
+            const auto optimum = objective(p, exact_rules, solve(p, exact_rules).order);
+            const auto found = objective(p, exact_rules, solve(p, heuristic_rules).order);
+            CHECK(!(found < optimum));
+            gap1 += found[0] - optimum[0];
+            gap3 += found[2] - optimum[2];
+            same_tier12 += std::abs(found[0] - optimum[0]) < 1e-9 && std::abs(found[1] - optimum[1]) < 1e-9;
+            ++samples;
+        }
+        std::cout << "  7.24 tham lam vs tối ưu (" << samples << " bài 8–12 việc, ~35% tuỳ chọn): lệch tầng 1 TB "
+                  << gap1 / samples << ", tầng 3 TB " << gap3 / samples << ", trùng tầng 1+2 " << same_tier12 << "/"
+                  << samples << "\n";
+        CHECK(gap1 / samples < 1.5);
+
+        // solve_from: không bao giờ tệ hơn tuyến xuất phát.
+        for (int k = 0; k < 20; ++k) {
+            Problem p = random_problem(opt_rng, 9);
+            p.optional.assign(9, 0);
+            for (int j = 6; j < 9; ++j) p.optional[j] = 1;
+            Problem mandatory_only = p;
+            for (auto* v : {&mandatory_only.service, &mandatory_only.opens, &mandatory_only.due, &mandatory_only.complete_by,
+                            &mandatory_only.weight, &mandatory_only.urgency})
+                v->resize(6);
+            mandatory_only.same_area.resize(6);
+            mandatory_only.optional.resize(6);
+            const std::vector<int> start = solve(mandatory_only, rules).order;
+            const Solution better = solve_from(p, rules, start);
+            CHECK(!(objective(p, rules, start) < objective(p, rules, better.order)));
+        }
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_dp: OK (" << checked << " bài so với vét cạn)\n";
     return failures != 0;

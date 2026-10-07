@@ -38,9 +38,12 @@ Visit visit(const Problem& p, uint64_t done_mask, int i, int j, double clock) {
     // Rời lô của i để vào lô của j, mà lô của j đã từng làm → quay lại khu vực.
     uint64_t area = p.same_area[j];
     if (i >= 0 && !(area >> i & 1) && (done_mask & area)) v.cost[AREA_REENTRY] = 1;
-    v.cost[PRIORITY_DELAY] = p.weight[j] * v.checkin / 60;
+    // 7.24: ca tuỳ chọn không bị phạt vì CHÍNH NÓ làm muộn (không thì chỉ chèn được buổi sáng); ca khác bị đẩy muộn
+    // vẫn tính PRIORITY_DELAY của ca đó như thường.
+    const bool optional = p.is_optional(j);
+    v.cost[PRIORITY_DELAY] = optional ? 0 : p.weight[j] * v.checkin / 60;
     // 7.16.2: việc gấp (gần hạn) bị để muộn thì phạt theo giờ check-in; ca chính urgency = 0.
-    const double urgency = j < static_cast<int>(p.urgency.size()) ? p.urgency[j] : 0;
+    const double urgency = !optional && j < static_cast<int>(p.urgency.size()) ? p.urgency[j] : 0;
     v.cost[DEADLINE_URGENCY] = urgency * v.checkin / 60;
     return v;
 }
@@ -53,6 +56,7 @@ uint64_t bit_of(const Problem& p, int j) { return j == kBreak ? rest_bit(p) : ui
 bool allowed(const Problem& p, uint64_t mask, const Visit& v) {
     const bool rested = mask & rest_bit(p);
     if (v.task == kBreak) return p.needs_break() && !rested;        // Chỉ nghỉ một lần, khi tuyến cần nghỉ.
+    if (p.is_optional(v.task) && v.done > p.shift_end) return false;  // 7.24: ca tuỳ chọn phải xong trong ca (cứng)
     return rested || !p.needs_break() || v.done <= p.break_latest;  // Chưa nghỉ: phải xong trước giờ chốt.
 }
 
@@ -87,12 +91,26 @@ struct Search {
     int tiers;
     int finish_tier = -1;
     double finish_weight = 0;
+    int skip_tier = -1;              // 7.24: tầng + trọng số của SKIP_OPTIONAL
+    double skip_weight = 0;
+    uint64_t mandatory = 0;          // bit các ca bắt buộc (phải có trong tuyến)
+    uint64_t optional_tasks = 0;     // bit các ca tuỳ chọn
     std::vector<Label> pool{{0, {}, -1, -1}};  // pool[0] = gốc.
 
     Search(const Problem& problem, const Rules& r) : p(problem), rules(r), tiers(static_cast<int>(r.tiers.size())) {
         for (int t = 0; t < tiers; ++t)
-            for (auto [rule, weight] : rules.tiers[t])
+            for (auto [rule, weight] : rules.tiers[t]) {
                 if (rule == FINISH && weight) finish_tier = t, finish_weight = weight;
+                if (rule == SKIP_OPTIONAL) skip_tier = t, skip_weight = weight;
+            }
+        for (int j = 0; j < p.size(); ++j) (p.is_optional(j) ? optional_tasks : mandatory) |= uint64_t{1} << j;
+    }
+
+    // Khóa của một tuyến KẾT THÚC ở nhãn này (đã làm `mask`): cộng phạt cho mỗi ca tuỳ chọn không làm.
+    Key final_key(const Label& label, uint64_t mask) const {
+        Key k = key(label);
+        if (skip_tier >= 0) k[skip_tier] += skip_weight * __builtin_popcountll(optional_tasks & ~mask);
+        return k;
     }
 
     // Từ nhãn `parent` (đang ở i, đã làm `mask`) đi tới j. Vi phạm luật nghỉ trưa → không có.
@@ -154,8 +172,8 @@ struct Search {
             mask |= bit_of(p, j);
             if (j != kBreak) i = j;
         }
-        if ((mask & (rest_bit(p) - 1)) != rest_bit(p) - 1) return kInfeasible;  // Chưa đủ mọi việc.
-        return key(pool[label]);
+        if ((mask & mandatory) != mandatory) return kInfeasible;  // Thiếu ca bắt buộc (ca tuỳ chọn được thiếu).
+        return final_key(pool[label], mask);
     }
 };
 
@@ -187,14 +205,17 @@ Solution exact(Search& s) {
             }
         }
 
-    // Kết thúc hợp lệ: đã làm hết việc, có nghỉ hoặc không (không nghỉ thì luật chặn đã bảo đảm xong trước giờ chốt).
+    // Kết thúc hợp lệ: đã làm đủ ca BẮT BUỘC (7.24: ca tuỳ chọn làm hay bỏ tùy khóa nhỏ hơn — mỗi ô của bảng đã là một
+    // tập con, chọn tập ở đây không tốn thêm), có nghỉ hoặc không (không nghỉ thì luật chặn bảo đảm xong trước giờ chốt).
+    // Không có ca tuỳ chọn → chỉ còn mask ⊇ all_tasks, như trước.
     int best = -1;
     Key best_key{};
-    for (uint64_t mask : {all_tasks, all_tasks | rest}) {
-        if (mask > top) continue;
-        for (int last = 0; last < n; ++last)
+    if (s.mandatory == 0) best = 0, best_key = s.final_key(s.pool[0], 0);  // tuyến rỗng: bỏ mọi ca tuỳ chọn
+    for (uint64_t mask = 0; mask <= top; ++mask) {
+        if ((mask & s.mandatory) != s.mandatory) continue;
+        for (int last = -1; last < n; ++last)
             for (int label : dp(mask, last))
-                if (Key k = s.key(s.pool[label]); best < 0 || k < best_key) best = label, best_key = k;
+                if (Key k = s.final_key(s.pool[label], mask); best < 0 || k < best_key) best = label, best_key = k;
     }
     return {s.order_of(best), {}, capped ? Source::Approximate : Source::Optimal};
 }
@@ -211,7 +232,6 @@ constexpr int kMaxImproveRounds = 100;
 // reverse_first: mỗi vòng thử 2-opt trước or-opt (thứ tự khác → rơi vào cực tiểu khác). relocate = false: chỉ 2-opt.
 std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, bool relocate = true,
                          int rounds = kMaxImproveRounds) {
-    const int m = static_cast<int>(order.size());
     Key best_key = s.evaluate(order);
     auto take = [&](std::vector<int>& candidate) {
         Key k = s.evaluate(candidate);
@@ -222,6 +242,7 @@ std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, 
     };
     auto or_opt = [&] {
         bool improved = false;
+        const int m = static_cast<int>(order.size());
         for (int len = 1; len <= 3; ++len)
             for (int a = 0; a + len <= m; ++a)
                 for (int b = 0; b <= m - len; ++b) {
@@ -236,6 +257,7 @@ std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, 
     };
     auto two_opt = [&] {
         bool improved = false;
+        const int m = static_cast<int>(order.size());
         for (int a = 0; a < m - 1; ++a)
             for (int b = a + 1; b < m; ++b) {
                 std::vector<int> candidate = order;
@@ -244,11 +266,50 @@ std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, 
             }
         return improved;
     };
+    // 7.24 chèn rẻ nhất: mỗi ca tuỳ chọn chưa làm thử mọi vị trí (tuyến cần nghỉ mà chưa có nghỉ: thử cả cặp nghỉ + ca),
+    // lấy vị trí khóa nhỏ nhất, nhận nếu khóa giảm. Gỡ: bỏ một ca tuỳ chọn đang làm nếu khóa giảm.
+    const Problem& p = s.p;
+    auto insert_optional = [&] {
+        bool improved = false;
+        for (int o = 0; o < p.size(); ++o) {
+            if (!p.is_optional(o) || std::find(order.begin(), order.end(), o) != order.end()) continue;
+            const bool add_break = p.needs_break() && std::find(order.begin(), order.end(), kBreak) == order.end();
+            std::vector<int> best_candidate;
+            Key best_candidate_key = best_key;
+            for (int b = 0; b <= static_cast<int>(order.size()); ++b)
+                for (int with_break = 0; with_break <= (add_break ? 1 : 0); ++with_break) {
+                    std::vector<int> candidate = order;
+                    candidate.insert(candidate.begin() + b, o);
+                    if (with_break) candidate.insert(candidate.begin() + b, kBreak);
+                    if (Key k = s.evaluate(candidate); k < best_candidate_key) best_candidate.swap(candidate), best_candidate_key = k;
+                }
+            if (!best_candidate.empty()) order.swap(best_candidate), best_key = best_candidate_key, improved = true;
+        }
+        return improved;
+    };
+    auto remove_optional = [&] {
+        bool improved = false;
+        for (int a = 0; a < static_cast<int>(order.size());) {
+            if (p.is_optional(order[a])) {
+                std::vector<int> candidate = order;
+                candidate.erase(candidate.begin() + a);
+                if (take(candidate)) {
+                    improved = true;
+                    continue;  // phần tử mới ở vị trí a: xét lại
+                }
+            }
+            ++a;
+        }
+        return improved;
+    };
+    const bool has_optional = s.optional_tasks != 0;
     for (int round = 0; round < rounds; ++round) {
         bool improved = false;
+        if (has_optional) improved |= insert_optional();
         if (reverse_first) improved |= two_opt();
         if (relocate) improved |= or_opt();
         if (!reverse_first) improved |= two_opt();
+        if (has_optional) improved |= remove_optional();
         if (!improved) break;
     }
     return order;
@@ -263,7 +324,8 @@ std::vector<int> heuristic(Search& s) {
     std::vector<int> order;
     int label = 0, i = -1, done = 0;
     uint64_t mask = 0;
-    while (done < n) {
+    const int need = __builtin_popcountll(s.mandatory);  // 7.24: tham lam chỉ xếp ca bắt buộc; ca tuỳ chọn do improve chèn
+    while (done < need) {
         int best_j = -2;
         Label best{};
         Key best_key{};
@@ -273,7 +335,7 @@ std::vector<int> heuristic(Search& s) {
             if (Key k = s.key(*candidate); best_j == -2 || k < best_key) best_j = j, best = *candidate, best_key = k;
         };
         for (int j = 0; j < n; ++j)
-            if (!(mask >> j & 1)) consider(j);
+            if (!(mask >> j & 1) && !p.is_optional(j)) consider(j);
         // Chỉ xét nghỉ khi đã tới giờ nghỉ, hoặc không còn việc nào làm kịp trước giờ chốt:
         // tránh tham lam chọn "nghỉ" từ sáng sớm rồi đứng chờ tới trưa.
         if (best_j == -2 || s.pool[label].finish >= p.break_open) consider(kBreak);
@@ -284,7 +346,7 @@ std::vector<int> heuristic(Search& s) {
         mask |= bit_of(p, best_j);
         if (best_j != kBreak) i = best_j, ++done;
     }
-    if (n < 3) return order;
+    if (n < 3 && s.optional_tasks == 0) return order;
     const std::vector<int> reversed = improve(s, order, true, false, 2);  // điểm xuất phát thứ 2 (2-opt cũ)
     std::vector<int> best;
     Key best_key = kInfeasible;
@@ -305,6 +367,17 @@ Solution solve(const Problem& p, const Rules& rules) {
     else if (p.size() > 0) result = exact(s);
     result.steps = walk(p, result.order);
     return result;
+}
+
+Solution solve_from(const Problem& p, const Rules& rules, const std::vector<int>& start) {
+    Search s(p, rules);
+    std::vector<int> best = start;
+    Key best_key = s.evaluate(start);
+    for (bool reverse_first : {false, true}) {
+        std::vector<int> candidate = improve(s, start, reverse_first);
+        if (Key k = s.evaluate(candidate); k < best_key) best.swap(candidate), best_key = k;
+    }
+    return {best, walk(p, best), Source::Heuristic};
 }
 
 std::vector<Visit> simulate(const Problem& p, const std::vector<int>& order) { return walk(p, order); }

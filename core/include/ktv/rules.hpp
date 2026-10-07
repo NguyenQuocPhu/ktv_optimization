@@ -44,11 +44,12 @@ enum Rule {
     PRIORITY_DELAY,   // Trọng số ưu tiên × giờ check-in: việc gấp nên làm sớm.
     FINISH,           // Giờ xong việc cuối (phút).
     DEADLINE_URGENCY, // 7.16.2: độ gấp (K − ngày làm việc còn lại) × giờ check-in — chỉ ca chèn (ca chính = 0).
+    SKIP_OPTIONAL,    // 7.24: mỗi ca TUỲ CHỌN không làm cộng 1 (× trọng số = ngưỡng "đáng đi thêm", km tương đương).
     RULE_COUNT        // Không phải rule: số lượng rule.
 };
 inline constexpr const char* kRuleCodes[RULE_COUNT] = {
     "LATE_CHECKIN", "LATE_COMPLETION", "AFTER_SHIFT", "LATE_MINUTES", "KM",
-    "TRAVEL_MINUTES", "AREA_REENTRY", "PRIORITY_DELAY", "FINISH", "DEADLINE_URGENCY"};
+    "TRAVEL_MINUTES", "AREA_REENTRY", "PRIORITY_DELAY", "FINISH", "DEADLINE_URGENCY", "SKIP_OPTIONAL"};
 
 inline constexpr int kMaxTiers = 4;  // Tối đa 4 tầng.
 

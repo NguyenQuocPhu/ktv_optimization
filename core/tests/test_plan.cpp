@@ -117,9 +117,11 @@ int main() {
     CHECK(!r["data"].contains("score"));  // mặc định không explain: OUT giữ nguyên contract
 
     // 7.16.1 — K: chạy ngày 10/09 (thứ Năm), hóa đơn hạn cuối tháng còn 14 ngày làm việc > K=5 → không xếp.
+    // 7.24: hóa đơn đặt XA (~12 km) để không đáng chèn vào khoảng trống (ca gần → SPARE_TIME, kiểm ở khối 7.24).
     json early = message();
     early["planned_at"] = "2026-09-10 09:20:00";
     early["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 14:00:00";
+    early["tasks"]["hoa_don"][0]["latlng"] = "21.1000,105.9000";
     errors.clear();
     ktv::PlanResult k_filtered = ktv::plan(ktv::parse_message(early, errors), ktv::default_rules(), server_now, "", true);
     CHECK(errors.empty());
@@ -138,6 +140,42 @@ int main() {
             }
         }
     CHECK(k_deferred == 1);
+    {  // 7.24 điều kiện 3: cùng ngày 10/09, hóa đơn (> K) ở GẦN tuyến (~1 km), sáng KTV trống tới ca 14:00
+       // → QHĐ chèn vào khoảng trống: dòng TASK inserted / SPARE_TIME, không ca nào trễ thêm.
+        json near = early;
+        near["tasks"]["hoa_don"][0]["latlng"] = "21.0043,105.8021";
+        errors.clear();
+        const ktv::PlanResult spare = ktv::plan(ktv::parse_message(near, errors), ktv::default_rules(), server_now, "");
+        CHECK(spare.unplaced.empty() && spare.response["data"]["metrics"]["tasks_total"] == 2);
+        CHECK(spare.response["data"]["metrics"]["breach_forecast_count"] == k_filtered.response["data"]["metrics"]["breach_forecast_count"]);
+        int spare_rows = 0;
+        for (const auto& cluster : spare.response["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row.value("task_id", 0LL) == 5454544) {
+                    ++spare_rows;
+                    CHECK(row["entry_type"] == "TASK" && row["insert_reason"] == "SPARE_TIME" && row["task_role"] == "inserted");
+                    CHECK(row["end_at"].get<std::string>() <= spare.response["data"]["metrics"]["shift_end_at"].get<std::string>());
+                }
+        CHECK(spare_rows == 1);
+        // Trọng số SKIP_OPTIONAL = 0 → tắt điều kiện 3: ca ngoài K lại thành DEFERRED như trước 7.24.
+        ktv::Rules off = ktv::default_rules();
+        for (auto& tier : off.tiers)
+            for (auto& [rule, weight] : tier)
+                if (rule == ktv::SKIP_OPTIONAL) weight = 0;
+        errors.clear();
+        CHECK(ktv::plan(ktv::parse_message(near, errors), off, server_now, "").unplaced.size() == 1);
+        // Ca gần nhưng không kịp xong trong ca (ca hết 10:00) → không chèn (ràng buộc cứng của ca tuỳ chọn).
+        json late = near;
+        late["staff"]["available"] = "08:00-09:35";
+        late["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 09:00:00";
+        errors.clear();
+        const ktv::PlanResult tight = ktv::plan(ktv::parse_message(late, errors), ktv::default_rules(), server_now, "");
+        CHECK(tight.unplaced.size() == 1 && tight.unplaced[0] == 5454544);
+        // Mode Tuyến (2) cũng không chèn ca vượt giờ (AFTER_SHIFT nằm dưới KM ở mode này — ràng buộc cứng mới chặn).
+        late["priority_type"] = 2;
+        errors.clear();
+        CHECK(ktv::plan(ktv::parse_message(late, errors), ktv::default_rules(), server_now, "").unplaced.size() == 1);
+    }
     {  // 7.17 mục E: cùng ngày 10/09, KH thanh toán kỳ trước ngày 10 → hóa đơn đến hạn hôm nay: không lọc K, urgency max.
         json paid = early;
         paid["tasks"]["hoa_don"][0]["complete_date"] = "2026-08-10 16:00:00";

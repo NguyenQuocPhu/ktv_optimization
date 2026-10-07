@@ -27,7 +27,8 @@
 //   Problem   – bài toán của 1 KTV đã quy ra số
 //   Visit     – kết quả của MỘT bước đi tới một việc (giờ tới, check-in, xong, km, điểm phạt)
 //   Source, Solution – thứ tự + từng bước + nó do đâu mà ra (tốt nhất / gần đúng / tham lam)
-//   solve     – HÀM CHÍNH: vào bài toán, ra kết quả đầy đủ
+//   solve     – HÀM CHÍNH: vào bài toán, ra kết quả đầy đủ (7.24: ca tuỳ chọn được làm hay bỏ tùy khóa)
+//   solve_from – 7.24: cải thiện cục bộ (kể cả chèn / gỡ ca tuỳ chọn) từ một tuyến có sẵn, không tệ hơn nó
 //   objective – chấm điểm một thứ tự theo tầng (test dùng để so với vét cạn)
 //
 // Ẩn trong dp.cpp: visit() = bước chuyển của QHĐ, ĐÂY là chỗ áp rule nghiệp vụ cho từng bước;
@@ -63,6 +64,10 @@ struct Problem {
     double break_open = kNone;        // Sớm nhất được bắt đầu nghỉ trưa. kNone = tuyến này không cần nghỉ.
     double break_latest = kNone;      // Muộn nhất phải bắt đầu nghỉ (= hết khung trưa − break_minutes).
     double break_minutes = 0;         // Thời lượng nghỉ.
+    // 7.24: ca TUỲ CHỌN (ca ngoài K…): được bỏ, mỗi ca bỏ cộng rule SKIP_OPTIONAL; làm thì phải xong ≤ shift_end
+    // (ràng buộc cứng) và không tính PRIORITY_DELAY / DEADLINE_URGENCY của chính nó. Rỗng = mọi ca bắt buộc.
+    std::vector<char> optional;
+    bool is_optional(int j) const { return j >= 0 && j < static_cast<int>(optional.size()) && optional[j]; }
     bool needs_break() const { return !std::isnan(break_latest); }
     int size() const { return static_cast<int>(service.size()); }  // Số việc.
 };
@@ -91,8 +96,12 @@ struct Solution {
     Source source;
 };
 
-// HÀM CHÍNH: chọn thứ tự làm việc.
+// HÀM CHÍNH: chọn thứ tự làm việc. Có ca tuỳ chọn (7.24): chọn luôn tập ca tuỳ chọn nên làm; order chỉ chứa ca được làm.
 Solution solve(const Problem& p, const Rules& rules);
+
+// 7.24: cải thiện cục bộ (dời / đảo đoạn / chèn – gỡ ca tuỳ chọn) xuất phát từ `start`, chỉ nhận nước làm khóa giảm
+// → không bao giờ tệ hơn start. Dùng khi đã có tuyến tốt (VD QHĐ chính xác) mà còn thêm ca tuỳ chọn ngoài giới hạn.
+Solution solve_from(const Problem& p, const Rules& rules, const std::vector<int>& start);
 
 // Mô phỏng một thứ tự có sẵn (kể cả phương án so sánh): từng bước + giờ, dùng đúng luật của solve().
 // Thứ tự phạm luật nghỉ trưa vẫn ra số; chỉ objective() mới biết hợp lệ hay không (trả vô cực).

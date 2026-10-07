@@ -256,6 +256,7 @@ int main(int argc, char** argv) {
     const ktv::Minutes now = *ktv::parse_datetime("2026-09-10 09:00:00");
     const std::vector<ktv::TaskKind>& kinds = ktv::task_kinds();
 
+    long long spare_seen = 0;  // số dòng SPARE_TIME gặp (bảo đảm bài ngẫu nhiên thật sự có chèn)
     {  // 3000 message ngẫu nhiên: mọi bất biến phải giữ; một phần kiểm tất định.
         std::mt19937 rng(20260910);
         for (long long seed = 0; seed < 3000; ++seed) {
@@ -270,6 +271,34 @@ int main(int argc, char** argv) {
             if (result.response["statuscode"] == "200" || result.response["statuscode"] == "424")
                 CHECK(result.routed == static_cast<int>(worklist.candidates.size()) - static_cast<int>(result.unplaced.size()));
             CHECK(result.excluded == worklist.stats.excluded_missing_location);
+            if (seed % 3 == 0) {  // 7.24: chèn ca tuỳ chọn (ngoài K) không làm tầng 1 / 2 tệ đi; SPARE_TIME chỉ là ca ngoài K
+                ktv::Rules off = rules;
+                for (auto& tier : off.tiers)
+                    for (auto& [rule, weight] : tier)
+                        if (rule == ktv::SKIP_OPTIONAL) weight = 0;
+                const ojson with = ktv::plan(message, rules, now, "", true).response;
+                const ojson without = ktv::plan(message, off, now, "", true).response;
+                if (with["statuscode"] == "200" && without["statuscode"] == "200" && with["data"].contains("score") &&
+                    without["data"].contains("score")) {  // tuyến toàn DEFERRED không có score
+                    const auto& a = with["data"]["score"]["tiers"];
+                    const auto& b = without["data"]["score"]["tiers"];
+                    CHECK(a[0]["total"].get<double>() <= b[0]["total"].get<double>() + 1e-6);
+                    if (std::abs(a[0]["total"].get<double>() - b[0]["total"].get<double>()) < 1e-6)
+                        CHECK(a[1]["total"].get<double>() <= b[1]["total"].get<double>() + 1e-6);
+                }
+                const ktv::Minutes run_at = message.planned_at.value_or(now);
+                std::set<long long> outside_k;
+                for (const ktv::Task* candidate : worklist.candidates)
+                    if (beyond_k(*candidate, run_at, rules)) outside_k.insert(candidate->task_id);
+                if (with["data"].is_object())
+                    for (const auto& cluster : with["data"]["clusters"])
+                        for (const auto& row : cluster["schedule"])
+                            if (row.value("insert_reason", "") == "SPARE_TIME") {
+                                CHECK(outside_k.count(row["task_id"].get<long long>()) == 1);
+                                CHECK(row["end_at"].get<std::string>() <= with["data"]["metrics"]["shift_end_at"].get<std::string>());
+                                ++spare_seen;
+                            }
+            }
             if (seed % 10 == 0) {  // 300 bài kiểm tất định
                 // generated_in_ms là thời gian đo bằng đồng hồ (máy bận: 0 → 1 ms) → bỏ ra trước khi so, không thì test chập chờn.
                 auto stable = [](ojson response) {
@@ -311,6 +340,6 @@ int main(int argc, char** argv) {
     }
 
     if (failures) std::cerr << failures << " lỗi / " << checks << " kiểm\n";
-    else std::cout << "test_invariants: OK (" << checks << " kiểm)\n";
+    else std::cout << "test_invariants: OK (" << checks << " kiểm, " << spare_seen << " dòng SPARE_TIME)\n";
     return failures != 0;
 }

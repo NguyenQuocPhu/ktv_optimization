@@ -335,21 +335,21 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         grouped.push_back(std::move(stop));
     }
     // 7.16.1 + mục C: ca tháng > K bị lọc chỉ khi nhóm của nó không còn ca nào khác được xếp.
-    std::vector<Stop> routed_stops;
+    // 7.24 (điều kiện 3 catalogue): ca ngoài K không bị gạt thẳng nữa mà thành ca TUỲ CHỌN — QHĐ chèn khi KTV có
+    // khoảng trống thật (không làm ca nào trễ thêm, thuận tuyến < SKIP_OPTIONAL km tương đương, xong trong ca).
+    std::vector<Stop> routed_stops, spare_stops;
     for (Stop& stop : grouped) {
         bool any_kept = false;
         for (const Task* task : stop.tasks) any_kept |= !beyond_k(*task, now, rules);
-        if (!any_kept) {
-            for (const Task* task : stop.tasks) deferred.push_back({task, "BEYOND_K"});
-            continue;
-        }
-        routed_stops.push_back(std::move(stop));
+        (any_kept ? routed_stops : spare_stops).push_back(std::move(stop));
     }
-    std::sort(deferred.begin(), deferred.end(),
-              [](const auto& a, const auto& b) { return a.first->task_id < b.first->task_id; });  // tất định
-    for (const auto& [task, reason] : deferred) result.unplaced.push_back(task->task_id);
-    result.routed = 0;
-    for (const Stop& stop : routed_stops) result.routed += static_cast<int>(stop.tasks.size());
+    // Ca tồn không xếp: sắp theo task_id (tất định) + unplaced. Gọi trước mỗi lần trả response.
+    auto close_deferred = [&] {
+        std::sort(deferred.begin(), deferred.end(),
+                  [](const auto& a, const auto& b) { return a.first->task_id < b.first->task_id; });
+        result.unplaced.clear();
+        for (const auto& [task, reason] : deferred) result.unplaced.push_back(task->task_id);
+    };
     result.excluded = worklist.stats.excluded_missing_location;
 
     const Minutes shift_start = day + staff.available.front().first;
@@ -369,7 +369,8 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
 
     // 7.20.2: không còn ca nào xếp hôm nay nhưng có ca tồn (VD chỉ còn ca hẹn mai) → 200, một cụm chỉ có DEFERRED
     // (FE vẫn hiển thị đủ ca tồn); metrics = 0. 422 chỉ khi không có ca nào trả được.
-    if (routed_stops.empty() && !deferred.empty()) {
+    auto deferred_only = [&]() -> PlanResult {
+        close_deferred();
         std::vector<TaskStop> spots;
         for (const auto& [task, reason] : deferred) spots.push_back({task, 0.0, 0.0});
         const ClusterSummary summary = summarize_clusters(spots, staff.plots, 1e9).front();  // một cụm duy nhất
@@ -391,18 +392,40 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                            {"server_time", format_datetime(server_now)},
                            {"data", {{"staff_id", staff.staff_id}, {"priority_type", message.priority_type}, {"clusters", clusters}, {"metrics", metrics}}}};
         return result;
-    }
-    if (routed_stops.empty() || routed_stops.size() > 64) {
+    };
+    if (routed_stops.empty() && spare_stops.empty() && !deferred.empty()) return deferred_only();
+    if ((routed_stops.empty() && spare_stops.empty()) || routed_stops.size() > 64) {
         result.response = error_response("422", routed_stops.empty() ? "Không có công việc để dựng tuyến" : "Quá 64 việc cho một KTV",
                                          message.message_id, server_now);
         return result;
     }
 
     // ---- Bài toán số: mọi mốc giờ đổi về phút kể từ lúc xuất phát. Mỗi điểm dừng = một "việc" của QHĐ.
+    // 7.24: dựng trên MỌI điểm dừng — bắt buộc (0..n_mandatory) rồi tuỳ chọn — để một lần gọi bảng khoảng cách.
+    // Ca tuỳ chọn vượt trần 63 điểm (bitmask) → ưu tiên ít ngày còn lại / ưu tiên cao, phần thừa thành DEFERRED.
+    const int n_mandatory = static_cast<int>(routed_stops.size());
+    auto spare_rank = [&](const Stop& stop) {  // catalogue mục B: ít ngày làm việc còn lại → ưu tiên trong ngày cao
+        int days = 1 << 20, level = 9;
+        for (const Task* task : stop.tasks) {
+            const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);
+            const Deadlines d = resolve_deadlines(*task, kind, now);
+            if (d.complete_by) days = std::min(days, workdays_until(now, *d.complete_by));
+            if (task->priority_in_day > 0) level = std::min(level, task->priority_in_day);
+        }
+        return std::make_pair(days, level);
+    };
+    std::stable_sort(spare_stops.begin(), spare_stops.end(),
+                     [&](const Stop& a, const Stop& b) { return spare_rank(a) < spare_rank(b); });
+    while (n_mandatory + static_cast<int>(spare_stops.size()) > 63) {
+        for (const Task* task : spare_stops.back().tasks) deferred.push_back({task, "BEYOND_K"});
+        spare_stops.pop_back();
+    }
+    std::vector<Stop> all_stops = routed_stops;
+    all_stops.insert(all_stops.end(), spare_stops.begin(), spare_stops.end());
     Problem p;
     std::vector<Point> points{staff.latlng};
     auto relative = [&](std::optional<Minutes> t) { return t ? static_cast<double>(*t - start) : kNone; };
-    for (const Stop& stop : routed_stops) {
+    for (const Stop& stop : all_stops) {
         points.push_back(*stop_anchor(stop).latlng);
         int service = 0;
         std::optional<Minutes> opens, due, complete_by;
@@ -427,6 +450,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         p.complete_by.push_back(relative(complete_by));
         p.weight.push_back(weight);
         p.urgency.push_back(urgency);
+        p.optional.push_back(static_cast<int>(p.optional.size()) >= n_mandatory);
     }
     // Khu vực cho rule "quay lại khu vực đã rời" (AREA_REENTRY): biết lô → theo lô; lô 0 → lùi xuống block
     // (workbook (3): "không có lô thì tính ưu tiên xuống block_id"), chỉ so với task lô 0 khác; lô 0 + block 0 → không
@@ -436,10 +460,10 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         if (a.task_plots_id != 0 || b.task_plots_id != 0) return a.task_plots_id != 0 && a.task_plots_id == b.task_plots_id;
         return a.block_id != 0 && a.block_id == b.block_id;
     };
-    for (size_t i = 0; i < routed_stops.size(); ++i) {
+    for (size_t i = 0; i < all_stops.size(); ++i) {
         uint64_t mask = 0;
-        for (size_t j = 0; j < routed_stops.size(); ++j)
-            if (j != i && same_area(stop_anchor(routed_stops[i]), stop_anchor(routed_stops[j])))
+        for (size_t j = 0; j < all_stops.size(); ++j)
+            if (j != i && same_area(stop_anchor(all_stops[i]), stop_anchor(all_stops[j])))
                 mask |= uint64_t{1} << j;
         p.same_area.push_back(mask);
     }
@@ -463,7 +487,99 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         result.travel = "ESTIMATED";
     }
 
+    // 7.24 — chọn ca tuỳ chọn mà không đưa hết vào QHĐ:
+    //   1. giải ca BẮT BUỘC như trước (≤ max_exact_tasks: chính xác; nhiều hơn: tham lam)
+    //   2. lọc ca tuỳ chọn theo tuyến đó: cận dưới km đi thêm (chèn giữa 2 điểm liền nhau hoặc gắn cuối) > trọng số
+    //      SKIP_OPTIONAL → không bao giờ có lợi, gạt (chi phí tầng chứa KM tăng ít nhất bằng số km đi thêm)
+    //   3. ca bắt buộc ≤ max_exact_tasks: giải lại QHĐ chính xác với bắt buộc + ca tuỳ chọn tốt nhất tới đủ max_exact_tasks
+    //      (QHĐ tự chọn tập con tối ưu); còn thừa / bắt buộc quá nhiều → 4. cải thiện cục bộ chèn / gỡ từ tuyến hiện có.
+    //   Không bước nào làm tuyến ca bắt buộc tệ đi (khóa chỉ giảm). Không có ca ngoài K → chỉ chạy bước 1, như cũ.
+    const Problem whole = p;
+    auto subproblem = [&](const std::vector<int>& keep) {  // bài con trên các điểm dừng `keep` (chỉ số trong all_stops)
+        Problem q;
+        q.travel.km.assign(keep.size() + 1, std::vector<double>(keep.size() + 1));
+        q.travel.minutes = q.travel.km;
+        for (size_t a = 0; a <= keep.size(); ++a)
+            for (size_t b = 0; b <= keep.size(); ++b) {
+                const int from = a == 0 ? 0 : keep[a - 1] + 1, to = b == 0 ? 0 : keep[b - 1] + 1;
+                q.travel.km[a][b] = whole.travel.km[from][to];
+                q.travel.minutes[a][b] = whole.travel.minutes[from][to];
+            }
+        for (size_t t = 0; t < keep.size(); ++t) {
+            const int k = keep[t];
+            q.service.push_back(whole.service[k]);
+            q.opens.push_back(whole.opens[k]);
+            q.due.push_back(whole.due[k]);
+            q.complete_by.push_back(whole.complete_by[k]);
+            q.weight.push_back(whole.weight[k]);
+            q.urgency.push_back(whole.urgency[k]);
+            q.optional.push_back(whole.optional[k]);
+            uint64_t mask = 0;
+            for (size_t u = 0; u < keep.size(); ++u)
+                if (whole.same_area[k] >> keep[u] & 1) mask |= uint64_t{1} << u;
+            q.same_area.push_back(mask);
+        }
+        q.shift_end = whole.shift_end;
+        q.break_open = whole.break_open;
+        q.break_latest = whole.break_latest;
+        q.break_minutes = whole.break_minutes;
+        return q;
+    };
+    std::vector<int> kept(n_mandatory);  // kept[t] = chỉ số trong all_stops của việc t trong bài đang giải
+    std::iota(kept.begin(), kept.end(), 0);
+    p = subproblem(kept);
     Solution solution = solve(p, rules);
+    double skip_km = 0;
+    for (const auto& tier : rules.tiers)
+        for (auto [rule, weight] : tier)
+            if (rule == SKIP_OPTIONAL) skip_km = weight;
+    if (!spare_stops.empty() && skip_km > 0) {
+        std::vector<int> route{0};  // điểm trong bảng khoảng cách của tuyến bắt buộc: xuất phát + từng điểm dừng
+        for (int t : solution.order)
+            if (t != kBreak) route.push_back(kept[t] + 1);
+        std::vector<std::pair<double, int>> candidates;  // (cận dưới km đi thêm, chỉ số trong all_stops)
+        for (int k = n_mandatory; k < static_cast<int>(all_stops.size()); ++k) {
+            const auto& km = whole.travel.km;
+            double bound = km[route.back()][k + 1];  // gắn cuối tuyến
+            for (size_t r = 0; r + 1 < route.size(); ++r)
+                bound = std::min(bound, km[route[r]][k + 1] + km[k + 1][route[r + 1]] - km[route[r]][route[r + 1]]);
+            if (bound < skip_km) candidates.push_back({bound, k});
+        }
+        std::stable_sort(candidates.begin(), candidates.end(), [&](const auto& a, const auto& b) {
+            return std::make_pair(spare_rank(all_stops[a.second]), a.first) < std::make_pair(spare_rank(all_stops[b.second]), b.first);
+        });
+        if (!candidates.empty()) {
+            std::vector<int> keep = kept;
+            size_t used = 0;
+            if (n_mandatory <= rules.max_exact_tasks) {  // 3. QHĐ chính xác trên bắt buộc + ca tuỳ chọn tốt nhất
+                for (; used < candidates.size() && static_cast<int>(keep.size()) < rules.max_exact_tasks; ++used)
+                    keep.push_back(candidates[used].second);
+                p = subproblem(keep);
+                solution = solve(p, rules);
+                kept = keep;
+            }
+            if (used < candidates.size()) {  // 4. phần còn lại: chèn / gỡ cục bộ từ tuyến hiện có (chỉ số cũ giữ nguyên)
+                for (; used < candidates.size(); ++used) keep.push_back(candidates[used].second);
+                p = subproblem(keep);
+                solution = solve_from(p, rules, solution.order);
+                kept = keep;
+            }
+        }
+    }
+    // Ca tuỳ chọn không được làm (bị lọc, hoặc QHĐ bỏ) → DEFERRED BEYOND_K như trước 7.24.
+    std::vector<char> visited(all_stops.size(), 0);
+    for (int t : solution.order)
+        if (t != kBreak) visited[kept[t]] = 1;
+    for (int k = n_mandatory; k < static_cast<int>(all_stops.size()); ++k)
+        if (!visited[k])
+            for (const Task* task : all_stops[k].tasks) deferred.push_back({task, "BEYOND_K"});
+    routed_stops.clear();  // từ đây: điểm dừng theo chỉ số của bài đang giải (p)
+    for (int k : kept) routed_stops.push_back(all_stops[k]);
+    result.routed = 0;
+    for (int t : solution.order)
+        if (t != kBreak) result.routed += static_cast<int>(routed_stops[t].tasks.size());
+    if (result.routed == 0) return deferred_only();  // chỉ có ca tuỳ chọn và không ca nào đáng chèn
+    close_deferred();
     result.source = solution.source;
     const std::vector<Visit>& steps = solution.steps;
 
@@ -478,8 +594,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     std::vector<const Visit*> visits;  // Chỉ các bước tới điểm dừng thật (bỏ nghỉ trưa).
     for (const Visit& v : steps)
         if (v.task != kBreak) visits.push_back(&v);
-    int total = 0;  // số CA (không phải số điểm dừng) — giữ contract tasks_total
-    for (const Stop& stop : routed_stops) total += static_cast<int>(stop.tasks.size());
+    const int total = result.routed;  // số CA được làm (không phải số điểm dừng; 7.24: không tính ca tuỳ chọn bị bỏ)
 
     std::vector<ojson> rows;           // IDLE / BREAK / TASK theo đúng thứ tự thời gian.
     std::vector<int> row_task;         // Với mỗi row: TASK gần nhất tại/trước nó (-1 nếu trước TASK đầu).
@@ -532,7 +647,9 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                          // (ca chèn cùng địa chỉ với ca khác → "SAME_ADDRESS" — chữ hoa theo workbook (5), 7.20.3; chưa có lý do khác → "").
                          {"task_role", kind.extra ? "inserted" : "main"},
                          {"priority", priority_score(task, kind, d, now, rules)},  // 7.23
-                         {"insert_reason", kind.extra && stop.tasks.size() > 1 ? "SAME_ADDRESS" : ""},
+                         // 7.24: ca tuỳ chọn (ngoài K) được QHĐ chèn vào khoảng trống thật → "SPARE_TIME" (mã riêng repo).
+                         {"insert_reason", p.is_optional(v.task) ? "SPARE_TIME"
+                                           : kind.extra && stop.tasks.size() > 1 ? "SAME_ADDRESS" : ""},
                          {"task_group_id", task.task_group_id},
                          {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
                          {"task_type_name", task.task_type_name}, {"task_sub_id", task.task_sub_id},
