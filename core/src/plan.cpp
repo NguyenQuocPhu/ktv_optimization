@@ -30,6 +30,22 @@ double round_to(double value, int digits) {
     return std::round(value * scale) / scale;
 }
 
+// 7.20.2: một ca tồn không xếp hôm nay (workbook (5) sheet 03: entry_type DEFERRED, seq 0, at "", task_role inserted).
+// Cùng field với dòng TASK; giờ/SLA/chặng rỗng hoặc 0. reason: NEXT_DAY (hẹn ngày sau) / BEYOND_K (còn > K ngày).
+ojson deferred_row(const Task& task, const char* reason) {
+    const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
+    return {{"seq", 0}, {"entry_type", "DEFERRED"}, {"at", ""}, {"start_at", ""}, {"end_at", ""},
+            {"task_id", task.task_id}, {"location", task.location}, {"latlng", latlng(*task.latlng, 6)},
+            {"task_role", "inserted"}, {"insert_reason", reason},
+            {"task_group_id", task.task_group_id}, {"task_group_name", task.task_group_name},
+            {"task_type_id", task.task_type_id}, {"task_type_name", task.task_type_name},
+            {"task_sub_id", task.task_sub_id}, {"task_sub_name", task.task_sub_name},
+            {"checkindate", ""}, {"checkoutdate", ""}, {"travel_minutes_before", 0}, {"travel_km_before", 0.0},
+            {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))}, {"projected_sla", ""},
+            {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
+            {"contract_no", task.contract_no.value_or("")}};
+}
+
 // ---- Giải thích tuyến (--explain): chi phí theo tầng/rule + so vài phương án khác. ----
 // Không đổi thứ tự; chỉ đọc lại chi phí mà QHĐ đã dùng (objective/simulate).
 struct Explained {
@@ -284,10 +300,11 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         return result;
     }
     // 7.18: ca hẹn ngày SAU ngày chạy không xếp tuyến hôm nay (catalogue mục D); hẹn ngày đã qua vẫn xếp (làm bù).
-    // Lọc trước khi gom: chỉ gom các ca được tính tuyến. Không vào OUT (người dùng chốt) — chỉ ghi unplaced.
+    // Lọc trước khi gom: chỉ gom các ca được tính tuyến. 7.20.2: vẫn trả về trong OUT dạng DEFERRED NEXT_DAY.
+    std::vector<std::pair<const Task*, const char*>> deferred;  // ca tồn không xếp hôm nay + lý do
     std::vector<const Task*> today;
     for (const Task* task : worklist.candidates) {
-        if (task->appointment && start_of_day(*task->appointment) > day) result.unplaced.push_back(task->task_id);
+        if (task->appointment && start_of_day(*task->appointment) > day) deferred.push_back({task, "NEXT_DAY"});
         else today.push_back(task);
     }
     // 7.16.3: gom ca cùng địa chỉ thành điểm dừng TRƯỚC khi lọc K (catalogue mục C: K không áp cho ca cùng địa chỉ
@@ -308,11 +325,14 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         bool any_kept = false;
         for (const Task* task : stop.tasks) any_kept |= !beyond_k(*task, now, rules);
         if (!any_kept) {
-            for (const Task* task : stop.tasks) result.unplaced.push_back(task->task_id);
+            for (const Task* task : stop.tasks) deferred.push_back({task, "BEYOND_K"});
             continue;
         }
         routed_stops.push_back(std::move(stop));
     }
+    std::sort(deferred.begin(), deferred.end(),
+              [](const auto& a, const auto& b) { return a.first->task_id < b.first->task_id; });  // tất định
+    for (const auto& [task, reason] : deferred) result.unplaced.push_back(task->task_id);
     result.routed = 0;
     for (const Stop& stop : routed_stops) result.routed += static_cast<int>(stop.tasks.size());
     result.excluded = worklist.stats.excluded_missing_location;
@@ -332,6 +352,31 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         start = std::max(start, now + static_cast<Minutes>(std::llround(remaining)));
     }
 
+    // 7.20.2: không còn ca nào xếp hôm nay nhưng có ca tồn (VD chỉ còn ca hẹn mai) → 200, một cụm chỉ có DEFERRED
+    // (FE vẫn hiển thị đủ ca tồn); metrics = 0. 422 chỉ khi không có ca nào trả được.
+    if (routed_stops.empty() && !deferred.empty()) {
+        std::vector<TaskStop> spots;
+        for (const auto& [task, reason] : deferred) spots.push_back({task, 0.0, 0.0});
+        const ClusterSummary summary = summarize_clusters(spots, staff.plots, 1e9).front();  // một cụm duy nhất
+        ojson schedule = ojson::array();
+        for (const auto& [task, reason] : deferred) schedule.push_back(deferred_row(*task, reason));
+        ojson clusters = ojson::array({{{"cluster_seg", 1}, {"cluster_code", summary.code}, {"name", summary.name},
+                                        {"center", latlng(summary.center)}, {"radius_m", std::llround(summary.radius_km * 1000)},
+                                        {"task_count", 0}, {"travel_km_inbound", 0.0}, {"travel_km_internal", 0.0},
+                                        {"handle_minutes", 0}, {"schedule", schedule}}});
+        const long long ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - clock).count();
+        ojson metrics = {{"total_distance_km", 0.0}, {"total_travel_minutes", 0}, {"total_handle_minutes", 0},
+                         {"start_at", format_datetime(start)}, {"finish_at", format_datetime(start)},
+                         {"on_time_rate_forecast", 100.0}, {"at_risk_count", 0}, {"breach_forecast_count", 0},
+                         {"cluster_count", 1}, {"revisit_count", 0}, {"idle_minutes", 0}, {"break_minutes", 0},
+                         {"tasks_total", 0}, {"tasks_forecast_completed", 0}, {"shift_end_at", format_datetime(shift_end)},
+                         {"overload_minutes", 0}, {"generated_in_ms", ms}};
+        result.response = {{"success", true}, {"statuscode", "200"}, {"message", ""}, {"trace_id", message.message_id},
+                           {"server_time", format_datetime(server_now)},
+                           {"data", {{"staff_id", staff.staff_id}, {"priority_type", 0}, {"clusters", clusters}, {"metrics", metrics}}}};
+        return result;
+    }
     if (routed_stops.empty() || routed_stops.size() > 64) {
         result.response = error_response("422", routed_stops.empty() ? "Không có công việc để dựng tuyến" : "Quá 64 việc cho một KTV",
                                          message.message_id, server_now);
@@ -503,6 +548,16 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         ordered["seq"] = ++cluster_seq[c];
         for (auto it = rows[i].begin(); it != rows[i].end(); ++it) ordered[it.key()] = it.value();
         cluster_schedule[c].push_back(std::move(ordered));
+    }
+
+    // 7.20.2: ca tồn không xếp → DEFERRED cuối schedule của cụm có TÂM GẦN NHẤT (cụm của core là đoạn tuyến, ca không
+    // xếp không thuộc đoạn nào → suy theo địa lý). Không đếm vào task_count / km / handle / metrics.
+    for (const auto& [task, reason] : deferred) {
+        int nearest = 0;
+        for (int c = 1; c < static_cast<int>(summaries.size()); ++c)
+            if (distance_km(summaries[c].center, *task->latlng) < distance_km(summaries[nearest].center, *task->latlng))
+                nearest = c;
+        cluster_schedule[nearest].push_back(deferred_row(*task, reason));
     }
 
     ojson clusters = ojson::array();

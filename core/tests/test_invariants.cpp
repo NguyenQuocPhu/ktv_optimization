@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <random>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -72,7 +73,13 @@ static json random_message(std::mt19937& rng, const std::vector<ktv::TaskKind>& 
             {"task_status_id", std::stoi(status)},
             {"task_status_name", ""},
             {"sla", {{"sla_minutes", sla}, {"priority_in_day", kind.priority}}},
-            {"appointment", unit(rng) < 0.4 ? when(rng, base, 480) : ""},
+            // ~10% số ca có hẹn rơi vào ngày mai / hôm qua (7.18, 7.20.2: mai → DEFERRED NEXT_DAY, hôm qua vẫn xếp).
+            {"appointment", [&] {
+                 const double roll = unit(rng);
+                 return roll < 0.32 ? when(rng, base, 480)
+                        : roll < 0.36 ? when(rng, base + 1440, 480)
+                        : roll < 0.40 ? when(rng, base - 1440, 480) : std::string();
+             }()},
             {"create_date", unit(rng) < 0.3 ? when(rng, base, 4320) : ""},
             {"complete_date", unit(rng) < 0.15 ? when(rng, base, 720) : ""},
             {"location", ""},
@@ -139,6 +146,7 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
     long long cluster_tasks = 0;
     // 7.19.3: tổng metrics/cụm = tổng dòng (km tính theo phần mười để tránh sai số float).
     long long tenths = 0, travel = 0, handle = 0, idle = 0, rest = 0;
+    std::map<long long, std::string> deferred;  // task_id → insert_reason của dòng DEFERRED
     auto tenth = [](const ojson& value) { return std::llround(value.get<double>() * 10); };
     std::set<long long> seen;
     std::string last_time;
@@ -149,6 +157,7 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
         cluster_tasks += cluster["task_count"].get<long long>();
         CHECK(cluster["radius_m"].get<long long>() >= 0);
         int expected_seq = 1;
+        bool deferred_tail = false;
         long long cluster_tenths = 0, cluster_handle = 0, first_tenths = -1;
         const auto& schedule = cluster["schedule"];
         for (size_t i = 0; i < schedule.size(); ++i) {
@@ -168,9 +177,17 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
                 handle += row["handle_minutes"].get<long long>();
                 cluster_handle += row["handle_minutes"].get<long long>();
             }
-            CHECK(row["seq"] == expected_seq++);
             CHECK(row.contains("entry_type") && !row.contains("type"));
             const std::string entry = row["entry_type"].get<std::string>();
+            if (entry == "DEFERRED") {  // 7.20.2: seq 0, không giờ, cuối schedule, không tính vào tổng
+                deferred_tail = true;
+                CHECK(row["seq"] == 0 && row["at"] == "" && row["start_at"] == "" && row["end_at"] == "");
+                CHECK(row["task_role"] == "inserted" && row["projected_sla"] == "" && row["travel_km_before"] == 0.0);
+                CHECK(deferred.emplace(row["task_id"].get<long long>(), row["insert_reason"].get<std::string>()).second);
+                continue;
+            }
+            CHECK(!deferred_tail);  // DEFERRED chỉ ở cuối
+            CHECK(row["seq"] == expected_seq++);
             CHECK(entry == "TASK" || entry == "IDLE" || entry == "BREAK");
             const std::string start = row["start_at"].get<std::string>();
             if (!last_time.empty()) CHECK(!(start < last_time));  // thời gian không lùi
@@ -182,7 +199,7 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
                 CHECK(ps == "ON_TIME" || ps == "AT_RISK" || ps == "WILL_BREACH" || ps == "ALREADY_BREACHED");
             }
         }
-        CHECK(tenth(cluster["travel_km_inbound"]) == first_tenths);
+        CHECK(tenth(cluster["travel_km_inbound"]) == std::max<long long>(first_tenths, 0));  // cụm toàn DEFERRED: 0
         CHECK(tenth(cluster["travel_km_internal"]) == cluster_tenths);
         CHECK(cluster["handle_minutes"].get<long long>() == cluster_handle);
     }
@@ -196,9 +213,20 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
         if (beyond_k(*candidate, now, rules)) beyond.insert(candidate->task_id);
     CHECK(task_rows == metrics["tasks_total"].get<long long>());
     CHECK(cluster_tasks == task_rows);
-    // unplaced = các ca bị lọc K; nhóm cùng địa chỉ có thể "cứu" ca tháng > K (7.16.3) nên chỉ kiểm tập con.
+    // unplaced = ca hẹn ngày sau (NEXT_DAY) + ca lọc K (BEYOND_K; nhóm cùng địa chỉ có thể "cứu" ca tháng > K — 7.16.3 —
+    // nên K chỉ kiểm tập con). 7.20.2: đúng tập đó ra OUT dạng DEFERRED với đúng lý do.
     std::set<long long> listed(unplaced.begin(), unplaced.end());
-    for (long long id : listed) CHECK(beyond.count(id) == 1);
+    std::set<long long> next_day;
+    for (const ktv::Task* candidate : worklist.candidates)
+        if (candidate->appointment && ktv::start_of_day(*candidate->appointment) > ktv::start_of_day(now))
+            next_day.insert(candidate->task_id);
+    for (long long id : next_day) CHECK(listed.count(id) == 1);
+    for (long long id : listed) {
+        CHECK(next_day.count(id) == 1 || beyond.count(id) == 1);
+        CHECK(deferred.count(id) == 1);
+        if (deferred.count(id)) CHECK(deferred[id] == (next_day.count(id) ? "NEXT_DAY" : "BEYOND_K"));
+    }
+    CHECK(deferred.size() == listed.size());
     std::set<long long> expected_ids;
     for (const ktv::Task* candidate : worklist.candidates)
         if (!listed.count(candidate->task_id)) expected_ids.insert(candidate->task_id);

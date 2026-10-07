@@ -59,6 +59,7 @@
   th { position: sticky; top: 0; background: #fafbfd; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
   td.task { min-width: 260px; white-space: normal; }
   tr.idle td, tr.break td { color: var(--muted); font-style: italic; }
+  tr.deferred td { color: var(--muted); }
   .dot { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; vertical-align: baseline; }
   .pin { width: 26px; height: 26px; border: 2px solid #fff; border-radius: 50%; color: #fff; background: var(--c, #2563eb);
          font: 700 12px/22px system-ui, sans-serif; text-align: center; box-shadow: 0 1px 5px rgba(0, 0, 0, .35); }
@@ -300,6 +301,10 @@ function render(result) {
           <td>${esc(row.start_at.slice(11, 16))} → ${esc(row.end_at.slice(11, 16))}</td>
           <td>${row.travel_km_before} km</td><td>${row.handle_minutes}′</td>
           <td><span class="badge ${badgeClass(row.projected_sla)}">${esc(row.projected_sla)}</span></td></tr>`);
+      } else if (row.entry_type === "DEFERRED") {  // 7.20.2: ca tồn không xếp hôm nay, không có giờ
+        rows.push(`<tr class="deferred"><td>—</td><td><span class="dot" style="background:${color}"></span>${esc(cluster.cluster_code)}</td><td>${row.seq}</td>
+          <td>${esc(row.task_type_name)}</td><td class="task">${row.task_id} · ${esc(row.location || "")}</td>
+          <td>chưa xếp: ${esc(row.insert_reason)}</td><td></td><td>${row.handle_minutes}′</td><td></td></tr>`);
       } else {
         rows.push(`<tr class="${row.entry_type.toLowerCase()}"><td></td><td>${esc(cluster.cluster_code)}</td><td>${row.seq}</td>
           <td>${esc(row.entry_type)}</td><td class="task">${esc(row.label || "")}</td>
@@ -320,6 +325,16 @@ function render(result) {
   for (const [index, cluster] of clusters.entries()) {
     const color = COLORS[index % COLORS.length];
     for (const row of cluster.schedule) {
+      if (row.entry_type === "DEFERRED") {  // chấm xám, không số thứ tự, không nối tuyến
+        const [dlat, dlng] = row.latlng.split(",").map(Number);
+        if (Number.isFinite(dlat) && Number.isFinite(dlng)) {
+          points.push([dlat, dlng]);
+          L.circleMarker([dlat, dlng], { radius: 7, color: "#888", fillColor: "#bbb", fillOpacity: 0.8, weight: 2 })
+            .bindTooltip(`${row.task_id} · ${esc(row.task_type_name)}<br>chưa xếp hôm nay: ${esc(row.insert_reason)} · ${esc(cluster.cluster_code)}`)
+            .addTo(routeLayer);
+        }
+        continue;
+      }
       if (row.entry_type !== "TASK") continue;
       const [lat, lng] = row.latlng.split(",").map(Number);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;

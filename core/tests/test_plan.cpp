@@ -1,5 +1,6 @@
 // Một message API đi hết đường: đọc → xếp → output đúng dạng file API (sheet 03, 04).
 #include <cmath>
+#include <algorithm>
 #include <iostream>
 
 #include "ktv/plan.hpp"
@@ -124,9 +125,18 @@ int main() {
     CHECK(k_filtered.response["data"]["metrics"]["tasks_total"] == 1);
     CHECK(k_filtered.response["data"]["score"]["tiers"][2]["rules"]["DEADLINE_URGENCY"].get<double>() == 0);  // chỉ còn ca chính → urgency 0
     CHECK(k_filtered.unplaced.size() == 1 && k_filtered.unplaced[0] == 5454544);
+    int k_deferred = 0;  // 7.20.2: ca bị lọc K vẫn trả về — dòng DEFERRED BEYOND_K, không phải TASK
     for (const auto& cluster : k_filtered.response["data"]["clusters"])
-        for (const auto& row : cluster["schedule"])
+        for (const auto& row : cluster["schedule"]) {
             CHECK(row["entry_type"] != "TASK" || row["task_id"] != 5454544);
+            if (row["entry_type"] == "DEFERRED") {
+                ++k_deferred;
+                CHECK(row["task_id"] == 5454544 && row["insert_reason"] == "BEYOND_K" && row["seq"] == 0);
+                CHECK(row["at"] == "" && row["start_at"] == "" && row["task_role"] == "inserted" && row["projected_sla"] == "");
+                CHECK(row["travel_km_before"] == 0.0 && row["handle_minutes"] == 20);
+            }
+        }
+    CHECK(k_deferred == 1);
     {  // 7.17 mục E: cùng ngày 10/09, KH thanh toán kỳ trước ngày 10 → hóa đơn đến hạn hôm nay: không lọc K, urgency max.
         json paid = early;
         paid["tasks"]["hoa_don"][0]["complete_date"] = "2026-08-10 16:00:00";
@@ -140,7 +150,7 @@ int main() {
     // Ngày 28/09 (2 ngày làm việc ≤ K) thì hóa đơn vẫn xếp, không ca nào bị lọc — đã kiểm ở trên.
     CHECK(result.unplaced.empty());
 
-    {  // 7.18: ca hẹn ngày sau không xếp (không vào OUT, chỉ unplaced); hẹn ngày đã qua vẫn xếp.
+    {  // 7.18 + 7.20.2: ca hẹn ngày sau không xếp tuyến, trả về dòng DEFERRED NEXT_DAY; hẹn ngày đã qua vẫn xếp.
         const auto run = [&](const char* appointment) {
             json data = message();
             data["tasks"]["trien_khai"][0]["appointment"] = appointment;
@@ -154,21 +164,70 @@ int main() {
         const json& m = tomorrow.response["data"]["metrics"];
         CHECK(m["tasks_total"] == 1 && m["finish_at"].get<std::string>().substr(0, 10) == "2026-09-28");
         CHECK(m["overload_minutes"] == 0);
+        int next_day = 0;
         for (const auto& cluster : tomorrow.response["data"]["clusters"])
             for (const auto& row : cluster["schedule"]) {
                 CHECK(row["entry_type"] != "TASK" || row["task_id"] != 5454541);
+                if (row["entry_type"] == "DEFERRED") {
+                    ++next_day;
+                    CHECK(row["task_id"] == 5454541 && row["insert_reason"] == "NEXT_DAY");
+                    CHECK(cluster["task_count"] == 1);  // DEFERRED không đếm vào cụm
+                    continue;
+                }
                 CHECK(row["end_at"].get<std::string>().substr(0, 10) == "2026-09-28");  // không IDLE qua đêm
             }
+        CHECK(next_day == 1);
         ktv::PlanResult yesterday = run("2026-09-27 14:00:00");
         CHECK(yesterday.unplaced.empty() && yesterday.response["data"]["metrics"]["tasks_total"] == 2);
         ktv::PlanResult late_today = run("2026-09-28 23:30:00");  // cuối ngày chạy vẫn là hôm nay
         CHECK(late_today.unplaced.empty());
-        // Chỉ còn ca ngày sau → không có việc hôm nay → 422 như danh sách rỗng.
+        // Chỉ còn ca ngày sau → 7.20.2: 200, một cụm chỉ có DEFERRED, metrics = 0 (trước: 422).
         json only = message();
         only["tasks"]["trien_khai"][0]["appointment"] = "2026-09-30 09:00:00";
         only["tasks"]["hoa_don"] = json::array();
         errors.clear();
-        CHECK(ktv::plan(ktv::parse_message(only, errors), ktv::default_rules(), server_now, "").response["statuscode"] == "422");
+        const json lone = ktv::plan(ktv::parse_message(only, errors), ktv::default_rules(), server_now, "").response;
+        CHECK(lone["statuscode"] == "200" && lone["data"]["clusters"].size() == 1);
+        const json& lone_cluster = lone["data"]["clusters"][0];
+        CHECK(lone_cluster["task_count"] == 0 && lone_cluster["handle_minutes"] == 0 && lone_cluster["center"] == "21.0122,105.7995");
+        CHECK(lone_cluster["schedule"].size() == 1 && lone_cluster["schedule"][0]["entry_type"] == "DEFERRED");
+        CHECK(lone_cluster["schedule"][0]["insert_reason"] == "NEXT_DAY");
+        CHECK(lone["data"]["metrics"]["tasks_total"] == 0 && lone["data"]["metrics"]["total_distance_km"] == 0.0);
+        CHECK(lone["data"]["metrics"]["cluster_count"] == 1 && lone["data"]["metrics"]["on_time_rate_forecast"] == 100.0);
+        // Rỗng thật (không ca nào trả được) → vẫn 422.
+        json none = only;
+        none["tasks"]["trien_khai"] = json::array();
+        errors.clear();
+        CHECK(ktv::plan(ktv::parse_message(none, errors), ktv::default_rules(), server_now, "").response["statuscode"] == "422");
+    }
+    {  // 7.20.2: DEFERRED gắn vào cụm có tâm gần nhất, cuối schedule, sắp theo task_id.
+        json data = message();
+        data["tasks"]["hoa_don"] = json::array();
+        json far = data["tasks"]["trien_khai"][0];  // ca xếp hôm nay ở Trần Duy Hưng (21.0122,105.7995)
+        far["task_id"] = 5454600;
+        far["latlng"] = "21.0500,105.8500";  // ca xếp hôm nay thứ 2, xa > 2 km → cụm riêng
+        far["appointment"] = "2026-09-28 16:00:00";
+        data["tasks"]["trien_khai"].push_back(far);
+        for (long long id : {5454702LL, 5454701LL}) {  // 2 ca hẹn mai sát ca "far" → vào cụm của "far"
+            json next = far;
+            next["task_id"] = id;
+            next["latlng"] = "21.0505,105.8505";
+            next["appointment"] = "2026-09-29 09:00:00";
+            data["tasks"]["trien_khai"].push_back(next);
+        }
+        errors.clear();
+        const json r = ktv::plan(ktv::parse_message(data, errors), ktv::default_rules(), server_now, "").response;
+        CHECK(errors.empty() && r["data"]["clusters"].size() == 2);
+        for (const auto& cluster : r["data"]["clusters"]) {
+            const auto& schedule = cluster["schedule"];
+            const bool has_far = std::any_of(schedule.begin(), schedule.end(), [](const json& row) { return row["task_id"] == 5454600; });
+            std::vector<long long> ids;
+            for (const auto& row : schedule)
+                if (row["entry_type"] == "DEFERRED") ids.push_back(row["task_id"]);
+            CHECK(has_far ? ids == std::vector<long long>({5454701, 5454702}) : ids.empty());
+            if (has_far) CHECK(schedule.back()["entry_type"] == "DEFERRED" && schedule[schedule.size() - 3]["entry_type"] != "DEFERRED");
+        }
+        CHECK(r["data"]["metrics"]["tasks_total"] == 2);
     }
 
     {  // 7.16.3: gom ca cùng địa chỉ thành một điểm dừng; ca tháng > K vẫn được gom theo ca khác cùng địa chỉ (K không áp).
