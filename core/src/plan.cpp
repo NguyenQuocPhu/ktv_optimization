@@ -514,9 +514,9 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
                          {"task_id", task.task_id}, {"location", task.location},
                          {"latlng", latlng(*task.latlng, 6)},  // task đã qua lọc nên luôn có tọa độ
                          // Workbook (1): vai trò ca (main = ca chính theo hẹn SLA, inserted = ca chèn) + lý do chèn
-                         // (ca chèn cùng địa chỉ với ca khác → "same_address"; chưa có lý do khác → "").
+                         // (ca chèn cùng địa chỉ với ca khác → "SAME_ADDRESS" — chữ hoa theo workbook (5), 7.20.3; chưa có lý do khác → "").
                          {"task_role", kind.extra ? "inserted" : "main"},
-                         {"insert_reason", kind.extra && stop.tasks.size() > 1 ? "same_address" : ""},
+                         {"insert_reason", kind.extra && stop.tasks.size() > 1 ? "SAME_ADDRESS" : ""},
                          {"task_group_id", task.task_group_id},
                          {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
                          {"task_type_name", task.task_type_name}, {"task_sub_id", task.task_sub_id},

@@ -249,7 +249,7 @@ int main() {
         CHECK(task_rows.size() == 2);
         CHECK(task_rows[0]["task_id"] == 5454541 && task_rows[1]["task_id"] == 5454544);  // trong nhóm: ưu tiên P3 trước P4
         CHECK(task_rows[0]["task_role"] == "main" && task_rows[1]["task_role"] == "inserted");  // workbook (1)
-        CHECK(task_rows[0]["insert_reason"] == "" && task_rows[1]["insert_reason"] == "same_address");
+        CHECK(task_rows[0]["insert_reason"] == "" && task_rows[1]["insert_reason"] == "SAME_ADDRESS");  // 7.20.3: chữ hoa
         CHECK(task_rows[0]["end_at"] == task_rows[1]["start_at"]);
         CHECK(task_rows[1]["travel_km_before"] == 0.0);  // km chỉ tính ở ca đầu của điểm dừng
     }
