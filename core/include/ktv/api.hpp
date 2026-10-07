@@ -138,7 +138,7 @@ struct TaskKind {
     std::optional<int> sla_minutes;
     OnTime on_time;
     int priority;
-    int handle_minutes;  // Định mức thời gian xử lý khi input để trống. [GIẢ ĐỊNH]
+    int handle_minutes;  // Định mức thời gian xử lý khi input để trống = TGXL chuẩn catalogue ISC sheet 5 (7.25).
     bool extra = false;  // 7.16.2: ca chèn (không neo khung giờ) theo catalogue sheet 5 — dùng cho DEADLINE_URGENCY.
 };
 const std::vector<TaskKind>& task_kinds();                                     // Cả bảng (12 loại).

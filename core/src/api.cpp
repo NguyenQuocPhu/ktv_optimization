@@ -12,18 +12,20 @@ namespace ktv {
 
 const std::vector<TaskKind>& task_kinds() {
     using O = OnTime;
+    // Cột cuối (định mức phút khi input bỏ trống handle_minutes) = TGXL chuẩn, catalogue ISC sheet 5 (tham khảo nghiệp vụ,
+    // 7.25). Riêng cscd: ISC ghi đã bỏ 2 loại này, workbook (5) không có loại nào → số cũ, không có nguồn [GIẢ ĐỊNH].
     static const std::vector<TaskKind> kinds = {
         {"trien_khai", 3, "trien_khai_net", 120, O::CheckinBeforeB, 3, 120},
-        {"trien_khai", 4, "trien_khai_box", 120, O::CheckinBeforeB, 3, 60},  // Workbook mới đổi tên box_cam_only; định mức chờ chốt.
-        {"trien_khai", 4, "box_cam_only", 120, O::CheckinBeforeB, 3, 60},    // Tên cũ, giữ để chạy fixture cũ. [CHỜ CHỐT bảng số]
-        {"trien_khai", 5, "swap", 60, O::CheckinBeforeB, 3, 45},             // Workbook mới coi là subtype của trien_khai_box. [CHỜ CHỐT]
-        {"trien_khai", 6, "giao_thiet_bi_cam", 60, O::DoneSameAppointmentDay, 3, 30, true},  // ca chèn (7.16.2) [CHỜ CHỐT]
+        {"trien_khai", 4, "trien_khai_box", 120, O::CheckinBeforeB, 3, 120},  // Workbook mới đổi tên box_cam_only.
+        {"trien_khai", 4, "box_cam_only", 120, O::CheckinBeforeB, 3, 120},   // Tên cũ, giữ để chạy fixture cũ. [CHỜ CHỐT bảng số]
+        {"trien_khai", 5, "swap", 60, O::CheckinBeforeB, 3, 60},             // Workbook mới coi là subtype của trien_khai_box. [CHỜ CHỐT]
+        {"trien_khai", 6, "giao_thiet_bi_cam", 60, O::DoneSameAppointmentDay, 3, 60, true},  // ca chèn (7.16.2) [CHỜ CHỐT]
         {"bao_tri", 1, "bao_tri_vat_ly", 60, O::CheckinBeforeB, 1, 60},
-        {"bao_tri", 2, "bao_tri_logic", 60, O::CheckinBeforeB, 2, 45},
-        {"thu_hoi", 1, "thu_hoi_thiet_bi", std::nullopt, O::DoneWithinMonth, 4, 20, true},
+        {"bao_tri", 2, "bao_tri_logic", 60, O::CheckinBeforeB, 2, 60},
+        {"thu_hoi", 1, "thu_hoi_thiet_bi", std::nullopt, O::DoneWithinMonth, 4, 15, true},
         {"hoa_don", 1, "hoa_don_tra_truoc", std::nullopt, O::DoneWithinMonth, 4, 15, true},
         {"hoa_don", 2, "hoa_don_tra_sau", std::nullopt, O::DoneWithinMonth, 4, 15, true},
-        {"onsite", 1, "phieu_onsite", 60, O::CheckinBeforeB, 2, 45},  // Workbook (4): "rule như bao_tri" (7.15; trước: trong tháng)
+        {"onsite", 1, "phieu_onsite", 60, O::CheckinBeforeB, 2, 60},  // Workbook (4): "rule như bao_tri" (7.15; trước: trong tháng)
         // Workbook API (4) tách nhóm 6 "cscd" (CSKH chủ động): hai loại dưới đây chuyển từ onsite sang (người dùng chốt 7.12).
         // OA còn gửi dưới onsite theo hợp đồng cũ → kind_in_any_group tra ra đây, kèm cảnh báo TASK_TYPE_OTHER_GROUP.
         {"cscd", 2, "ngung_ket_noi_4h", std::nullopt, O::DoneSameCreatedDay, 2, 30, true},

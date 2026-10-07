@@ -479,6 +479,19 @@ int main() {
     CHECK(ktv::parse_datetime("2028-02-29 08:00:00"));
     CHECK(ktv::format_datetime(*ktv::parse_datetime("1969-12-31 23:59:00")) == "1969-12-31 23:59:00");
 
+    {  // 7.25: định mức (input bỏ trống handle_minutes) = TGXL chuẩn catalogue ISC sheet 5.
+        const std::pair<const char*, const char*> kinds[] = {
+            {"trien_khai", "trien_khai_net"}, {"trien_khai", "trien_khai_box"}, {"trien_khai", "box_cam_only"},
+            {"trien_khai", "swap"}, {"trien_khai", "giao_thiet_bi_cam"}, {"bao_tri", "bao_tri_vat_ly"},
+            {"bao_tri", "bao_tri_logic"}, {"thu_hoi", "thu_hoi_thiet_bi"}, {"hoa_don", "hoa_don_tra_truoc"},
+            {"hoa_don", "hoa_don_tra_sau"}, {"onsite", "phieu_onsite"}};
+        const int isc[] = {120, 120, 120, 60, 60, 60, 60, 15, 15, 15, 60};
+        for (size_t i = 0; i < std::size(kinds); ++i) {
+            const ktv::TaskKind* kind = ktv::find_kind(kinds[i].first, kinds[i].second);
+            CHECK(kind && kind->handle_minutes == isc[i]);
+        }
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_api: OK\n";
     return failures != 0;
