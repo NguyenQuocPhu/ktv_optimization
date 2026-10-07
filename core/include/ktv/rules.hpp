@@ -62,7 +62,7 @@ struct Rules {
     // 7.16.3 — gộp điểm dừng cùng địa chỉ (catalogue mục C; workbook không có mã nhóm → AI tự gom theo địa chỉ).
     double stop_group_radius_m = 50;       // Bán kính coi là cùng địa chỉ (tham số cấu hình catalogue, sheet 1).
     int stop_group_max_wait_minutes = 30;  // Ca trong nhóm phải chờ quá ngần này thì tách nhóm. [GIẢ ĐỊNH của repo]
-    double current_task_minutes = 30;  // Việc đang làm còn bao lâu nữa xong. [GIẢ ĐỊNH]
+    double current_task_minutes = 30;  // Việc đang làm còn bao lâu nữa xong, khi không tra được định mức (7.22: còn ½ định mức). [GIẢ ĐỊNH]
     double average_speed_kmh = 30;     // Đổi km chim bay ra phút khi không dùng OSRM.
     double at_risk_minutes = 20;       // projected_sla = AT_RISK khi còn dư dưới ngần này phút...
     double at_risk_ratio = 0.2;        // ...hoặc dưới tỷ lệ này của thời gian xử lý.

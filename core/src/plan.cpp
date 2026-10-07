@@ -320,7 +320,17 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     const Minutes shift_start = day + staff.available.front().first;
     const Minutes shift_end = day + staff.available.back().second;  // Nhiều khung giờ: xử lý ở bước sau.
     Minutes start = std::max(now, shift_start);
-    if (worklist.current_task) start = std::max(start, now + static_cast<Minutes>(rules.current_task_minutes));
+    // 7.22: việc đang làm còn ½ định mức (không biết đã làm bao lâu → coi như giữa chừng) [GIẢ ĐỊNH]. Định mức =
+    // handle_minutes của row trong tasks, không có thì tra danh mục theo nhóm + loại; không tra được (current_task
+    // không có row → thiếu tên nhóm/loại, hoặc loại ngoài danh mục) → rules.current_task_minutes như cũ.
+    if (worklist.current_task) {
+        const Task& current = *worklist.current_task;
+        const TaskKind* kind = find_kind(current.task_group_name, current.task_type_name);
+        const double remaining = current.handle_minutes ? *current.handle_minutes / 2.0
+                                 : kind                 ? kind->handle_minutes / 2.0
+                                                        : rules.current_task_minutes;
+        start = std::max(start, now + static_cast<Minutes>(std::llround(remaining)));
+    }
 
     if (routed_stops.empty() || routed_stops.size() > 64) {
         result.response = error_response("422", routed_stops.empty() ? "Không có công việc để dựng tuyến" : "Quá 64 việc cho một KTV",

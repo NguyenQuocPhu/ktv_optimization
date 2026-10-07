@@ -110,7 +110,7 @@ int main() {
         CHECK(r && metrics["overload_minutes"].get<long long>() > 0);
         CHECK(r && metrics["finish_at"].get<std::string>() > metrics["shift_end_at"].get<std::string>());
     }
-    {  // Việc đang làm: cộng current_task_minutes vào giờ xuất phát, không thành stop.
+    {  // Việc đang làm không có row trong tasks (thiếu nhóm/loại): cộng current_task_minutes (30′), không thành stop.
         json current = {{"task_id", 99}, {"task_status_id", 10}, {"task_type_id", 1}};
         json m = message("2026-09-10 09:00:00", none,
                          json::array({task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, "")}),
@@ -121,6 +121,28 @@ int main() {
         for (const auto& cluster : r->response["data"]["clusters"])
             for (const auto& row : cluster["schedule"])
                 CHECK(row["entry_type"] != "TASK" || row["task_id"] != 99);
+    }
+    {  // 7.22: việc đang làm có row trong tasks → còn ½ định mức.
+        json current = {{"task_id", 99}, {"task_status_id", 10}, {"task_type_id", 1}};
+        const auto doing = [&](json handle) {  // row của việc đang làm: trùng current_task, status 10
+            json row = task(99, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, handle);
+            row["task_status_id"] = 10;
+            return row;
+        };
+        const auto start_with = [&](json row) {
+            json m = message("2026-09-10 09:00:00", none,
+                             json::array({task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, ""), row}),
+                             none, none, none, current);
+            auto r = run(m);
+            CHECK(r && r->response["data"]["metrics"]["tasks_total"] == 1);  // việc đang làm không thành stop
+            return r ? r->response["data"]["metrics"]["start_at"].get<std::string>() : std::string();
+        };
+        CHECK(start_with(doing(120)) ==
+              "2026-09-10 10:00:00");  // handle 120 → còn 60′
+        CHECK(start_with(doing(20)) ==
+              "2026-09-10 09:10:00");  // handle 20 → còn 10′
+        CHECK(start_with(doing(nullptr)) ==
+              "2026-09-10 09:30:00");  // không handle → định mức bao_tri_vat_ly 60′ → còn 30′
     }
     {  // create_date quyết định hạn "trong tháng": tháng 6 đã qua → trễ hoàn tất; thiếu create_date lấy planned_at.
        // (Chạy ngày 28/09 — 2 ngày làm việc tới hạn tháng ≤ K, nếu chạy 10/09 thì bị lọc K ở 7.16.1.)
