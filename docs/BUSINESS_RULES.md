@@ -97,7 +97,7 @@ Hợp đồng chi tiết ở `docs/CONTRACT.md`. Routing kiểm tra request trư
 
 **Không xếp tuyến hôm nay nhưng VẪN trả về trong OUT — dòng `DEFERRED`** (workbook API (5) sheet 03, Phase 7.20.2; bản (4) không có field nên 7.18 từng bỏ khỏi OUT):
 - Ca hẹn **ngày sau** ngày chạy → `insert_reason = NEXT_DAY` (catalogue ISC mục D, Phase 7.18). Ca hẹn ngày **đã qua** vẫn xếp (làm bù).
-- Ca "hoàn tất trong tháng" còn > K = 5 ngày làm việc và không cùng địa chỉ với ca khác → `BEYOND_K` (Phase 7.16.1; mã riêng của repo, danh sách workbook để mở).
+- Ca "hoàn tất trong tháng" còn > K = 5 ngày làm việc và không cùng địa chỉ với ca khác → `BEYOND_K` (Phase 7.16.1; mã riêng của repo, danh sách workbook để mở) — **trừ khi** KTV có khoảng trống thật: QHĐ chèn ca đó nếu không làm ca nào trễ thêm, chi phí đi thêm < `SKIP_OPTIONAL` (mặc định 2 km tương đương, [GIẢ ĐỊNH] ngưỡng BR-16) và xong trong ca → dòng TASK `insert_reason = SPARE_TIME` (Phase 7.24, catalogue điều kiện 3).
 - Dòng `DEFERRED`: `seq 0`, `at`/`start_at`/`end_at` `""`, `task_role inserted`, `projected_sla ""`, chặng 0; nằm cuối `schedule` của cụm có **tâm gần nhất** (sắp theo `task_id`); không đếm vào `task_count`, km, metrics. Chỉ còn ca `DEFERRED` → `200`, một cụm toàn `DEFERRED`, metrics 0. [GIẢ ĐỊNH] gán cụm theo địa lý (cụm của core là đoạn tuyến).
 - Vẫn **không trả**: ca thiếu toạ độ (không gán được cụm), ca đã xong/hủy theo trạng thái.
 

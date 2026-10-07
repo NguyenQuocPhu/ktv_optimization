@@ -674,6 +674,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.21 ✅ | KTV `staff.status = 3` (off) **vẫn xếp tuyến** như rảnh/bận (catalogue ISC E-01, sheet 2 bước 1); status lạ cũng xếp + cảnh báo — chi tiết bên dưới | KTV off có ca tồn → `200` có tuyến, không còn `422` "KTV đang off" |
 | 7.22 ✅ | Việc đang làm (`staff.current_task`) còn **½ định mức** thay vì hằng 30′ — chi tiết bên dưới | giờ xuất phát lùi theo loại việc đang làm (việc 120′ → +60′, việc 20′ → +10′) |
 | 7.23 ✅ | Hai chế độ sắp xếp qua `priority_type` ở gốc IN (0/1 SLA = bộ tầng hiện tại, 2 Tuyến = R2) + điểm `priority` 0–100 từng ca — chi tiết bên dưới | IN `priority_type: 2` → OUT `data.priority_type: 2`, KM lên tầng 2; mọi dòng TASK/DEFERRED có `priority` |
+| 7.24 ✅ | Điều kiện 3 catalogue (ca thu bill / thu hồi ngoài K vẫn chèn khi KTV có khoảng trống thật): QHĐ có **ca tuỳ chọn** + rule `SKIP_OPTIONAL` — chi tiết bên dưới | ca ngoài K gần tuyến lên tuyến `SPARE_TIME`, số ca trễ không tăng; không có ca ngoài K → như cũ |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1456,6 +1457,36 @@ VD: bảo trì P1 còn 30′ tới B → 76,3; thu bill P4 còn 2 ngày → 24,5
 **File:** `rules.hpp/.cpp` (`Tiers`, `route_tiers` + mặc định R2, đọc/in JSON), `api.hpp/.cpp` (`Message.priority_type`, parse), `plan.cpp` (chọn bộ tầng theo mode, `priority_score`, echo `priority_type`).
 **Test:** `test_plan` (không gửi → 0; 1 → cùng tuyến với 0; 2 → `KM` ở tầng 2 trong `--explain`; `"route"` → 0 + `PRIORITY_TYPE`; strict 7 → lỗi; `route_tiers` đọc/in JSON; `priority` 25 / 24,5 / 76,3); `test_pipeline` thứ tự field có `priority`; `test_invariants` `priority` ∈ [0, 100]. `ctest` 18/18.
 **Hỏi OA:** OA gửi mode ở field nào (`priority_type` gốc IN?); mặc định (0) có cần khác SLA (1) không (mix 70/30).
+
+##### 7.24 — Ca tuỳ chọn trong QHĐ: chèn ca ngoài K vào khoảng trống thật (người dùng duyệt 2026-10-07)
+
+**Bối cảnh.** Catalogue ISC (bản mới người dùng dán, chưa có trong file repo) — thang điều kiện chèn ca thu bill / thu hồi: (1) cùng địa chỉ → gom (7.16.3 ✅); (2) trùng ngày thanh toán tháng trước → đến hạn hôm nay (7.17b ✅, thu hồi bỏ bước này); **(3) KTV có khoảng trống thừa thật (hết ca có hẹn, còn giờ trực, chèn không ảnh hưởng ca nào) → chèn theo BR-13, không xét K; thỏa ngưỡng thuận tuyến BR-16 từ điểm dừng cuối, xong trước giờ hết ca** (❌ trước 7.24: ca ngoài K luôn `DEFERRED BEYOND_K`); (4) còn lại → hạn cuối tháng, tranh chỗ khi ≤ K (7.16.1 ✅). Mục F (không kịp thì không bỏ, mai tính lại) ✅. Ngưỡng BR-16 **không có số** trong tài liệu.
+**Vấn đề gốc:** QHĐ bắt buộc xếp HẾT ca nhận vào (bước chọn kết quả chỉ nhận "đủ mọi ca"; tham lam chỉ đảo thứ tự) — không có cơ chế tự loại. Mọi việc loại ca (trạng thái, ngày sau, K) đều trước QHĐ theo luật cứng, không biết tuyến có chỗ trống hay không.
+
+**Thiết kế — ca TUỲ CHỌN trong QHĐ** (sửa `dp.cpp`, áp cả 2 mode):
+- `Problem.optional[i]`: ca ngoài K là tuỳ chọn; ca khác bắt buộc. Tìm tập con S ⊆ tuỳ chọn + thứ tự của bắt buộc ∪ S có khóa nhỏ nhất, khóa = chi phí tuyến + `SKIP_OPTIONAL` × số ca tuỳ chọn KHÔNG làm.
+- Rule mới **`SKIP_OPTIONAL`** đặt **cùng tầng với KM** (SLA: tầng 3; Tuyến: tầng 2), trọng số = "đáng đi thêm bao nhiêu km tương đương" = **ngưỡng BR-16** (mặc định **2**, `[GIẢ ĐỊNH]`, chỉnh trong `rules.json`; 0 = tắt điều kiện 3). So theo tầng nên tự có: thêm ca làm tăng `LATE_CHECKIN` (tầng 1) → thua ngay = "không làm ca nào trễ thêm"; chỉ chèn khi chi phí tầng KM tăng < trọng số = "thuận tuyến".
+- Ca tuỳ chọn: **xong ≤ giờ hết ca là ràng buộc cứng** (`allowed()`; ở mode Tuyến `AFTER_SHIFT` nằm dưới KM nên phạt mềm không chặn được); **không tính `PRIORITY_DELAY` / `DEADLINE_URGENCY` của chính nó** (không thì ca P4 chèn lúc 16:00 tự mang phạt ~4 km tương đương → chỉ chèn được buổi sáng; ca khác bị đẩy muộn vẫn tính như thường).
+- `exact()`: bước chọn kết quả duyệt **mọi tập có đủ ca bắt buộc** (bảng QHĐ vốn đã tính mọi tập con → không tốn thêm). `evaluate()`: thiếu ca tuỳ chọn hợp lệ (cộng phạt), thiếu ca bắt buộc không hợp lệ. Tham lam: chỉ xếp ca bắt buộc; `improve()` thêm nước **chèn rẻ nhất** (mọi vị trí; tuyến cần nghỉ mà chưa nghỉ thì thử cả cặp nghỉ + ca) và **gỡ**. API mới `solve_from(p, rules, start)`: cải thiện từ tuyến có sẵn, không bao giờ tệ hơn.
+- **Chọn tập con mà không đưa hết vào QHĐ** (`plan.cpp`): (1) giải ca **bắt buộc** như trước; (2) **lọc** ca tuỳ chọn theo tuyến đó: cận dưới km đi thêm (chèn giữa 2 điểm liền nhau `d(a,o)+d(o,b)−d(a,b)` hoặc gắn cuối `d(cuối,o)`) ≥ trọng số SKIP → gạt (chi phí tầng KM tăng ít nhất bằng km đi thêm); (3) bắt buộc ≤ `max_exact_tasks` → giải lại QHĐ **chính xác** với bắt buộc + ca tuỳ chọn tốt nhất (mục B: ít ngày còn lại → ưu tiên cao → cận dưới km nhỏ) tới đủ 12; (4) phần thừa / bắt buộc > 12 → `solve_from` chèn / gỡ cục bộ từ tuyến hiện có. **Không giới hạn số ca tuỳ chọn**; không bước nào làm tuyến ca bắt buộc tệ đi (khóa chỉ giảm). Bảng khoảng cách dựng một lần cho mọi điểm dừng (bắt buộc + tuỳ chọn; trần 63 điểm, phần thừa → DEFERRED).
+- OUT: ca tuỳ chọn được làm → dòng TASK `task_role inserted`, **`insert_reason = "SPARE_TIME"`** (mã riêng repo); bị bỏ → `DEFERRED BEYOND_K` như trước. `tasks_total` chỉ đếm ca được làm.
+- Dùng lại sau cho 7.20.4 bước 2 (giờ ca cứng: mọi ca "có thể bỏ", phạt bỏ theo ưu tiên ở tầng cao).
+
+**Quét trọng số SKIP** (400 message dựng từ `sample_in.json` giữa tháng 6, mỗi message thêm 0–4 ca thu hồi ngoài K rải 0,5–8 km quanh KTV; OSRM tự host; 1.574 lượt ca ngoài K):
+
+| SKIP (km) | % ca ngoài K được chèn | km thêm TB / ca chèn | ca dự báo trễ | giờ xong lùi TB |
+|---|---|---|---|---|
+| 0 (tắt) | 0% | — | 97 | 0′ |
+| 0,5 | 2,0% | −0,07 | 97 | 0,1′ |
+| 1 | 5,8% | 0,29 | 97 | 0,5′ |
+| **2 (mặc định)** | **10,4%** | **0,57** | **97** | **2,1′** |
+| 3 | 20,6% | 1,17 | 97 | 6,5′ |
+| 5 | 39,4% | 2,00 | 97 | 17,2′ |
+
+Số ca dự báo trễ **không đổi ở mọi mức** (đúng thiết kế); thời gian tính không đổi (p50 6 ms, max ≤ 20 ms). Chọn tạm 2: mỗi ca chèn tốn trung bình ~0,6 km, ngày dài thêm ~2′; từ 3 trở lên km thêm / ca và giờ xong tăng nhanh. Dữ liệu tổng hợp — **chạy lại bảng này khi có dữ liệu thật** để chọn lại.
+
+**Test:** `test_dp` — 300 bài có ca tuỳ chọn khớp vét cạn mọi tập con ⊇ bắt buộc × mọi hoán vị × chỗ nghỉ; ca tuỳ chọn luôn xong trong ca; tham lam + chèn/gỡ vs tối ưu (40 bài 8–12 việc, ~35% tuỳ chọn): lệch tầng 1 TB 0,175, trùng tầng 1+2 33/40; `solve_from` không tệ hơn tuyến xuất phát. `test_plan` — hóa đơn ngoài K gần tuyến, sáng trống → TASK `SPARE_TIME`, số ca trễ như khi không chèn; xa ~12 km → `DEFERRED BEYOND_K`; SKIP = 0 → như trước 7.24; ca hết 09:35 → không chèn (cả mode Tuyến). `test_invariants` — 1.000 message: tầng 1 (và tầng 2 khi tầng 1 bằng) với SKIP mặc định ≤ khi tắt; dòng `SPARE_TIME` luôn là ca ngoài K, xong trong ca (55 dòng gặp). `ctest` 18/18.
+**Hỏi:** ngưỡng BR-16 thật (km / phút đi thêm?); mã `insert_reason` cho ca chèn vào khoảng trống (repo dùng `SPARE_TIME`).
 
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
