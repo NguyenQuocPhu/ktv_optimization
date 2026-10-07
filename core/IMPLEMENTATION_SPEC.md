@@ -673,6 +673,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.20 | Theo `API-Goi-y-cong-viec (5).xlsx`: 7.20.1a `data` array + `change_id`/`trace_id`, 7.20.1b worker trả cache khi IN không đổi (dấu vân tay nội dung + hạn 3 vế); 7.20.2 dòng `DEFERRED` (`NEXT_DAY`, `BEYOND_K`); 7.20.3 `SAME_ADDRESS` chữ hoa; 7.20.4 giờ ca cứng (`OUT_OF_HOURS`/`NO_CAPACITY`, **đổi thuật toán — trình bày trước**); 7.20.5 log `unplaced` + invariants phủ 7.18 — chi tiết bên dưới | OUT khớp sheet 03 bản (5); ca tồn không xếp vẫn hiện trên FE |
 | 7.21 ✅ | KTV `staff.status = 3` (off) **vẫn xếp tuyến** như rảnh/bận (catalogue ISC E-01, sheet 2 bước 1); status lạ cũng xếp + cảnh báo — chi tiết bên dưới | KTV off có ca tồn → `200` có tuyến, không còn `422` "KTV đang off" |
 | 7.22 ✅ | Việc đang làm (`staff.current_task`) còn **½ định mức** thay vì hằng 30′ — chi tiết bên dưới | giờ xuất phát lùi theo loại việc đang làm (việc 120′ → +60′, việc 20′ → +10′) |
+| 7.23 ✅ | Hai chế độ sắp xếp qua `priority_type` ở gốc IN (0/1 SLA = bộ tầng hiện tại, 2 Tuyến = R2) + điểm `priority` 0–100 từng ca — chi tiết bên dưới | IN `priority_type: 2` → OUT `data.priority_type: 2`, KM lên tầng 2; mọi dòng TASK/DEFERRED có `priority` |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1424,6 +1425,37 @@ Nghiệp vụ thực tế (người dùng): KTV off **vẫn có thể có việc
 **Hiện thực** (`plan.cpp`): còn lại = `handle_minutes` của row việc đang làm trong `tasks` / 2; không có `handle_minutes` → định mức danh mục (`find_kind` theo nhóm + loại) / 2; không tra được (current_task không có row trong `tasks` → thiếu tên nhóm/loại; hoặc loại ngoài danh mục) → `rules.current_task_minutes` (30′) như cũ. Làm tròn phút. "½" = không biết đã làm bao lâu → coi như đang giữa chừng [GIẢ ĐỊNH]. Không đổi `dp.cpp`, hợp đồng IN/OUT.
 **Test** (`test_pipeline`): current_task không có row → +30′ (giữ); row `handle_minutes` 120 → +60′; 20 → +10′; không `handle_minutes` → định mức `bao_tri_vat_ly` 60′ → +30′. Hai kiểm đầu fail trên code cũ. `ctest` 18/18.
 **Docs:** `core/README.md` (giả định đang dùng), `DATA_QUESTIONS.md` (`CURRENT_TASK`, câu giờ check-in), comment `rules.hpp`.
+
+##### 7.23 — Chế độ sắp xếp SLA / Tuyến + điểm `priority` (người dùng chốt 2026-10-07)
+
+**Bối cảnh.** Workbook (5) sheet 03 OUT có `data.priority_type` (0 default · 1 SLA · 2 Tuyến) nhưng IN **không có field mode**; code luôn trả 0 (7.13). Catalogue ISC: `optMode` mix (mặc định, 70% SLA + 30% quãng đường) · sla · route; trigger **E-10 "KTV đổi chế độ tối ưu"** (đồng bộ FE → BE → OA → AI), E-01 đầu ngày luôn mặc định. Sheet 03 `priority` (float) "từ rule tính ra điểm ưu tiên cho task" — chưa phát.
+**Người dùng chốt:** làm sẵn 2 mode (khi nào OA bật chưa rõ); mode Tuyến dùng **R2**; **không làm mix**; công thức `priority` như đề xuất.
+
+**Thiết kế — mode = bộ tầng rule, không sửa `dp.cpp`:** QHĐ so tuyến theo từng tầng (tầng trên thắng thì dừng); mỗi mode chỉ là một bộ tầng.
+
+| Tầng | SLA (0 mặc định / 1) | Tuyến R2 (2) |
+|---|---|---|
+| 1 | `LATE_CHECKIN` | `LATE_CHECKIN` |
+| 2 | `LATE_COMPLETION`, `AFTER_SHIFT` | `KM` 1 + `TRAVEL_MINUTES` 0,05 + `AREA_REENTRY` 2 |
+| 3 | `KM` + phút trễ + ưu tiên + độ gấp + giờ xong | `LATE_COMPLETION`, `AFTER_SHIFT`, phút trễ 0,1, `PRIORITY_DELAY` 0,5, `DEADLINE_URGENCY` 0,5, `FINISH` 0,01 |
+
+R2 = không bao giờ làm **thêm** ca trễ hẹn B để đổi lấy km; trong phạm vi đó đi đường ngắn nhất (kể cả để ca ưu tiên cao làm muộn hơn). Đo 400 biến thể `sample_in.json` (chim bay, tải nặng): SLA 8.259 km / 485 ca dự báo trễ; **R2 7.139 km (−14%) / 485 (không tăng)**, thứ tự khác SLA ở 332/400; R1 (KM tầng 1, đúng nghĩa đen "100% quãng đường") 5.873 km (−29%) nhưng 905 ca trễ (+87%) → không chọn.
+- IN: `priority_type` ở **gốc message** (cùng tên OUT) [GIẢ ĐỊNH, chờ OA]; 0/1/2; không gửi → 0; sai → 0 + cảnh báo `PRIORITY_TYPE` (strict: lỗi). OUT `data.priority_type` = mode đã dùng.
+- `rules.json`: `route_tiers` (cùng dạng `tiers`); `print-rules` in ra. 0 và 1 dùng chung `tiers` (chưa có định nghĩa riêng; mix 70/30 không làm).
+- Cache 7.20.1b: dấu vân tay băm cả IN → đổi `priority_type` (E-10) tự tính lại, không cần sửa.
+
+**`priority` (float 0–100, từng dòng TASK và DEFERRED, sau `task_role` theo sheet 03):**
+```text
+priority = 100 × (0,5·P + 0,3·S + 0,2·U)
+  P = (5 − priority_in_day) / 4             P1 = 1 · P2 = 0,75 · P3 = 0,5 · P4 = 0,25 · không có = 0
+  S = 1 − min(1, phút còn tới hạn B / 240)   B đã qua = 1; không có B = 0 (tính từ giờ chạy, không theo tuyến)
+  U = max(0, K − ngày làm việc còn lại) / K  chỉ ca chèn có hạn (7.16.2); ca chính = 0
+```
+VD: bảo trì P1 còn 30′ tới B → 76,3; thu bill P4 còn 2 ngày → 24,5; triển khai P3 B còn > 4 giờ → 25. Điểm nói ca quan trọng / gấp tới đâu, **không phụ thuộc mode hay thứ tự** (thứ tự vẫn do QHĐ). Làm tròn 1 chữ số.
+
+**File:** `rules.hpp/.cpp` (`Tiers`, `route_tiers` + mặc định R2, đọc/in JSON), `api.hpp/.cpp` (`Message.priority_type`, parse), `plan.cpp` (chọn bộ tầng theo mode, `priority_score`, echo `priority_type`).
+**Test:** `test_plan` (không gửi → 0; 1 → cùng tuyến với 0; 2 → `KM` ở tầng 2 trong `--explain`; `"route"` → 0 + `PRIORITY_TYPE`; strict 7 → lỗi; `route_tiers` đọc/in JSON; `priority` 25 / 24,5 / 76,3); `test_pipeline` thứ tự field có `priority`; `test_invariants` `priority` ∈ [0, 100]. `ctest` 18/18.
+**Hỏi OA:** OA gửi mode ở field nào (`priority_type` gốc IN?); mặc định (0) có cần khác SLA (1) không (mix 70/30).
 
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
