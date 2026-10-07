@@ -671,7 +671,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.18 ✅ | Ca hẹn ngày SAU ngày chạy không xếp tuyến hôm nay (catalogue mục D); hẹn ngày đã qua vẫn xếp; ca không xếp **không vào OUT** — chi tiết bên dưới | không còn `IDLE` qua đêm, `finish_at`/km/`overload_minutes` chỉ tính hôm nay |
 | 7.19 | Soát OUTPUT so với workbook API (4): **7.19.1 ✅** `contract_id`/`contract_no` là string, `""` khi không có; **7.19.2 ✅** IDLE đúng cụm; **7.19.3 ✅** tổng = tổng dòng; 7.19.4–7.19.5 để sau — chi tiết bên dưới | OUT không còn `null` ngoài `data` khi lỗi (sheet 00/07) |
 | 7.20 | Theo `API-Goi-y-cong-viec (5).xlsx`: 7.20.1a `data` array + `change_id`/`trace_id`, 7.20.1b worker trả cache khi IN không đổi (dấu vân tay nội dung + hạn 3 vế); 7.20.2 dòng `DEFERRED` (`NEXT_DAY`, `BEYOND_K`); 7.20.3 `SAME_ADDRESS` chữ hoa; 7.20.4 giờ ca cứng (`OUT_OF_HOURS`/`NO_CAPACITY`, **đổi thuật toán — trình bày trước**); 7.20.5 log `unplaced` + invariants phủ 7.18 — chi tiết bên dưới | OUT khớp sheet 03 bản (5); ca tồn không xếp vẫn hiện trên FE |
-| 7.21 | KTV `staff.status = 3` (off) **vẫn xếp tuyến** như rảnh/bận (catalogue ISC E-01, sheet 2 bước 1); status lạ cũng xếp + cảnh báo — chi tiết bên dưới | KTV off có ca tồn → `200` có tuyến, không còn `422` "KTV đang off" |
+| 7.21 ✅ | KTV `staff.status = 3` (off) **vẫn xếp tuyến** như rảnh/bận (catalogue ISC E-01, sheet 2 bước 1); status lạ cũng xếp + cảnh báo — chi tiết bên dưới | KTV off có ca tồn → `200` có tuyến, không còn `422` "KTV đang off" |
 | 7.22 ✅ | Việc đang làm (`staff.current_task`) còn **½ định mức** thay vì hằng 30′ — chi tiết bên dưới | giờ xuất phát lùi theo loại việc đang làm (việc 120′ → +60′, việc 20′ → +10′) |
 | sau | JWT thay token tĩnh, rate limit | |
 
@@ -1406,6 +1406,15 @@ Nghiệp vụ thực tế (người dùng): KTV off **vẫn có thể có việc
 **File chạm:** `normalization.cpp/.hpp` (bỏ `staff_off` chặn candidates; giữ cờ cho log hoặc bỏ hẳn), `plan.cpp` (bỏ nhánh `422` off/không rõ), `api.cpp` (thông điệp `STAFF_STATUS` "không xếp tuyến" → "vẫn xếp"), comment `api.hpp` (`kStaffStatusUnknown`), `kafka/main.cpp` (log `staff_status`/cờ off nếu cần). Docs: `README.md` (bảng mã `422`, mục chọn task), `docs/DATA_QUESTIONS.md` (dòng `STAFF_STATUS`, thêm `STAFF_OFF`), `docs/BUSINESS_RULES.md`.
 **Test:** `test_normalization` (status 3 → có candidates, không `staff_off` chặn; status lạ → có candidates + cảnh báo), `test_pipeline:165` (off → `200` có tuyến thay `422`), `test_plan` (off + status 1 cùng input → cùng tuyến).
 **Thứ tự:** độc lập với 7.20 — làm được trước 7.20.1 (nhỏ, không đổi hợp đồng OUT). Chờ người dùng duyệt 5 điểm trên.
+
+**Người dùng chốt 2026-10-07:** làm theo đề xuất (off → `200`, không dùng `422`); điểm 4 đổi: **KTV off mà thiếu `available` → điền khung mặc định**, chỉ trường hợp đó. Hai điểm ghi sổ hỏi OA sau (`DATA_QUESTIONS` `STAFF_OFF`, `AVAILABLE_DEFAULT`).
+
+**Kết quả 7.21 (2026-10-07):**
+- `normalization.cpp`: bỏ `staff_off` (không còn chặn candidates); `status = 3` → cảnh báo log `STAFF_OFF`. `kStaffOff` chuyển thành `kStaffStatusOff` trong `api.hpp`.
+- `plan.cpp`: bỏ nhánh `422` "KTV đang off" / "Trạng thái KTV không rõ". `422` chỉ còn: không có ca nào trả được, quá 64 việc.
+- `api.cpp`: status lạ → `STAFF_STATUS` "vẫn xếp tuyến như rảnh/bận"; **KTV off + `available` thiếu (không gửi / `null` / `""`)** → khung `kOffDefaultAvailable = "08:00-17:30"` [GIẢ ĐỊNH] + cảnh báo `AVAILABLE_DEFAULT` (strict vẫn lỗi). KTV không off thiếu `available`, hoặc `available` sai dạng → lỗi như cũ.
+- Test: `test_normalization` (off → có candidates + `STAFF_OFF`, off và rảnh cùng input → cùng `data`); `test_api` (`"3"`/`3.0` → `200`; status lạ → `200`; off thiếu `available` 3 kiểu → `08:00-17:30`, `shift_end_at` 17:30, strict lỗi; không off thiếu `available` → lỗi; off `available` sai dạng → lỗi); `test_pipeline` (off → `200`); `test_publish` (khối "422 vẫn ghi route" đổi sang ca thiếu toạ độ). Test mới fail trên code cũ (api 15, normalization 3, pipeline 1). `ctest` 18/18.
+- Docs: `README.md` (bảng mã, mục chọn task), `DATA_QUESTIONS.md` (`STAFF_STATUS`, thêm `STAFF_OFF`, `AVAILABLE_DEFAULT` — cả hai **[HỎI SAU]**).
 
 ##### 7.22 — Thời gian còn lại của việc đang làm = ½ định mức (người dùng duyệt 2026-10-07)
 

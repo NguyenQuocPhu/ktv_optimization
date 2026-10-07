@@ -42,7 +42,7 @@ Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ ga
 | `200` | Có tuyến | true |
 | `424` | Có tuyến nhưng OSRM lỗi, khoảng cách là chim bay × 1,3 | true |
 | `400` | JSON hỏng / không xếp được tuyến (nới lỏng) hoặc sai contract (strict); message nêu tối đa 3 lỗi đầu, kèm đường dẫn field | false |
-| `422` | Không còn task nào trả được (rỗng / toàn thiếu toạ độ / đã xong), KTV off (`staff.status = 3`), hoặc quá 64 task. Chỉ còn ca hẹn ngày sau / ca lọc K → `200` với dòng `DEFERRED` (7.20.2) | false |
+| `422` | Không còn task nào trả được (rỗng / toàn thiếu toạ độ / đã xong), hoặc quá 64 task. KTV off (`staff.status = 3`) **vẫn có tuyến** (7.21). Chỉ còn ca hẹn ngày sau / ca lọc K → `200` với dòng `DEFERRED` (7.20.2) | false |
 | `500` | Lỗi xử lý bất ngờ trong worker (message vẫn được commit, worker chạy tiếp) | false |
 
 Task bị loại trước khi xếp (status khác 6, đã hoàn tất, thiếu tọa độ, dòng trùng việc đang làm, task hỏng ở chế độ nới lỏng) **không** được ghi trong response.
@@ -269,7 +269,7 @@ Chỉ khi phải kết nối cluster **chỉ-SCRAM** (không phải cluster dev 
 
 Toàn bộ nghiệp vụ (loại tác vụ, hạn, ưu tiên, cách tính thời gian và quãng đường, rule và trọng số) cùng các câu hỏi chờ xác nhận nằm ở [docs/BUSINESS_RULES.md](docs/BUSINESS_RULES.md). Rule cụ thể trong code: `core/src/rules.cpp`.
 
-- Chọn task để xếp (`core/src/normalization.cpp`): `task_id` trùng `staff.current_task` là việc đang làm (khóa đầu tuyến, không thành điểm dừng); `task_status_id` tra theo **từng nhóm** (bảng sheet 05 workbook API (3), `task_statuses()` trong `api.cpp`) → xếp / không xếp; mã không có trong bảng (`hoa_don`, `onsite`, mã lạ) thì đọc `task_status_name`: tên mang nghĩa đã xong/hủy → bỏ, còn lại → xếp, đều có cảnh báo; bỏ task thiếu tọa độ (`complete_date` **không** loại task: workbook (3) đổi nghĩa thành ngày hoàn tất kỳ trước); KTV `status = 3` (off) không có tuyến.
+- Chọn task để xếp (`core/src/normalization.cpp`): `task_id` trùng `staff.current_task` là việc đang làm (khóa đầu tuyến, không thành điểm dừng); `task_status_id` tra theo **từng nhóm** (bảng sheet 05 workbook API (3), `task_statuses()` trong `api.cpp`) → xếp / không xếp; mã không có trong bảng (`hoa_don`, `onsite`, mã lạ) thì đọc `task_status_name`: tên mang nghĩa đã xong/hủy → bỏ, còn lại → xếp, đều có cảnh báo; bỏ task thiếu tọa độ (`complete_date` **không** loại task: workbook (3) đổi nghĩa thành ngày hoàn tất kỳ trước); KTV `status = 3` (off) **vẫn xếp tuyến** như rảnh/bận + cảnh báo `STAFF_OFF`; KTV off thiếu `available` → khung mặc định `08:00-17:30` (7.21, [GIẢ ĐỊNH]).
 - Nguồn km/phút: **OSRM đường bộ** khi truyền `--osrm` (một lần gọi `/table` mỗi KTV), lỗi hoặc trả ma trận méo thì lùi về chim bay × 1,3 và trả mã 424; mặc định trong code là chim bay 30 km/h.
 - Hạn check-in/hoàn tất tính theo loại việc, mốc hẹn và `create_date` (`core/src/sla.cpp`). Trễ hẹn tính theo **giờ check-in**; trễ hoàn tất so với giờ xong.
 - Thứ tự tối ưu bằng **QHĐ theo tầng rule** (`core/src/dp.cpp`): ≤ 12 việc giải chính xác; 13–64 việc dùng tham lam + cải thiện cục bộ (or-opt dời đoạn 1–3 việc + 2-opt, 4 điểm xuất phát, lấy tốt nhất; 64 việc chậm nhất ~0,5 s). Nghỉ trưa bắt buộc 45 phút, bắt đầu trong 11:30–12:45 [giả định].
