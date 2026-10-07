@@ -56,14 +56,15 @@ bool status_name_closed(const std::string& name) {
 
 NormalizedWorklist normalize_worklist(const Message& message) {
     NormalizedWorklist result;
-    result.staff_off = message.staff.status == kStaffOff || message.staff.status == kStaffStatusUnknown;
+    // 7.21: KTV off vẫn có ca tồn → vẫn tính tuyến (catalogue ISC E-01, sheet 2 bước 1). Chỉ ghi log để đếm.
+    if (message.staff.status == kStaffStatusOff)
+        result.warnings.push_back({"staff.status", "KTV off (status 3), vẫn xếp tuyến", "STAFF_OFF"});
 
     const std::optional<long long> current_id =
         message.staff.current_task ? std::optional<long long>(message.staff.current_task->task_id) : std::nullopt;
 
     for (const Task& task : message.tasks) {
         ++result.stats.tasks;
-        if (result.staff_off) continue;  // KTV off: không xếp bất kỳ việc nào.
 
         if (current_id && task.task_id == *current_id) {  // Row của việc đang làm: dùng làm current, không thành stop.
             result.current_task = task;

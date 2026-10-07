@@ -304,9 +304,9 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                 s.status = *number;
                 r.tolerate("STAFF_STATUS", p + ".status", "cần số nguyên 1, 2 hoặc 3 " + shown + ", đã hiểu là " + std::to_string(*number));
             } else {
-                // Không rõ KTV có đang làm không: xếp nhầm cho người đang nghỉ tệ hơn bỏ sót một lần → không xếp (422).
+                // 7.21: status không còn chặn tuyến (KTV off cũng xếp) → giá trị lạ vẫn xếp, chỉ ghi sổ.
                 s.status = kStaffStatusUnknown;
-                r.tolerate("STAFF_STATUS", p + ".status", "cần 1, 2 hoặc 3 " + shown + ", không xếp tuyến");
+                r.tolerate("STAFF_STATUS", p + ".status", "cần 1, 2 hoặc 3 " + shown + ", vẫn xếp tuyến như rảnh/bận");
             }
         }
         if (staff->contains("latlng")) {
@@ -316,7 +316,15 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
         } else {
             r.fail(p + ".latlng", "thiếu field bắt buộc");
         }
-        if (staff->contains("available")) {
+        const json* available = staff->contains("available") ? &(*staff)["available"] : nullptr;
+        const bool no_available = !available || available->is_null() ||
+                                  (available->is_string() && available->get<std::string>().empty());
+        if (no_available && s.status == kStaffStatusOff) {
+            // 7.21 [GIẢ ĐỊNH]: KTV off vẫn xếp tuyến nhưng có thể không có lịch trực → khung mặc định. Chỉ cho KTV off.
+            s.available = *parse_available(kOffDefaultAvailable);
+            r.tolerate("AVAILABLE_DEFAULT", p + ".available",
+                       std::string("KTV off thiếu available, dùng mặc định ") + kOffDefaultAvailable);
+        } else if (available) {
             auto windows = (*staff)["available"].is_string() ? parse_available((*staff)["available"].get<std::string>()) : std::nullopt;
             if (windows) s.available = *windows;
             else r.fail(p + ".available", "cần \"HH:mm-HH:mm,...\" với giờ đầu < giờ cuối");

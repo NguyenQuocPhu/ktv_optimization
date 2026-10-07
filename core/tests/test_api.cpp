@@ -383,14 +383,14 @@ int main() {
         CHECK(warned("STAFF_PLOTS", "staff.plots[0]") && warned("STAFF_PLOTS", "staff.plots") && warned("CURRENT_TASK", "staff.current_task"));
         CHECK(strict_fails(data));
     }
-    {  // staff.status: "3"/3.0 hiểu là số (vẫn ghi sổ); giá trị lạ = không rõ → không xếp (422), không coi như đang làm.
+    {  // staff.status: "3"/3.0 hiểu là số (vẫn ghi sổ); 7.21: off và giá trị lạ đều VẪN xếp tuyến (200) + cảnh báo.
         const ktv::Minutes at = *ktv::parse_datetime("2026-09-10 09:00:00");
         for (const json& off : {json("3"), json(3.0)}) {
             json data = sample();
             data["staff"]["status"] = off;
             auto m = lenient(data);
             CHECK(errors.empty() && m.staff.status == 3 && warned("STAFF_STATUS", "staff.status"));
-            CHECK(ktv::plan(m, ktv::default_rules(), at).response["message"] == "KTV đang off, không sinh tuyến");
+            CHECK(ktv::plan(m, ktv::default_rules(), at).response["statuscode"] == "200");
             CHECK(strict_fails(data));
         }
         for (const json& odd : {json(9), json("off"), json(2.5), json(nullptr)}) {
@@ -399,7 +399,30 @@ int main() {
             auto m = lenient(data);
             CHECK(errors.empty() && m.staff.status == kUnknownStatus && warned("STAFF_STATUS", "staff.status"));
             ktv::PlanResult r = ktv::plan(m, ktv::default_rules(), at);
-            CHECK(r.response["statuscode"] == "422" && r.response["message"] == "Trạng thái KTV không rõ, không sinh tuyến");
+            CHECK(r.response["statuscode"] == "200");
+        }
+        {  // 7.21: KTV off thiếu available (không gửi / null / "") → khung mặc định 08:00-17:30 + AVAILABLE_DEFAULT.
+            for (const json& missing : {json(nullptr), json(""), json("__erase__")}) {
+                json data = sample();
+                data["staff"]["status"] = 3;
+                if (missing == "__erase__") data["staff"].erase("available");
+                else data["staff"]["available"] = missing;
+                auto m = lenient(data);
+                CHECK(errors.empty() && warned("AVAILABLE_DEFAULT", "staff.available"));
+                CHECK(m.staff.available.size() == 1 && m.staff.available[0] == std::make_pair(8 * 60, 17 * 60 + 30));
+                CHECK(ktv::plan(m, ktv::default_rules(), at).response["data"]["metrics"]["shift_end_at"] == "2026-09-10 17:30:00");
+                CHECK(strict_fails(data));  // strict (validate) vẫn báo thiếu
+            }
+            json not_off = sample();  // KTV không off mà thiếu available → vẫn là lỗi như cũ
+            not_off["staff"]["status"] = 1;
+            not_off["staff"]["available"] = "";
+            lenient(not_off);
+            CHECK(!errors.empty());
+            json bad = sample();  // off nhưng available SAI dạng (không phải thiếu) → vẫn lỗi
+            bad["staff"]["status"] = 3;
+            bad["staff"]["available"] = "abc";
+            lenient(bad);
+            CHECK(!errors.empty());
         }
         json data = sample();
         data["staff"]["status"] = "1";

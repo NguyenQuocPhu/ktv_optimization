@@ -1,6 +1,7 @@
 // Normalization: lọc task theo trạng thái (theo nhóm, sheet 05) / complete / location, tách current_task khỏi ứng viên.
 #include <cstdlib>
 #include <fstream>
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 
@@ -157,7 +158,6 @@ int main() {
         CHECK(errors.empty());
 
         ktv::NormalizedWorklist w = ktv::normalize_worklist(message);
-        CHECK(!w.staff_off);
         CHECK(w.stats.tasks == 7);
         CHECK(w.candidates.size() == 3 && w.candidates[0]->task_id == 101 && w.candidates[1]->task_id == 102 &&
               w.candidates[2]->task_id == 105);
@@ -191,18 +191,26 @@ int main() {
         CHECK(w.candidates.size() == 1 && w.candidates[0]->task_id == 101);
     }
 
-    {  // staff.status = 3 (off): không sinh tuyến; status 1/2 tiếp tục bình thường.
+    {  // 7.21: staff.status = 3 (off) VẪN xếp tuyến như status 1 (catalogue ISC E-01) + cảnh báo log STAFF_OFF.
         const json trien = json::array({make_task(101, "trien_khai", 1, "trien_khai_net", 3, 120, 3, 97, "21.03,105.81", "")});
         std::vector<ktv::Error> errors;
         ktv::Message off = ktv::parse_message(make_message("3", json(nullptr), trien, empty, empty, empty, empty), errors);
         CHECK(errors.empty());
         ktv::NormalizedWorklist w = ktv::normalize_worklist(off);
-        CHECK(w.staff_off && w.candidates.empty());
-        ktv::PlanResult r = ktv::plan(off, ktv::default_rules(), *ktv::parse_datetime("2026-09-10 09:00:05"));
-        CHECK(r.response["statuscode"] == "422" && r.response["data"].is_null());
+        CHECK(w.candidates.size() == 1);
+        CHECK(std::any_of(w.warnings.begin(), w.warnings.end(), [](const ktv::Error& e) { return e.code == "STAFF_OFF"; }));
+        const ktv::Minutes at = *ktv::parse_datetime("2026-09-10 09:00:05");
+        ktv::PlanResult r = ktv::plan(off, ktv::default_rules(), at);
+        CHECK(r.response["statuscode"] == "200" && r.response["data"]["metrics"]["tasks_total"] == 1);
 
         ktv::Message on = ktv::parse_message(make_message("1", json(nullptr), trien, empty, empty, empty, empty), errors);
-        CHECK(errors.empty() && !ktv::normalize_worklist(on).staff_off && ktv::normalize_worklist(on).candidates.size() == 1);
+        ktv::NormalizedWorklist w_on = ktv::normalize_worklist(on);
+        CHECK(errors.empty() && w_on.candidates.size() == 1);
+        CHECK(std::none_of(w_on.warnings.begin(), w_on.warnings.end(), [](const ktv::Error& e) { return e.code == "STAFF_OFF"; }));
+        ktv::PlanResult r_on = ktv::plan(on, ktv::default_rules(), at);
+        r.response["data"]["metrics"].erase("generated_in_ms");
+        r_on.response["data"]["metrics"].erase("generated_in_ms");
+        CHECK(r.response["data"] == r_on.response["data"]);  // off và rảnh cùng input → cùng tuyến
     }
 
     {  // Thứ tự loại: trạng thái → tọa độ (bao_tri 6 = Đã nhận ca). complete_date không loại (7.8: là ngày kỳ trước).

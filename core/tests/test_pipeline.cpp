@@ -184,12 +184,13 @@ int main() {
                              none, none, none));
         CHECK(r && r->response["statuscode"] == "422");
     }
-    {  // staff.status=3 (off) → 422 dù có việc.
+    {  // 7.21: staff.status=3 (off) vẫn xếp tuyến (trước: 422).
         json m = message("2026-09-10 09:00:00", none,
                          json::array({task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, "")}),
                          none, none, none);
         m["staff"]["status"] = 3;
-        CHECK(run(m, ktv::default_rules())->response["statuscode"] == "422");
+        auto r = run(m, ktv::default_rules());
+        CHECK(r && r->response["statuscode"] == "200" && r->response["data"]["metrics"]["tasks_total"] == 1);
     }
     {  // Lô 0 lùi xuống block cho AREA_REENTRY. Thẳng hàng: xuất phát — X1 (1 km) — Y (2 km) — X2 (3 km).
        // X1, X2 cùng block 5, Y block 6. Không tính block: X1→Y→X2 (3 km). Có: quay lại block 5 phạt 2 (≈ 2 km)

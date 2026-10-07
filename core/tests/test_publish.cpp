@@ -164,8 +164,10 @@ int main() {
             CHECK(r.status == "200" && !r.used_mobix_loc);
             CHECK(r.out && std::abs(first_leg_km(*r.out) - km_home) < 1e-9);
         }
-        {  // KTV off (422) vẫn ghi route: Mobix không được đọc tuyến cũ còn việc.
-            const ktv::Published r = run(message("m5", home, 3), {140, 1}, &store);
+        {  // 422 (hết việc: ca duy nhất thiếu toạ độ) vẫn ghi route: Mobix không được đọc tuyến cũ còn việc.
+            json no_task = message("m5", home);
+            no_task["tasks"]["trien_khai"][0]["latlng"] = "";
+            const ktv::Published r = run(no_task, {140, 1}, &store);
             CHECK(r.status == "422" && r.route_stored && r.out_sent && sent.size() == 1);  // 422 cũng gửi: OA gỡ tuyến cũ
             CHECK(json::parse(*store.get_latest("S1"))["statuscode"] == "422");
         }

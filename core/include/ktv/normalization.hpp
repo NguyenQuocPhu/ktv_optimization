@@ -3,7 +3,7 @@
 // ============================================================================
 // Hiểu nhanh:
 //   Parser (`api`) chỉ đọc hợp đồng. Module này quyết định việc nào *được* đưa vào thuật toán, theo thứ tự:
-//     1. staff.status = 3 hoặc không rõ   → không xếp gì (422)
+//     1. staff.status = 3 (off) → VẪN xếp như rảnh/bận + cảnh báo log STAFF_OFF (7.21; trước: không xếp, 422)
 //     2. task_id trùng staff.current_task → việc đang làm: bổ sung dữ liệu, KHÔNG thành stop
 //     3. (nhóm, task_status_id) tra bảng sheet 05 (`find_status`, cùng mã khác nghĩa theo nhóm):
 //          xếp → tiếp bước 4 · không xếp (xong/hủy/theo dõi) → bỏ
@@ -37,8 +37,6 @@
 
 namespace ktv {
 
-inline constexpr int kStaffOff = 3;
-
 // Thống kê để chẩn đoán vì sao task bị loại. Không dùng cho thuật toán.
 struct NormalizationStats {
     int tasks = 0;                      // Số task nhận vào.
@@ -51,9 +49,8 @@ struct NormalizationStats {
 struct NormalizedWorklist {
     std::vector<const Task*> candidates;  // Con trỏ vào Message, giữ nguyên thứ tự message.tasks.
     std::optional<Task> current_task;     // Việc đang làm; đầy đủ nếu có row khớp, tối thiểu nếu không.
-    bool staff_off = false;               // staff.status == 3, hoặc trạng thái không rõ (kStaffStatusUnknown).
     NormalizationStats stats;
-    std::vector<Error> warnings;          // Mã TASK_STATUS_* / CURRENT_NOT_MATCHED, xem docs/DATA_QUESTIONS.md.
+    std::vector<Error> warnings;          // Mã TASK_STATUS_* / CURRENT_NOT_MATCHED / STAFF_OFF, xem docs/DATA_QUESTIONS.md.
 };
 
 NormalizedWorklist normalize_worklist(const Message& message);

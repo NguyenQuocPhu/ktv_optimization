@@ -80,7 +80,10 @@ struct Staff {
     std::optional<CurrentTask> current_task;      // Không có = null.
     int status = 0;                               // 1 rảnh, 2 bận, 3 off. 0 = payload không gửi. kStaffStatusUnknown = gửi giá trị lạ (nới lỏng).
 };
-inline constexpr int kStaffStatusUnknown = -1;  // Không rõ KTV có đang làm không → không xếp tuyến (như off).
+inline constexpr int kStaffStatusUnknown = -1;  // Gửi giá trị lạ: vẫn xếp tuyến như rảnh/bận + cảnh báo STAFF_STATUS (7.21).
+inline constexpr int kStaffStatusOff = 3;        // KTV off: VẪN xếp tuyến (catalogue ISC E-01), chỉ cảnh báo log STAFF_OFF (7.21).
+// 7.21 [GIẢ ĐỊNH, chờ hỏi OA]: KTV off mà thiếu available (không gửi / null / "") → dùng khung này. Chỉ áp cho KTV off.
+inline constexpr const char* kOffDefaultAvailable = "08:00-17:30";
 
 // Một việc trong tasks.<nhóm>[i].
 struct Task {

@@ -293,12 +293,6 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     const NormalizedWorklist worklist = normalize_worklist(message);
     result.warnings = worklist.warnings;
     result.stats = worklist.stats;
-    if (worklist.staff_off) {  // KTV off (hoặc trạng thái không rõ): không sinh tuyến.
-        const char* why = message.staff.status == kStaffStatusUnknown ? "Trạng thái KTV không rõ, không sinh tuyến"
-                                                                       : "KTV đang off, không sinh tuyến";
-        result.response = error_response("422", why, message.message_id, server_now);
-        return result;
-    }
     // 7.18: ca hẹn ngày SAU ngày chạy không xếp tuyến hôm nay (catalogue mục D); hẹn ngày đã qua vẫn xếp (làm bù).
     // Lọc trước khi gom: chỉ gom các ca được tính tuyến. 7.20.2: vẫn trả về trong OUT dạng DEFERRED NEXT_DAY.
     std::vector<std::pair<const Task*, const char*>> deferred;  // ca tồn không xếp hôm nay + lý do
