@@ -128,12 +128,22 @@ int main() {
         CHECK(body.value("planned_at", "") == "2026-10-01 09:20:00");  // giờ gọi, không phải 08:00 của IN
         CHECK(sent.size() == 1 && first && sent[0] == first->body);    // OA nhận đúng bản Mobix nhận
 
-        // Gọi lại cùng vị trí, rồi GPS rung ~1 m (cùng làm tròn 4 số): HIT, đúng bản đó; GET route cũng ra bản đó.
+        // 7.20.1b: gọi lại cùng vị trí, rồi GPS rung ~1 m (cùng làm tròn 4 số): HIT = cùng tuyến, change_id "no",
+        // data.trace_id = run_code lần tính thật; GET route vẫn ra bản đã tính (cache không ghi đè route).
+        const auto data_of = [](const std::string& text) {
+            const json out = json::parse(text, nullptr, false);
+            return out.is_object() && out.contains("data") && out["data"].is_array() ? out["data"][0] : json();
+        };
+        CHECK(data_of(first->body).value("change_id", "") == "yes");
         auto again = client.Get(replan + "21.0500,105.8500", auth);
-        CHECK(again && again->get_header_value("X-Cache") == "HIT" && again->body == first->body);
-        // Mobix gọi định kỳ: cùng chỗ (rung ~1 m), latlng_at mới hơn → dedup chặn, không tính lại.
+        CHECK(again && again->get_header_value("X-Cache") == "HIT");
+        CHECK(again && data_of(again->body).value("change_id", "") == "no");
+        CHECK(again && data_of(again->body).value("trace_id", "") == "m1-r20261001092000");
+        CHECK(again && data_of(again->body)["clusters"] == data_of(first->body)["clusters"]);
+        // Mobix gọi định kỳ: cùng chỗ (rung ~1 m), latlng_at mới hơn → vẫn cache, không tính lại.
         auto jitter = client.Get(replan + "21.05001,105.85001&latlng_at=2026-10-01 09:21:00", auth);
-        CHECK(jitter && jitter->get_header_value("X-Cache") == "HIT" && jitter->body == first->body);
+        CHECK(jitter && jitter->get_header_value("X-Cache") == "HIT");
+        CHECK(jitter && data_of(jitter->body)["clusters"] == data_of(first->body)["clusters"]);
         auto read = client.Get("/api/v1/staff/S1/route", auth);
         CHECK(read && read->status == 200 && read->body == first->body);
         CHECK(sent.size() == 1);  // HIT / đọc route: không gửi thêm OUT
@@ -143,19 +153,20 @@ int main() {
         CHECK(moved && moved->get_header_value("X-Cache") == "MISS");
         CHECK(json::parse(moved->body).value("run_code", "") == "m1-r20261001092500");
 
-        // IN mới (worker ghi state mới) → cùng vị trí vẫn MISS, message_id theo IN mới.
+        // IN mới cùng nội dung (chỉ khác message_id) → 7.20.1b: HIT, vỏ theo IN mới, change_id "no" trỏ lần tính 09:25.
         CHECK(store.put_state("S1", message("m2").dump(), {200, 1}));
         auto fresh = client.Get(replan + "21.0600,105.8600&latlng_at=2026-10-01 09:25:00", auth);
-        CHECK(fresh && fresh->get_header_value("X-Cache") == "MISS");
+        CHECK(fresh && fresh->get_header_value("X-Cache") == "HIT");
         CHECK(json::parse(fresh->body).value("message_id", "") == "m2");
-        CHECK(sent.size() == 3);  // moved + fresh
+        CHECK(data_of(fresh->body).value("change_id", "") == "no" && data_of(fresh->body).value("trace_id", "") == "m1-r20261001092500");
+        CHECK(sent.size() == 2);  // first + moved (HIT không gửi OUT)
 
         // Worker vừa ghi route mới hơn (state mới hơn) → route replan bị từ chối, trả bản của worker.
         CHECK(store.put_route("S1", "2026-10-01", R"({"run_code":"worker-moi"})", {300, 1, 0}) == ktv::Write::Stored);
         auto lost = client.Get(replan + "21.0700,105.8700&latlng_at=2026-10-01 09:26:00", auth);
         CHECK(lost && lost->status == 200 && lost->get_header_value("X-Cache") == "HIT");
         CHECK(lost && json::parse(lost->body).value("run_code", "") == "worker-moi");
-        CHECK(sent.size() == 3);  // route bị từ chối → không gửi bản cũ
+        CHECK(sent.size() == 2);  // route bị từ chối → không gửi bản cũ
 
         auto health = client.Get("/healthz");
         CHECK(health && json::parse(health->body).value("out_failed", -1) == 7);

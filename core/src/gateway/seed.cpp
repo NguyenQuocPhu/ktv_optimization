@@ -34,8 +34,12 @@ std::size_t load_routes(std::istream& in, RouteStore& store) {
         if (!value.contains("planned_at") || !value["planned_at"].is_string()) continue;
         const std::string date = date_of(value["planned_at"].get<std::string>());
         if (date.empty()) continue;
-        if (!value.contains("data") || !value["data"].is_object()) continue;
-        const auto& data = value["data"];
+        if (!value.contains("data")) continue;
+        // 7.20.1: data là array 1 phần tử; file OUT cũ (data object) vẫn nạp được.
+        const auto& raw = value["data"];
+        if (raw.is_array() && raw.empty()) continue;
+        const auto& data = raw.is_array() ? raw[0] : raw;
+        if (!data.is_object()) continue;
         if (!data.contains("staff_id") || !data["staff_id"].is_string()) continue;
         const std::string staff_id = data["staff_id"].get<std::string>();
         if (staff_id.empty()) continue;

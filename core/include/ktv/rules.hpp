@@ -70,6 +70,9 @@ struct Rules {
     int break_start = 11 * 60 + 30;    // 11:30, phút trong ngày.
     int break_end = 13 * 60 + 30;      // 13:30.
     double break_minutes = 45;         // 0 = không có nghỉ trưa.
+    // 7.20.1b — worker/gateway trả OUT cache khi IN không đổi nội dung (change_id "no"). Chỉ dùng khi có Redis.
+    int cache_max_age_minutes = 30;                  // Trần tuổi bản cache (giờ chạy mới − giờ tính bản cache). 0 = tắt cache.
+    std::vector<std::string> force_recompute_triggers;  // Trigger luôn tính lại dù IN không đổi. Mặc định rỗng.
 };
 
 Rules default_rules();                              // Bộ mặc định.

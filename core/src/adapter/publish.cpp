@@ -1,5 +1,7 @@
 #include "ktv/adapter/publish.hpp"
 
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 
 #include "ktv/adapter/file.hpp"
@@ -23,7 +25,60 @@ std::optional<std::int64_t> apply_mobix_loc(const Versioned& loc, Minutes now, S
     return loc.version.empty() ? 0 : loc.version.front();
 }
 
+// 7.20.1b: OUT cache dùng lại được cho lần chạy này không? Có → OUT "no" theo envelope mới.
+std::optional<nlohmann::ordered_json> reuse_cached(RedisStore& store, const std::string& staff_id,
+                                                   const std::string& fingerprint, const Envelope& envelope,
+                                                   Minutes now, const Rules& rules) {
+    if (rules.cache_max_age_minutes <= 0) return std::nullopt;
+    const auto& force = rules.force_recompute_triggers;
+    if (std::find(force.begin(), force.end(), envelope.trigger) != force.end()) return std::nullopt;
+    const std::optional<std::string> meta = store.get_dedup(staff_id);  // "fingerprint|run_code" lần tính cuối
+    if (!meta || meta->rfind(fingerprint + "|", 0) != 0) return std::nullopt;
+    const std::string run_code = meta->substr(fingerprint.size() + 1);
+    const std::optional<std::string> text = store.get(staff_id, format_datetime(envelope.planned_at).substr(0, 10));
+    if (!text) return std::nullopt;
+    const nlohmann::ordered_json cached = nlohmann::ordered_json::parse(*text, nullptr, false);
+    if (!cached.is_object() || cached.value("run_code", "") != run_code) return std::nullopt;  // route đã bị thay
+    const std::string code = cached.value("statuscode", "");
+    if (code != "200" && code != "422") return std::nullopt;  // 424 (OSRM lỗi): tính lại để thử OSRM
+    const std::optional<Minutes> computed = parse_datetime(cached.value("planned_at", ""));
+    if (!computed || *computed > envelope.planned_at ||
+        envelope.planned_at - *computed > rules.cache_max_age_minutes)  // trần tuổi
+        return std::nullopt;
+    const nlohmann::ordered_json& data = out_data(cached);
+    if (data.is_object() && data.contains("clusters"))  // (b): chưa tới giờ đến ca đầu của bản cache
+        for (const auto& cluster : data["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row.value("entry_type", "") == "TASK") {
+                    const std::optional<Minutes> first = parse_datetime(row.value("start_at", ""));
+                    if (!first || envelope.planned_at >= *first) return std::nullopt;
+                    return reuse_response(cached, envelope, now);
+                }
+    return reuse_response(cached, envelope, now);  // không có TASK (422): chỉ xét trần tuổi
+}
+
 }  // namespace
+
+std::string in_fingerprint(const json& in, const Point& staff_latlng, Minutes planned_at) {
+    json canonical = in;  // json (không ordered) = khóa sắp theo tên → chuỗi tất định
+    for (const char* key : {"message_id", "trigger", "planned_at", "run_code"}) canonical.erase(key);
+    canonical["date"] = format_datetime(planned_at).substr(0, 10);
+    char point[64];
+    std::snprintf(point, sizeof point, "%.4f,%.4f", staff_latlng.lat, staff_latlng.lng);  // ~11 m: GPS rung không đổi
+    if (canonical.contains("staff") && canonical["staff"].is_object()) canonical["staff"]["latlng"] = point;
+    if (canonical.contains("tasks") && canonical["tasks"].is_object())
+        for (auto& [group, items] : canonical["tasks"].items())
+            if (items.is_array())
+                std::stable_sort(items.begin(), items.end(), [](const json& a, const json& b) {
+                    const auto id = [](const json& t) { return t.is_object() ? t.value("task_id", json()).dump() : t.dump(); };
+                    return id(a) < id(b);
+                });
+    std::uint64_t hash = 1469598103934665603ULL;  // FNV-1a 64
+    for (unsigned char c : canonical.dump()) hash = (hash ^ c) * 1099511628211ULL;
+    char hex[17];
+    std::snprintf(hex, sizeof hex, "%016llx", static_cast<unsigned long long>(hash));
+    return hex;
+}
 
 std::int64_t stamp(Minutes value) {
     std::string digits;
@@ -34,7 +89,7 @@ std::int64_t stamp(Minutes value) {
 
 Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, const Version& version,
                          const Rules& rules, const std::string& osrm_url, RedisStore* store,
-                         const SendOut& send_out) {
+                         const SendOut& send_out, bool reply_on_cache) {
     Published result;
     result.message_id = envelope.message_id;
 
@@ -61,6 +116,21 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
         result.used_mobix_loc = loc_at.has_value();
         based_on.push_back(loc_at.value_or(0));
     }
+    // 7.20.1b: IN không đổi nội dung → trả OUT cache (change_id "no"), không tính, không ghi route.
+    std::string fingerprint;
+    if (store) {
+        fingerprint = in_fingerprint(in, message.staff.latlng, envelope.planned_at);
+        if (std::optional<nlohmann::ordered_json> reused = reuse_cached(*store, staff_id, fingerprint, envelope, now, rules)) {
+            result.cached = true;
+            result.status = (*reused)["statuscode"].get<std::string>();
+            result.out = std::move(*reused);
+            if (send_out && reply_on_cache) {
+                send_out(staff_id, result.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace));
+                result.out_sent = true;
+            }
+            return result;
+        }
+    }
 
     nlohmann::ordered_json response;
     try {
@@ -85,6 +155,8 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
             store->put_route(staff_id, format_datetime(envelope.planned_at).substr(0, 10), json_text, based_on);
         result.route_stored = written == Write::Stored;
         current = written != Write::Older;
+        // 7.20.1b: nhớ dấu vân tay của bản route vừa thành hiện hành (424 vẫn ghi, reuse_cached tự bỏ qua 424).
+        if (current) store->put_dedup(staff_id, fingerprint + "|" + (envelope.run_code.empty() ? envelope.message_id : envelope.run_code));
     }
     if (send_out && current) {
         send_out(staff_id, json_text);

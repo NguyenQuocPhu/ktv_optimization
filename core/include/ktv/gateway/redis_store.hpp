@@ -12,12 +12,12 @@
 //     {prefix}route:{staff}:{date}   hash {json = response đã gói (= OUT), v = based_on} TTL 2 ngày
 //     {prefix}latest:{staff}         ngày của route mới nhất, VD "2026-10-01"            TTL 2 ngày
 //     {prefix}loc:{staff}            hash {json = {"latlng","latlng_at"}, v}             TTL 1 ngày
-//     {prefix}dedup:{staff}          fingerprint lần tính cuối (chuỗi)                   TTL 1 ngày
+//     {prefix}dedup:{staff}          "dấu vân tay IN|run_code" của route hiện hành (7.20.1b) TTL 1 ngày
 //
 //   Version = dãy số nguyên, so từ trái sang (thiếu coi là 0). Chỉ ghi khi version MỚI HƠN HẲN;
 //   bằng nhau → không ghi (tính lại cùng state cho cùng kết quả). Mỗi số phải < 2^53 (Lua dùng double).
-//   VD state {20261001080500, 123} = planned_at 2026-10-01 08:05:00, offset 123;
-//      route based_on {20261001080500, 123, 20261001092000} = state đó + latlng_at 09:20:00.
+//   VD state {1790843100000, 123} = timestamp Kafka (ms) + offset của IN (worker truyền {timestamp_ms, offset});
+//      route based_on {1790843100000, 123, 20261001092000} = state đó + latlng_at 09:20:00.
 //
 // Dùng thế nào:
 //   RedisStore store(RedisStore::Config{});                    // ném nếu không kết nối/auth được
@@ -107,7 +107,7 @@ public:
     // Redis có trả lời PING không (nối lại nếu kết nối hỏng). Không ném: dùng cho /readyz.
     bool ping() const;
 
-    // Fingerprint lần tính cuối (VD "20261001080500,123|21.0285,105.8542"). Ghi đè thẳng.
+    // 7.20.1b: dấu vân tay nội dung IN + run_code của route hiện hành (VD "9f3c…e1|m-001"). Ghi đè thẳng.
     void put_dedup(const std::string& staff_id, const std::string& fingerprint);
     std::optional<std::string> get_dedup(const std::string& staff_id) const;
 

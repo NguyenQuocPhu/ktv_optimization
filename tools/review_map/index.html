@@ -246,6 +246,7 @@ function render(result) {
   const message = (() => { try { return JSON.parse(input.value); } catch { return null; } })();
   const tasks = flattenTasks(message);
   $("json").textContent = JSON.stringify(out, null, 2);
+  if (out && Array.isArray(out.data)) out.data = out.data[0] ?? null;  // 7.20.1: data là array 1 phần tử
   $("log").textContent = `core ${result.revision || "?"} · binary ${result.binary}\nchạy ${result.ms} ms · exit ${result.exit} · OSRM: ${result.osrm ? "có" : "không"}\n\n${result.stdout || ""}${result.stderr || ""}`;
 
   routeLayer.clearLayers();

@@ -347,7 +347,8 @@ int main(int argc, char** argv) {
             log["sent_to"] = published.out_sent ? nlohmann::ordered_json("kafka") : nlohmann::ordered_json(nullptr);
             log["stored"] = published.route_stored;
             log["used_mobix_loc"] = published.used_mobix_loc;
-            const auto& data = published.out ? (*published.out)["data"] : nlohmann::ordered_json(nullptr);
+            const nlohmann::ordered_json data = published.out ? ktv::out_data(*published.out) : nlohmann::ordered_json(nullptr);
+            log["change_id"] = data.is_object() ? data["change_id"] : nlohmann::ordered_json(nullptr);  // "no" = trả cache
             log["generated_in_ms"] = data.is_object() ? data["metrics"]["generated_in_ms"] : nlohmann::ordered_json(nullptr);
             log["total_ms"] = std::round(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count() * 10) / 10;
             if (ktv::payload_wanted(*payload_log, status)) log["payload"] = ktv::payload_json(in, record->payload);

@@ -9,11 +9,16 @@
 //     2. put_state; IN cũ hơn cái đang có → bỏ qua, không tính (status "STALE")
 //        bằng version = Kafka giao lại cùng IN (lần trước chết giữa chừng) → vẫn tính, ghi route lại
 //     3. vị trí Mobix trong Redis còn trong 60 phút → thay vị trí trong IN
+//     3b. (7.20.1b) IN không đổi nội dung so với lần tính trước → trả lại OUT cache (change_id "no"), không gọi plan(),
+//        không ghi route. Đủ 3 vế: dấu vân tay trùng (ngày + staff với GPS làm tròn 4 số + tasks sắp theo task_id;
+//        bỏ message_id/trigger/giờ) · giờ chạy mới < giờ đến ca đầu của bản cache · tuổi bản cache ≤
+//        rules.cache_max_age_minutes. Trigger trong rules.force_recompute_triggers luôn tính. Bản cache 424 không dùng lại.
 //     4. plan(); lỗi bất ngờ → 500 (không ghi route, giữ route cũ)
 //     5. put_route với based_on = version state + latlng_at (0 = vị trí trong IN)
 //     6. gửi OUT (send_out) khi route này là bản hiện hành: vừa ghi, hoặc đúng bản này đã có (Kafka giao lại
 //        cùng IN sau khi lần trước ghi route xong nhưng chưa gửi được OUT). Không gửi khi 400/500/STALE hoặc đã có
-//        route mới hơn. Không Redis: gửi mọi 200/424/422.
+//        route mới hơn. Không Redis: gửi mọi 200/424/422. Trả cache (3b): gửi khi reply_on_cache (worker: mỗi IN
+//        một OUT trả lời; gateway replan: không — Mobix hỏi lại không phải thay đổi để báo OA).
 //   VD: IN 08:05 của KTV 00201964 đến, Mobix báo vị trí lúc 08:40, worker xử lý lúc 09:00
 //       → tuyến xuất phát từ vị trí 08:40, route ghi với based_on {ts IN, offset, 20261001084000}.
 //   Lỗi Redis → ném ra ngoài (worker thoát, không commit, đọc lại message sau khi restart).
@@ -61,6 +66,7 @@ struct Published {
     bool route_stored = false;                  // false khi không Redis, 400/500, hoặc đã có route mới hơn.
     bool used_mobix_loc = false;                // true = đã thay vị trí IN bằng vị trí Mobix.
     bool out_sent = false;                      // true = đã gọi send_out (key = staff_id, value = route).
+    bool cached = false;                        // 7.20.1b: true = trả OUT cache (change_id "no"), không tính lại.
 };
 
 // HÀM CHÍNH. in: message IN (JSON hỏng = discarded → 400). version: version của state, VD {timestamp Kafka ms,
@@ -70,7 +76,10 @@ using SendOut = std::function<void(const std::string& key, const std::string& va
 
 Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, const Version& version,
                          const Rules& rules, const std::string& osrm_url, RedisStore* store,
-                         const SendOut& send_out = {});
+                         const SendOut& send_out = {}, bool reply_on_cache = true);
+
+// 7.20.1b: dấu vân tay nội dung IN (FNV-1a 64, hex). staff_latlng = vị trí thật dùng để tính (sau vị trí Mobix).
+std::string in_fingerprint(const json& in, const Point& staff_latlng, Minutes planned_at);
 
 // 2026-10-01 09:20 → 20261001092000.
 std::int64_t stamp(Minutes value);

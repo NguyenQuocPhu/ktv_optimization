@@ -58,7 +58,7 @@ std::string redis_text(redisContext* context, const std::string& command, const 
 }
 
 double first_leg_km(const nlohmann::ordered_json& out) {
-    for (const auto& cluster : out["data"]["clusters"])
+    for (const auto& cluster : ktv::out_data(out)["clusters"])
         for (const auto& row : cluster["schedule"])
             if (row["entry_type"] == "TASK") return row["travel_km_before"].get<double>();
     return -1;
@@ -183,11 +183,87 @@ int main() {
             const ktv::Published r = run(message("m7", home), {160, 1}, &store);
             CHECK(r.status == "200" && !r.route_stored && !r.out_sent && sent.empty());
         }
+        {  // 7.20.1b: IN không đổi nội dung → trả OUT cache (change_id "no"); luật 3 vế (dấu vân tay, ca đầu, trần 30′).
+            json base = message("a", home);
+            base["staff"]["staff_id"] = "S2";
+            json& first = base["tasks"]["trien_khai"][0];
+            first["appointment"] = "2026-10-01 10:00:00";  // ca đầu chờ tới 10:00 → giờ đến ca đầu = 10:00
+            json second = first;
+            second["task_id"] = 2;
+            second["appointment"] = "2026-10-01 14:00:00";
+            second["latlng"] = "21.04,105.82";
+            base["tasks"]["trien_khai"].push_back(second);
+            const auto at = [&](const std::string& id, const char* planned, json payload) {
+                payload["message_id"] = id;
+                payload["planned_at"] = std::string("2026-10-01 ") + planned + ":00";
+                return payload;
+            };
+            const auto data_of = [](const ktv::Published& r) { return ktv::out_data(*r.out); };
+            std::int64_t v = 500;
+            const auto go = [&](const json& payload, bool reply = true) {
+                sent.clear();
+                const ktv::Envelope e = ktv::local_envelope(payload, "t-0-1", now);
+                return ktv::plan_and_store(payload, e, now, {++v, 1}, rules, "", &store, send_out, reply);
+            };
+
+            const ktv::Published a = go(at("m-a", "09:00", base));
+            CHECK(a.status == "200" && !a.cached && a.route_stored && data_of(a)["change_id"] == "yes" && data_of(a)["trace_id"] == "");
+            // Cùng nội dung, khác message_id / trigger / giờ (09:05 < ca đầu 10:00, tuổi 5′) → cache.
+            json b_in = at("m-b", "09:05", base);
+            b_in["trigger"] = "TRAFFIC";
+            const ktv::Published b = go(b_in);
+            CHECK(b.cached && !b.route_stored && b.status == "200");
+            CHECK((*b.out)["message_id"] == "m-b" && (*b.out)["trigger"] == "TRAFFIC" && (*b.out)["planned_at"] == "2026-10-01 09:05:00");
+            CHECK(data_of(b)["change_id"] == "no" && data_of(b)["trace_id"] == "m-a");
+            CHECK(data_of(b)["clusters"] == data_of(a)["clusters"]);
+            CHECK(b.out_sent && sent.size() == 1);  // worker: mỗi IN một OUT trả lời
+            CHECK(json::parse(*store.get("S2", "2026-10-01"))["run_code"] == "m-a");  // route cache không bị ghi đè
+            // GPS rung ~3 m (cùng làm tròn 4 số) + đảo thứ tự tasks trong mảng → vẫn cache.
+            json c_in = at("m-c", "09:20", base);
+            c_in["staff"]["latlng"] = "21.02002,105.80002";
+            std::swap(c_in["tasks"]["trien_khai"][0], c_in["tasks"]["trien_khai"][1]);
+            const ktv::Published c = go(c_in, /*reply=*/false);
+            CHECK(c.cached && data_of(c)["trace_id"] == "m-a" && !c.out_sent && sent.empty());  // gateway: không gửi
+            // Trần 30′: 09:31 − 09:00 > 30 → tính lại dù y hệt.
+            const ktv::Published d = go(at("m-d", "09:31", base));
+            CHECK(!d.cached && d.route_stored && data_of(d)["change_id"] == "yes");
+            // (b) ca đầu: bản cache tính 09:31, ca đầu 10:00 → IN y hệt lúc 10:00 (tuổi 29′) vẫn tính lại.
+            CHECK(go(at("m-d2", "09:45", base)).cached);  // 09:45 < 10:00 và tuổi 14′ → cache
+            const ktv::Published e = go(at("m-e", "10:00", base));
+            CHECK(!e.cached && data_of(e)["change_id"] == "yes");
+            // Nội dung đổi (ca 2 hủy) → tính lại.
+            json f_in = at("m-f", "10:05", base);
+            f_in["tasks"]["trien_khai"][1]["task_status_id"] = 97;
+            const ktv::Published f = go(f_in);
+            CHECK(!f.cached && data_of(f)["change_id"] == "yes");
+            // GPS đổi ~300 m → tính lại.
+            json g_in = at("m-g", "10:06", f_in);
+            g_in["staff"]["latlng"] = "21.0227,105.80";
+            CHECK(!go(g_in).cached);
+            // Khác ngày → tính lại (ngày nằm trong dấu vân tay).
+            CHECK(ktv::in_fingerprint(base, {21.02, 105.80}, *ktv::parse_datetime("2026-10-01 09:00:00")) !=
+                  ktv::in_fingerprint(base, {21.02, 105.80}, *ktv::parse_datetime("2026-10-02 09:00:00")));
+            // force_recompute_triggers: trigger trong danh sách luôn tính.
+            ktv::Rules forced = rules;
+            forced.force_recompute_triggers = {"TRAFFIC"};
+            json h_in = at("m-h", "10:07", g_in);
+            h_in["trigger"] = "TRAFFIC";
+            CHECK(go(at("m-h0", "10:07", g_in)).cached);  // không ép: cache
+            sent.clear();
+            const ktv::Published h = ktv::plan_and_store(h_in, ktv::local_envelope(h_in, "t", now), now, {++v, 1}, forced, "",
+                                                         &store, send_out);
+            CHECK(!h.cached && ktv::out_data(*h.out)["change_id"] == "yes");
+            // Không Redis: luôn tính, change_id "yes".
+            const ktv::Published n = run(base, {1, 1}, nullptr);
+            CHECK(!n.cached && ktv::out_data(*n.out)["change_id"] == "yes");
+        }
     } catch (const std::exception& error) {
         std::cerr << "FAIL: ngoại lệ " << error.what() << "\n";
         ++failures;
     }
 
+    for (const char* kind : {"state:S2", "route:S2:2026-10-01", "latest:S2", "loc:S2", "dedup:S2", "dedup:S1"})
+        freeReplyObject(redisCommand(raw, "DEL %s", (config->prefix + kind).c_str()));
     for (const char* kind : {"state:S1", "route:S1:2026-10-01", "latest:S1", "loc:S1"})
         freeReplyObject(redisCommand(raw, "DEL %s", (config->prefix + kind).c_str()));
     redisFree(raw);

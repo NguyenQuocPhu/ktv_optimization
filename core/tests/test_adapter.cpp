@@ -58,15 +58,38 @@ int main() {
         Envelope e{"local-1", "DAY_START", now};
         nlohmann::ordered_json resp = {{"success", true}, {"statuscode", "200"}, {"message", ""},
                                        {"trace_id", "local-1"}, {"server_time", "2026-09-10 09:00:01"},
-                                       {"data", {{"staff_id", "1"}}}};
+                                       {"data", {{"staff_id", "1"}, {"priority_type", 0}, {"clusters", nlohmann::ordered_json::array()}}}};
         nlohmann::ordered_json out = wrap_response(e, resp);
         CHECK(out["message_id"] == "local-1" && out["run_code"] == "local-1");
         CHECK(out["schema_version"] == "1" && out["statuscode"] == "200");
-        CHECK(out["data"]["staff_id"] == "1");
+        // 7.20.1: data là array 1 phần tử; change_id "yes", trace_id "" ngay sau staff_id (sheet 03 bản (5)).
+        CHECK(out["data"].is_array() && out["data"].size() == 1);
+        CHECK(ktv::out_data(out)["staff_id"] == "1" && ktv::out_data(out)["change_id"] == "yes" && ktv::out_data(out)["trace_id"] == "");
+        std::vector<std::string> inner;
+        for (auto it = out["data"][0].begin(); it != out["data"][0].end(); ++it) inner.push_back(it.key());
+        CHECK((inner == std::vector<std::string>{"staff_id", "change_id", "trace_id", "priority_type", "clusters"}));
         // Thứ tự field: message_id đứng trước, data đứng cuối.
         std::vector<std::string> keys;
         for (auto it = out.begin(); it != out.end(); ++it) keys.push_back(it.key());
         CHECK(keys.front() == "message_id" && keys.back() == "data");
+
+        // 7.20.1b reuse_response: vỏ theo envelope mới, data[0] change_id "no" + trace_id = run_code lần tính thật.
+        Envelope next{"local-9", "TRAFFIC", now + 10};
+        nlohmann::ordered_json again = ktv::reuse_response(out, next, now + 10);
+        CHECK(again["message_id"] == "local-9" && again["run_code"] == "local-9" && again["trigger"] == "TRAFFIC");
+        CHECK(again["trace_id"] == "local-9" && again["planned_at"] == format_datetime(now + 10));
+        CHECK(ktv::out_data(again)["change_id"] == "no" && ktv::out_data(again)["trace_id"] == "local-1");
+        CHECK(ktv::out_data(again)["clusters"] == ktv::out_data(out)["clusters"]);
+        inner.clear();
+        for (auto it = again["data"][0].begin(); it != again["data"][0].end(); ++it) inner.push_back(it.key());
+        CHECK((inner == std::vector<std::string>{"staff_id", "change_id", "trace_id", "priority_type", "clusters"}));
+        // Cache của cache: vẫn trỏ về lần tính thật (local-1), không phải local-9.
+        Envelope third{"local-10", "TRAFFIC", now + 20};
+        CHECK(ktv::out_data(ktv::reuse_response(again, third, now + 20))["trace_id"] == "local-1");
+        // Bản cache dạng cũ (data object) cũng nhận.
+        nlohmann::ordered_json legacy = out;
+        legacy["data"] = out["data"][0];
+        CHECK(ktv::reuse_response(legacy, next, now + 10)["data"].is_array());
     }
     {  // Response lỗi không có data → data = null, không vỡ.
         Envelope e{"local-2", "DAY_START", now};

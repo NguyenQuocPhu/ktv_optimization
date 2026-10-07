@@ -6,7 +6,8 @@
 //       → 200 route (= OUT) / 202 {"retry_after":5} chưa có / 401
 //   - GET /api/v1/staff/{staff_id}/replan?latlng=21.02,105.79&latlng_at=2026-10-01 09:20:00   (cần Redis)
 //       state IN mới nhất + vị trí Mobix → tính lại (adapter/publish) → 200 route, header X-Cache: MISS
-//       cùng state + cùng vị trí (làm tròn 4 số ≈ 11 m) như lần trước → 200 route đang cache, X-Cache: HIT
+//       IN không đổi nội dung + cùng vị trí (làm tròn 4 số ≈ 11 m) + bản cache còn hạn (chưa tới ca đầu, ≤ 30′)
+//       → 200 route đang cache, data[0].change_id "no", X-Cache: HIT, không gửi OUT (7.20.1b)
 //       → 400 sai tham số / 404 chưa có IN của KTV / 401 / 503 không có Redis hoặc Redis lỗi
 //       Route replan: message_id của IN, run_code "<message_id>-r<latlng_at yyyymmddHHMMSS>",
 //       trigger MOBIX_REPLAN, planned_at = giờ gọi. latlng_at bỏ trống = giờ gọi.
@@ -24,7 +25,7 @@
 //   GatewayOptions        cổng, token, rules, OSRM, giờ cố định (test)
 //   make_gateway_server   HÀM CHÍNH
 //
-// Ẩn trong server.cpp: kiểm token, fingerprint dedup, envelope replan.
+// Ẩn trong server.cpp: kiểm token, envelope replan (cache IN không đổi: plan_and_store, 7.20.1b).
 // Phụ thuộc: store, redis_store + adapter/publish (khi có hiredis), rules, cpp-httplib (third_party).
 // ============================================================================
 #pragma once

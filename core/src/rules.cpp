@@ -94,6 +94,18 @@ Rules rules_from_json(const nlohmann::json& data) {
         rules.break_start = h1 * 60 + m1;
         rules.break_end = h2 * 60 + m2;
     }
+    double cache_age = rules.cache_max_age_minutes;
+    number("cache_max_age_minutes", cache_age, 0);
+    rules.cache_max_age_minutes = static_cast<int>(cache_age);
+    if (data.contains("force_recompute_triggers")) {
+        const auto& triggers = data["force_recompute_triggers"];
+        if (!triggers.is_array()) fail("force_recompute_triggers cần mảng chuỗi");
+        rules.force_recompute_triggers.clear();
+        for (const auto& trigger : triggers) {
+            if (!trigger.is_string()) fail("force_recompute_triggers cần mảng chuỗi");
+            rules.force_recompute_triggers.push_back(trigger.get<std::string>());
+        }
+    }
     if (rules.break_minutes > 0 && rules.break_end - rules.break_start < rules.break_minutes)
         fail("khung lunch_break ngắn hơn lunch_break_minutes");
     return rules;
@@ -130,6 +142,8 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"at_risk_ratio", rules.at_risk_ratio},
         {"lunch_break", hhmm(rules.break_start) + "-" + hhmm(rules.break_end)},
         {"lunch_break_minutes", rules.break_minutes},
+        {"cache_max_age_minutes", rules.cache_max_age_minutes},
+        {"force_recompute_triggers", rules.force_recompute_triggers},
     };
 }
 

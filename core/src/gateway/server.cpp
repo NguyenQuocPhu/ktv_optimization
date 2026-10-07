@@ -68,16 +68,6 @@ void route(httplib::Response& response, const std::string& body, const char* cac
 }
 
 #ifdef KTV_WITH_REDIS
-// Lần tính trước dùng đúng state + vị trí này chưa? Vị trí làm tròn 4 chữ số (~11 m) để GPS rung không tính lại.
-// VD "1790843483054 0|21.0285,105.8542".
-std::string fingerprint(const Version& state_version, const Point& point) {
-    std::string out;
-    for (std::int64_t number : state_version) out += (out.empty() ? "" : " ") + std::to_string(number);
-    char text[64];
-    std::snprintf(text, sizeof text, "|%.4f,%.4f", point.lat, point.lng);
-    return out + text;
-}
-
 void replan(RedisStore& redis, const GatewayOptions& options, const httplib::Request& request,
             httplib::Response& response) {
     const std::string staff_id = request.matches[1];
@@ -96,26 +86,23 @@ void replan(RedisStore& redis, const GatewayOptions& options, const httplib::Req
     const nlohmann::json loc = {{"latlng", request.get_param_value("latlng")}, {"latlng_at", format_datetime(*latlng_at)}};
     redis.put_loc(staff_id, loc.dump(), {stamp(*latlng_at)});
 
-    const std::string key = fingerprint(state->version, *point);
-    if (redis.get_dedup(staff_id) == key) {
-        if (const std::optional<std::string> cached = redis.get_latest(staff_id)) return route(response, *cached, "HIT");
-    }
-
     const json in = json::parse(state->json, nullptr, false);
     Envelope envelope = local_envelope(in, staff_id, now);
     envelope.trigger = "MOBIX_REPLAN";
     envelope.planned_at = now;
     envelope.run_code = envelope.message_id + "-r" + std::to_string(stamp(*latlng_at));
-    const Published published =
-        plan_and_store(in, envelope, now, state->version, options.rules, options.osrm_url, &redis, options.send_out);
-    if (published.route_stored) {
-        redis.put_dedup(staff_id, key);
-        return route(response, published.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "MISS");
-    }
+    // 7.20.1b: cùng luật cache với worker (dấu vân tay nội dung + vị trí làm tròn ~11 m + hạn tuổi). Trả cache →
+    // HIT, change_id "no", không gửi OUT (Mobix hỏi lại không phải thay đổi để báo OA).
+    const Published published = plan_and_store(in, envelope, now, state->version, options.rules, options.osrm_url,
+                                               &redis, options.send_out, /*reply_on_cache=*/false);
+    const auto text = [](const nlohmann::ordered_json& out) {
+        return out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    };
+    if (published.cached) return route(response, text(*published.out), "HIT");
+    if (published.route_stored) return route(response, text(*published.out), "MISS");
     // Không ghi được: đã có route mới hơn (worker vừa tính từ IN mới) hoặc lỗi tính → trả bản mới nhất đang có.
     if (const std::optional<std::string> cached = redis.get_latest(staff_id)) return route(response, *cached, "HIT");
-    if (published.out)
-        return route(response, published.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), "MISS");
+    if (published.out) return route(response, text(*published.out), "MISS");
     send_json(response, 202, {{"retry_after", 5}});
 }
 #endif
