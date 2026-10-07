@@ -670,7 +670,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.17 ✅ | Mục E thu bill: `hoa_don` không hẹn có `complete_date` + 1 tháng == ngày chạy → đến hạn hôm nay (7.17b) — chi tiết bên dưới | thu bill trúng ngày thanh toán được xếp ngay dù còn > K ngày, urgency max; `thu_hoi` không đổi |
 | 7.18 ✅ | Ca hẹn ngày SAU ngày chạy không xếp tuyến hôm nay (catalogue mục D); hẹn ngày đã qua vẫn xếp; ca không xếp **không vào OUT** — chi tiết bên dưới | không còn `IDLE` qua đêm, `finish_at`/km/`overload_minutes` chỉ tính hôm nay |
 | 7.19 | Soát OUTPUT so với workbook API (4): **7.19.1 ✅** `contract_id`/`contract_no` là string, `""` khi không có; **7.19.2 ✅** IDLE đúng cụm; **7.19.3 ✅** tổng = tổng dòng; 7.19.4–7.19.5 để sau — chi tiết bên dưới | OUT không còn `null` ngoài `data` khi lỗi (sheet 00/07) |
-| 7.20 | Theo `API-Goi-y-cong-viec (5).xlsx`: 7.20.1 `data` array + `change_id`/`trace_id`; 7.20.2 dòng `DEFERRED` (`NEXT_DAY`, `BEYOND_K`); 7.20.3 `SAME_ADDRESS` chữ hoa; 7.20.4 giờ ca cứng (`OUT_OF_HOURS`/`NO_CAPACITY`, **đổi thuật toán — trình bày trước**); 7.20.5 log `unplaced` + invariants phủ 7.18 — chi tiết bên dưới | OUT khớp sheet 03 bản (5); ca tồn không xếp vẫn hiện trên FE |
+| 7.20 | Theo `API-Goi-y-cong-viec (5).xlsx`: 7.20.1a `data` array + `change_id`/`trace_id`, 7.20.1b worker trả cache khi IN không đổi (dấu vân tay nội dung + hạn 3 vế); 7.20.2 dòng `DEFERRED` (`NEXT_DAY`, `BEYOND_K`); 7.20.3 `SAME_ADDRESS` chữ hoa; 7.20.4 giờ ca cứng (`OUT_OF_HOURS`/`NO_CAPACITY`, **đổi thuật toán — trình bày trước**); 7.20.5 log `unplaced` + invariants phủ 7.18 — chi tiết bên dưới | OUT khớp sheet 03 bản (5); ca tồn không xếp vẫn hiện trên FE |
 | 7.21 | KTV `staff.status = 3` (off) **vẫn xếp tuyến** như rảnh/bận (catalogue ISC E-01, sheet 2 bước 1); status lạ cũng xếp + cảnh báo — chi tiết bên dưới | KTV off có ca tồn → `200` có tuyến, không còn `422` "KTV đang off" |
 | 7.22 ✅ | Việc đang làm (`staff.current_task`) còn **½ định mức** thay vì hằng 30′ — chi tiết bên dưới | giờ xuất phát lùi theo loại việc đang làm (việc 120′ → +60′, việc 20′ → +10′) |
 | sau | JWT thay token tĩnh, rate limit | |
@@ -1306,10 +1306,63 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 **Thứ tự làm:** 7.20.1 → 7.20.2 → 7.20.3 → 7.20.5, mỗi bước build + test + commit riêng. 7.20.4 trình bày thuật toán cho người dùng duyệt trước khi code.
 
 ###### 7.20.1 — `data` array + `change_id` / `trace_id`
-- **Một chỗ đổi**: `adapter/envelope.cpp` `wrap_response` (biên ra Kafka OUT, CLI `--out`, gateway): `data` object → `[ {…} ]` (1 phần tử = 1 KTV/message); lỗi vẫn `data = null` (sheet 07). `plan()` giữ `data` object bên trong → ~50 chỗ test đọc `["data"]` không đổi.
-- `data.change_id = "yes"`, `data.trace_id = ""` khi worker/replan **tính mới**. Gateway `replan` trả cache (`X-Cache: HIT`, dedup fingerprint) → `change_id = "no"`, `data.trace_id` = `trace_id` của lần tính đã cache. [GIẢ ĐỊNH] thứ tự field: `staff_id, change_id, trace_id, priority_type, clusters, metrics` (theo sheet 03).
-- File chạm: `envelope.cpp`, `gateway/server.cpp` (HIT viết lại `change_id`/`trace_id`), `gateway/seed.cpp` (đọc `data` array, vẫn nhận object cũ), `kafka/main.cpp` (log đọc `data[0]`), `cli/main.cpp` (thống kê `generated_in_ms` — đọc response trước wrap, kiểm lại), `tools/review_map/index.html` (đọc `data[0]`, vẫn nhận object). Test: `test_adapter`, `test_publish`, `test_cli`, `test_pipeline` (phần OUT bọc envelope).
-- Exit: OUT Kafka/CLI có `data` array 1 phần tử; replan HIT trả `change_id = "no"` + `trace_id` cũ; seed nạp được cả file OUT cũ (object) lẫn mới (array).
+
+**Use case (team data mô tả 2026-10-07):** OA đẩy IN với nhiều loại trigger; trigger nào cần tính lại thì tính → `data.change_id = "yes"`; không cần thì trả cache → `data.change_id = "no"` + `data.trace_id` = **`message_id` của lần tính cũ** (bản OUT đang cache). Hiện core tính lại **toàn bộ** mọi IN. Phần này nằm **ngoài `plan()`** (hàm thuần, không biết lần chạy trước): ở tầng pipeline deploy — `adapter/publish.cpp` `plan_and_store` (worker) + `gateway/server.cpp` (replan), cần Redis. Tách 2 bước:
+
+**7.20.1a — hình dạng OUT (làm ngay, không đổi hành vi tính):**
+- `adapter/envelope.cpp` `wrap_response` (biên ra Kafka OUT, CLI `--out`, gateway): `data` object → `[ {…} ]` (1 phần tử = 1 KTV/message); lỗi vẫn `data = null` (sheet 07). `plan()` giữ `data` object bên trong → ~50 chỗ test đọc `["data"]` không đổi.
+- Thêm `data.change_id = "yes"`, `data.trace_id = ""` (worker luôn tính). Gateway `replan` HIT (dedup đã có) → viết lại `change_id = "no"`, `data.trace_id` = `message_id` của bản cache. [GIẢ ĐỊNH] thứ tự field: `staff_id, change_id, trace_id, priority_type, clusters, metrics` (sheet 03).
+- File chạm: `envelope.cpp`, `gateway/server.cpp`, `gateway/seed.cpp` (đọc `data` array, vẫn nhận object cũ), `kafka/main.cpp` (log đọc `data[0]`), `cli/main.cpp` (thống kê `generated_in_ms`, kiểm lại), `tools/review_map/index.html` (đọc `data[0]`, vẫn nhận object), comment `redis_store.hpp` (version state thực tế là `{timestamp Kafka ms, offset}`, không phải `{planned_at, offset}`). Test: `test_adapter`, `test_publish`, `test_cli`, `test_pipeline`.
+- Exit: OUT có `data` array 1 phần tử + `change_id`/`trace_id`; replan HIT → `"no"` + `message_id` cũ; seed nạp được OUT cũ (object) lẫn mới (array).
+
+**7.20.1b — worker trả cache khi IN không đổi (thiết kế đã chốt hướng, chưa code):**
+
+*Quyết theo NỘI DUNG IN, không theo tên trigger* (người dùng duyệt). Lý do: IN là snapshot, trigger chỉ là nhãn — bỏ qua theo nhãn có thể trả tuyến sai (VD E-12 "giao thông" tới sau một E-08 hủy ca bị lỗi: IN đã phản ánh ca hủy, trả cache = tuyến còn ca đã hủy); tên trigger thật của OA chưa chốt; catalogue: `lyDoGoi` chỉ để log, nhiều thay đổi dồn vào một IN. `plan()` tất định → dấu vân tay nội dung trùng thì kết quả chắc chắn y hệt → trả cache luôn an toàn. Áp vào catalogue: E-02…E-08 (danh sách ca đổi) → `yes`; E-12 không có dữ liệu giao thông, KTV đứng yên → `no`; E-12 KTV lệch tuyến (GPS đổi) → `yes`; E-10 đổi mode (chưa có mode) → `no`, sau Phase 8 mode vào dấu vân tay → `yes`; E-09 "Tối ưu lại" không có gì đổi → `no`; spam IN giống hệt → `no`. Trigger chỉ dùng chiều ngược lại: `rules.json` `force_recompute_triggers` (mặc định rỗng; VD khi có dữ liệu giao thông thật thì thêm E-12).
+
+*Dấu vân tay gồm:* **ngày** chạy (bỏ giờ) · `staff` (GPS **làm tròn 4 số ≈ 11 m** như gateway, `available`, `status`, `current_task`, `plots`) · toàn bộ `tasks` **sắp theo `task_id`** (OA đổi thứ tự mảng không lệch; kết quả `plan()` không phụ thuộc thứ tự). **Bỏ qua:** `message_id`, `trigger`, `run_code`, giờ trong `planned_at`. (Sau Phase 8: thêm mode.) Lưu cạnh `state` trong Redis.
+
+Ví dụ (KTV `00061718`, 26/06):
+
+| IN | `message_id` | trigger | `planned_at` | Khác IN A | Dấu vân tay | Kết quả |
+|---|---|---|---|---|---|---|
+| A | m-001 | DAY_START | 26/06 08:00 | (đầu) | F1 | tính, `yes` |
+| B | m-002 | TRAFFIC | 26/06 08:10 | id, trigger, giờ; GPS rung ~3 m `10.76902,106.75603` → làm tròn `10.7690,106.7560` | F1 | **cache**: `no`, `data.trace_id = m-001` |
+| C | m-003 | TASK_CANCEL | 26/06 08:20 | ca 1080775002 status 6 → 97 | F2 | tính, `yes` |
+| D | m-004 | TRAFFIC | 26/06 08:35 | GPS đi ~300 m | F3 | tính, `yes` |
+| E | m-005 | DAY_START | **27/06** 08:00 | khác ngày | F4 | tính, `yes` |
+
+Hiệu ứng biên làm tròn: hai điểm cách 2 m nằm hai bên ngưỡng (`…0.76904` → `.7690`, `…0.76906` → `.7691`) vẫn khác → tính thừa một lần, không sai.
+
+*Hạn dùng cache — luật 3 vế:*
+```text
+dùng cache  ⇔  dấu vân tay trùng (cùng ngày, cùng ca, cùng GPS)
+            VÀ giờ chạy mới < giờ đến ca đầu tuyến trong bản cache      ← (b)
+            VÀ giờ chạy mới − giờ tính bản cache ≤ cache_max_age (30′)  ← trần
+```
+- **Vì sao cần hạn** — cùng một IN chạy ở giờ khác nhau (đo thật, OSRM, `sample_in.json` ngày 26/06): 08:00 → hóa đơn 08:11, onsite 08:36, … xong 15:45; 08:15 → cùng thứ tự, mọi giờ lùi ~15′; 09:00 → **đổi thứ tự** (onsite từ #2 xuống #4); 09:40 → đổi tiếp, bảo trì logic **`AT_RISK`**. Cache 08:00 trả lúc 09:00/09:40 = tuyến không còn tối ưu + giấu rủi ro. IN y hệt sau một giờ = KTV chưa check-in/chưa di chuyển (chậm thật, hoặc OA không gửi event) → càng nên tính lại.
+- **(b) theo tuyến:** cache dùng được khi chưa tới giờ đến ca đầu. Chấp nhận lệch giờ dự kiến = (giờ trả − giờ tính cache), bị (b) chặn ≤ thời gian tới ca đầu. VD cache 08:00, IN y hệt 08:10: trả hóa đơn 08:11 / onsite 08:36, tính lại thật là 08:21 / 08:46 → lệch 10′; 08:15 (quá 08:11) → tính lại. **Trước giờ vào ca lệch = 0**: giờ xuất phát = max(giờ chạy, giờ vào ca) → E-01 tính 06:00, IN y hệt 06:30/07:45 cho đúng tuyến xuất phát 08:00. KTV di chuyển → GPS đổi → dấu vân tay đổi → tự tính lại; lệch chỉ khi KTV đứng yên.
+- **Trần (`rules.json` `cache_max_age_minutes`, mặc định 30):** (b) chỉ nhìn ca đầu; ca đầu xa (VD ca hẹn 14:00, KTV chờ) → cache sống nhiều giờ trong khi nhãn phụ thuộc giờ hiện tại vẫn trôi (ca hạn B 11:00: 09:00 tính `WILL_BREACH`/`AT_RISK`, sau 11:00 phải `ALREADY_BREACHED`). Trần buộc tính lại khi cache quá 30′. Đổi lại vài lần tính thừa (vài ms) khi kết quả không đổi.
+
+| Tình huống | Chỉ (b) | (b) + trần 30′ |
+|---|---|---|
+| Tính 08:00, IN y hệt 08:10 (ca đầu 08:11) | cache, lệch 10′ | cache, lệch 10′ |
+| Tính 08:00, IN y hệt 08:15 | tính lại | tính lại |
+| Tính 06:00 (trước ca), IN y hệt 07:00 | cache (lệch 0) | tính lại (ra y hệt) |
+| Tính 09:00, ca đầu hẹn 14:00, IN y hệt 11:30 | cache (nhãn SLA cũ) | tính lại, nhãn đúng |
+
+*Khi `change_id = "no"` vẫn **gửi Kafka OUT*** [GIẢ ĐỊNH, hỏi OA]: mỗi IN có một OUT trả lời; vỏ ngoài mang `message_id` mới; `data.change_id = "no"`, `data.trace_id` = `message_id` lần tính cũ; phần `clusters`/`metrics` = bản cache.
+
+*Hiện thực dự kiến:* `plan_and_store`: sau `put_state` (version mới hơn), trước `plan()` — tính dấu vân tay, đọc dấu vân tay + bản route đang cache (giờ tính, giờ đến ca đầu, `message_id`), đủ 3 vế → trả cache (không gọi OSRM, không ghi đè route); không thì tính như cũ và lưu dấu vân tay mới. Không Redis (CLI/dev) → luôn tính (`yes`). Gateway replan dùng chung luật (thay fingerprint version-state hiện tại).
+*Test:* bảng A–E; luật 3 vế (08:10 cache, 08:15 tính lại, 06:00→07:00 tính lại do trần, đổi thứ tự `tasks` vẫn cache); `force_recompute_triggers`; không Redis → `yes`.
+*Hỏi OA/team data:* danh sách tên trigger thật (để log + `force_recompute_triggers`; 2026-10-07: **chưa có**); OA có chờ OUT cho IN `change_id = "no"` không.
+
+**Kết quả 7.20.1 (2026-10-07):**
+- 7.20.1a: `wrap_response` → `data` array 1 phần tử, `staff_id, change_id ("yes"), trace_id (""), priority_type, …`; lỗi `data = null`. `out_data()` đọc `data[0]` (nhận cả bản cũ object). `seed.cpp`, log worker (`change_id` + `generated_in_ms` từ `data[0]`), review map đọc array. `plan()` không đổi.
+- 7.20.1b: `plan_and_store` sau vị trí Mobix, trước `plan()`: `in_fingerprint` (FNV-1a 64 của IN bỏ `message_id`/`trigger`/`planned_at`/`run_code`, thêm ngày, GPS thật làm tròn 4 số, `tasks` sắp theo `task_id`) + `reuse_cached` (3 vế: dấu vân tay trùng `dedup:{staff}` = "fp|run_code" và route hiện hành đúng run_code đó · giờ chạy < giờ đến ca đầu của bản cache · tuổi ≤ `rules.cache_max_age_minutes` 30; bản cache 424 không dùng lại; trigger trong `rules.force_recompute_triggers` luôn tính) → `reuse_response`: vỏ theo envelope mới, `data[0].change_id = "no"`, `data[0].trace_id` = run_code lần tính thật (worker: = message_id; cache của cache vẫn trỏ lần tính thật); không gọi `plan()`, không ghi route. Worker gửi OUT cả khi "no"; gateway replan **không** (`reply_on_cache = false`).
+- Gateway: bỏ dedup riêng (theo version state, không hạn tuổi) → dùng chung luật `plan_and_store`; HIT = `published.cached`. Hệ quả: IN mới cùng nội dung (chỉ khác `message_id`) → HIT thay vì MISS.
+- `trace_id` dùng **run_code** của lần tính (worker run_code = message_id — đúng mô tả team data; replan cùng message_id nhiều lần tính nên run_code mới phân biệt được).
+- Test: `test_adapter` (array, thứ tự field, `reuse_response`, cache của cache, bản cũ object); `test_publish` khối 7.20.1b (cache khi khác id/trigger/giờ, GPS rung + đảo thứ tự tasks vẫn cache, trần 30′, vế ca đầu 10:00, nội dung đổi / GPS 300 m / khác ngày / force trigger → tính, không Redis → "yes", gateway không gửi OUT khi cache); `test_gateway_replan` theo hành vi mới. `ctest` 18/18 (3 test Redis chạy thật).
+- **Hạ tầng test:** 3 test Redis hard-code `KTV_TEST_REDIS=127.0.0.1:6379` — trên máy dùng chung đó là Redis **của người khác** (đã chạy vào đó các lần trước; test tự xoá key theo prefix `ktvtest*`, kiểm lại không còn key nào). CMake thêm biến cache `KTV_TEST_REDIS` (mặc định 6379); máy này cấu hình `-DKTV_TEST_REDIS=127.0.0.1:16379` trỏ Redis riêng `ktv-redis-dev` (docker).
 
 ###### 7.20.2 — Dòng `DEFERRED` cho ca tồn không xếp
 - **Ca nào**: hẹn ngày sau ngày chạy → `insert_reason = NEXT_DAY` (thay "không vào OUT" của 7.18); lọc K (7.16.1) → **`BEYOND_K`** (mã mới, danh sách workbook để mở "…"). Ca thiếu toạ độ / trạng thái đã xong-hủy → **không trả** (không gán cụm được / không còn là ca tồn).

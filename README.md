@@ -149,7 +149,8 @@ curl -s -H "$H" localhost:8080/api/v1/staff/DEMO01/route              # route wo
 curl -si -H "$H" 'localhost:8080/api/v1/staff/DEMO01/replan?latlng=21.0450,105.8000'   # X-Cache: MISS
 curl -si -H "$H" 'localhost:8080/api/v1/staff/DEMO01/replan?latlng=21.0450,105.8000'   # X-Cache: HIT
 
-# Kafka OUT: 1 bản DAY_START (worker) + 1 bản MOBIX_REPLAN (replan MISS)
+# Kafka OUT: 1 bản DAY_START (worker) + 1 bản MOBIX_REPLAN (replan MISS). data là array 1 phần tử, có change_id:
+# "yes" = tính mới; "no" = IN không đổi nội dung, trả lại bản cache (data.trace_id = run_code lần tính thật) — 7.20.1
 docker exec ktv-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
   --topic ktv-local-out --from-beginning --timeout-ms 5000 --property print.key=true
 
