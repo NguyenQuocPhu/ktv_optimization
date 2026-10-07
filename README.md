@@ -42,7 +42,7 @@ Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ ga
 | `200` | Có tuyến | true |
 | `424` | Có tuyến nhưng OSRM lỗi, khoảng cách là chim bay × 1,3 | true |
 | `400` | JSON hỏng / không xếp được tuyến (nới lỏng) hoặc sai contract (strict); message nêu tối đa 3 lỗi đầu, kèm đường dẫn field | false |
-| `422` | Không còn task xếp được, KTV off (`staff.status = 3`), hoặc quá 64 task | false |
+| `422` | Không còn task nào trả được (rỗng / toàn thiếu toạ độ / đã xong), KTV off (`staff.status = 3`), hoặc quá 64 task. Chỉ còn ca hẹn ngày sau / ca lọc K → `200` với dòng `DEFERRED` (7.20.2) | false |
 | `500` | Lỗi xử lý bất ngờ trong worker (message vẫn được commit, worker chạy tiếp) | false |
 
 Task bị loại trước khi xếp (status khác 6, đã hoàn tất, thiếu tọa độ, dòng trùng việc đang làm, task hỏng ở chế độ nới lỏng) **không** được ghi trong response.

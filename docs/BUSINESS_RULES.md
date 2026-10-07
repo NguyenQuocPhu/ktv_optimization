@@ -95,9 +95,11 @@ Hợp đồng chi tiết ở `docs/CONTRACT.md`. Routing kiểm tra request trư
 | Quá nhiều job cho QHĐ | Dùng heuristic | `SEQUENCE_NOT_OPTIMAL` | [GIẢ ĐỊNH] |
 | `previous_sequence` có job không còn trong request, hoặc lặp | Bỏ job đó, giữ lần xuất hiện đầu | – | [GIẢ ĐỊNH] |
 
-**Không xếp tuyến hôm nay, không cảnh báo, KHÔNG trả về trong OUT** (người dùng chốt 2026-10-06; workbook API (4) không có field):
-- Ca hẹn **ngày sau** ngày chạy (catalogue ISC mục D, Phase 7.18). Ca hẹn ngày **đã qua** vẫn xếp (làm bù).
-- Ca "hoàn tất trong tháng" còn > K = 5 ngày làm việc và không cùng địa chỉ với ca khác (Phase 7.16.1).
+**Không xếp tuyến hôm nay nhưng VẪN trả về trong OUT — dòng `DEFERRED`** (workbook API (5) sheet 03, Phase 7.20.2; bản (4) không có field nên 7.18 từng bỏ khỏi OUT):
+- Ca hẹn **ngày sau** ngày chạy → `insert_reason = NEXT_DAY` (catalogue ISC mục D, Phase 7.18). Ca hẹn ngày **đã qua** vẫn xếp (làm bù).
+- Ca "hoàn tất trong tháng" còn > K = 5 ngày làm việc và không cùng địa chỉ với ca khác → `BEYOND_K` (Phase 7.16.1; mã riêng của repo, danh sách workbook để mở).
+- Dòng `DEFERRED`: `seq 0`, `at`/`start_at`/`end_at` `""`, `task_role inserted`, `projected_sla ""`, chặng 0; nằm cuối `schedule` của cụm có **tâm gần nhất** (sắp theo `task_id`); không đếm vào `task_count`, km, metrics. Chỉ còn ca `DEFERRED` → `200`, một cụm toàn `DEFERRED`, metrics 0. [GIẢ ĐỊNH] gán cụm theo địa lý (cụm của core là đoạn tuyến).
+- Vẫn **không trả**: ca thiếu toạ độ (không gán được cụm), ca đã xong/hủy theo trạng thái.
 
 ## 5. Xử lý dữ liệu nguồn (phần team data sẽ làm thật)
 
