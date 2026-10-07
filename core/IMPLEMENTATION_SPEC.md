@@ -500,7 +500,7 @@ Gói bước 2–3 vào một helper nội bộ `assemble_clusters(rows, row_tas
 
 | # | Kịch bản | Kỳ vọng |
 |---|---|---|
-| 1 | 1 TASK | 1 cụm, inbound = leg, internal = 0 |
+| 1 | 1 TASK | 1 cụm, inbound9 = leg, internal = 0 |
 | 2 | 2 TASK, leg 2 = 2.0 | 1 cụm |
 | 3 | 2 TASK, leg 2 = 2.0001 | 2 cụm |
 | 4 | 3 TASK gần–xa–sát | spans [0,1) và [1,3); task_count 1/2; internal cụm 2 = leg TASK 3 |
@@ -670,6 +670,9 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.17 ✅ | Mục E thu bill: `hoa_don` không hẹn có `complete_date` + 1 tháng == ngày chạy → đến hạn hôm nay (7.17b) — chi tiết bên dưới | thu bill trúng ngày thanh toán được xếp ngay dù còn > K ngày, urgency max; `thu_hoi` không đổi |
 | 7.18 ✅ | Ca hẹn ngày SAU ngày chạy không xếp tuyến hôm nay (catalogue mục D); hẹn ngày đã qua vẫn xếp; ca không xếp **không vào OUT** — chi tiết bên dưới | không còn `IDLE` qua đêm, `finish_at`/km/`overload_minutes` chỉ tính hôm nay |
 | 7.19 | Soát OUTPUT so với workbook API (4): **7.19.1 ✅** `contract_id`/`contract_no` là string, `""` khi không có; **7.19.2 ✅** IDLE đúng cụm; **7.19.3 ✅** tổng = tổng dòng; 7.19.4–7.19.5 để sau — chi tiết bên dưới | OUT không còn `null` ngoài `data` khi lỗi (sheet 00/07) |
+| 7.20 | Theo `API-Goi-y-cong-viec (5).xlsx`: 7.20.1 `data` array + `change_id`/`trace_id`; 7.20.2 dòng `DEFERRED` (`NEXT_DAY`, `BEYOND_K`); 7.20.3 `SAME_ADDRESS` chữ hoa; 7.20.4 giờ ca cứng (`OUT_OF_HOURS`/`NO_CAPACITY`, **đổi thuật toán — trình bày trước**); 7.20.5 log `unplaced` + invariants phủ 7.18 — chi tiết bên dưới | OUT khớp sheet 03 bản (5); ca tồn không xếp vẫn hiện trên FE |
+| 7.21 | KTV `staff.status = 3` (off) **vẫn xếp tuyến** như rảnh/bận (catalogue ISC E-01, sheet 2 bước 1); status lạ cũng xếp + cảnh báo — chi tiết bên dưới | KTV off có ca tồn → `200` có tuyến, không còn `422` "KTV đang off" |
+| 7.22 ✅ | Việc đang làm (`staff.current_task`) còn **½ định mức** thay vì hằng 30′ — chi tiết bên dưới | giờ xuất phát lùi theo loại việc đang làm (việc 120′ → +60′, việc 20′ → +10′) |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1289,6 +1292,72 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 **Còn lại — để sau (người dùng chốt):**
 - **7.19.4 Field luôn rỗng / một giá trị.** `checkindate`, `checkoutdate` luôn `""` (sheet 03 tự mâu thuẫn: "giờ check-in **dự kiến**; `""` khi chưa check-in"; giờ dự kiến đã có ở `start_at`/`end_at`) — hỏi OA: là giờ thật (echo từ OA) hay bỏ? `priority_type` luôn 0 (chờ Phase 8 mode). `trace_id` = `message_id`.
 - **7.19.5 Nghĩa chưa chắc.** `task_role` theo **loại việc** (`TaskKind.extra`), không theo việc có thực sự được chèn: thu hồi xếp đầu tuyến lúc 08:05 vẫn là `inserted`. `name` cụm lấy tên lô KTV → nhiều cụm cùng tên (VD 5 cụm đều "Phú Mỹ"); workbook mẫu đặt tên theo phường/đường. Cắt cụm theo chặng > 2 km → 6 việc ra 5 cụm khá phổ biến. Chặng 0,1 km ra 0 phút (làm tròn).
+
+##### 7.20 — Hợp đồng OUT theo `API-Goi-y-cong-viec (5).xlsx` (kế hoạch, người dùng duyệt hướng 2026-10-06)
+
+**Bản (5) đổi gì so với (4)** (so toàn bộ dump; sheet 02, 05, 06, 07 không đổi):
+- Sheet 03: thêm `entry_type = DEFERRED` ("đã gán cụm, chưa xếp vào tuyến hôm nay"): `seq = 0`, `at = ""`, `task_role = inserted`, `priority` có thì điền không thì `0`, `insert_reason` ∈ `SAME_ADDRESS`, `NEXT_DAY`, `OUT_OF_HOURS`, `NO_CAPACITY`, … (danh sách mở; **chữ hoa** — trước `same_address`). `travel_minutes_before` "không có thì 0".
+- Sheet 03: `data` thành **array** `data[{ staff_id, clusters[], metrics }]`; thêm `data.change_id` (`"yes"` tính lại / `"no"` đọc cache) và `data.trace_id` (mã lần tính trước, khi `change_id = "no"`). Mô tả metrics chi tiết hơn (khớp code sau 7.19.3).
+- Sheet 01: `available` — "làm tới 17h30 AI **không xếp việc vượt mốc này**" → giờ ca thành ràng buộc cứng.
+- Sheet 00: thêm topic staging `stag-inside-par-assignment-optimal-assign-task-emp-assigned-queue`.
+- JSON mẫu sheet 08: vẫn `type`, không có `DEFERRED`/`change_id`; ngoặc `}]` đóng `data` đặt sai → **JSON không hợp lệ** (ghi câu hỏi, không theo).
+- **Đảo quyết định 7.18** "ca không xếp không vào OUT": theo (5), ca tồn không xếp trả về dạng `DEFERRED` (khớp catalogue ISC mục D "vẫn phải trả về").
+
+**Thứ tự làm:** 7.20.1 → 7.20.2 → 7.20.3 → 7.20.5, mỗi bước build + test + commit riêng. 7.20.4 trình bày thuật toán cho người dùng duyệt trước khi code.
+
+###### 7.20.1 — `data` array + `change_id` / `trace_id`
+- **Một chỗ đổi**: `adapter/envelope.cpp` `wrap_response` (biên ra Kafka OUT, CLI `--out`, gateway): `data` object → `[ {…} ]` (1 phần tử = 1 KTV/message); lỗi vẫn `data = null` (sheet 07). `plan()` giữ `data` object bên trong → ~50 chỗ test đọc `["data"]` không đổi.
+- `data.change_id = "yes"`, `data.trace_id = ""` khi worker/replan **tính mới**. Gateway `replan` trả cache (`X-Cache: HIT`, dedup fingerprint) → `change_id = "no"`, `data.trace_id` = `trace_id` của lần tính đã cache. [GIẢ ĐỊNH] thứ tự field: `staff_id, change_id, trace_id, priority_type, clusters, metrics` (theo sheet 03).
+- File chạm: `envelope.cpp`, `gateway/server.cpp` (HIT viết lại `change_id`/`trace_id`), `gateway/seed.cpp` (đọc `data` array, vẫn nhận object cũ), `kafka/main.cpp` (log đọc `data[0]`), `cli/main.cpp` (thống kê `generated_in_ms` — đọc response trước wrap, kiểm lại), `tools/review_map/index.html` (đọc `data[0]`, vẫn nhận object). Test: `test_adapter`, `test_publish`, `test_cli`, `test_pipeline` (phần OUT bọc envelope).
+- Exit: OUT Kafka/CLI có `data` array 1 phần tử; replan HIT trả `change_id = "no"` + `trace_id` cũ; seed nạp được cả file OUT cũ (object) lẫn mới (array).
+
+###### 7.20.2 — Dòng `DEFERRED` cho ca tồn không xếp
+- **Ca nào**: hẹn ngày sau ngày chạy → `insert_reason = NEXT_DAY` (thay "không vào OUT" của 7.18); lọc K (7.16.1) → **`BEYOND_K`** (mã mới, danh sách workbook để mở "…"). Ca thiếu toạ độ / trạng thái đã xong-hủy → **không trả** (không gán cụm được / không còn là ca tồn).
+- **Gán cụm** (người dùng hỏi "không xếp thì sao biết cụm"): cụm của core là đoạn liên tiếp của tuyến (cắt khi chặng > 2 km), ca không xếp không thuộc đoạn nào → **suy theo địa lý**: gán vào cụm có **tâm gần nhất** (chim bay), kể cả khi xa (không tạo cụm riêng → không làm tăng `cluster_count` "số cụm phải di chuyển"). Nghĩa với FE: "ca ở khu vực cụm X, hôm nay chưa làm" — không phải "đi qua cụm X sẽ làm". Hạn chế: tuyến đổi → cụm gán có thể đổi; ổn định hơn cần gom cụm địa lý trước rồi mới xếp (như catalogue ISC bước 7) — đổi kiến trúc, không làm ở 7.20.
+- **Mọi ca đều `DEFERRED`** (VD chỉ còn ca ngày mai): trước `422` → sau **`200`**, một cụm `CL-1` chỉ có dòng `DEFERRED` (`center` = trung bình toạ độ, `radius_m` như cũ, km/`handle_minutes`/`task_count` = 0); metrics: mọi đếm/tổng = 0, `start_at` = giờ xuất phát, `finish_at` = `start_at`, `on_time_rate_forecast` = 100. `422` chỉ còn khi không có ca nào trả được (rỗng / toàn thiếu toạ độ) — đúng sheet 07.
+- **Field dòng `DEFERRED`**: `seq = 0`, `at = ""`, `start_at`/`end_at = ""`, `task_role = "inserted"`, `insert_reason` như trên, `travel_minutes_before = 0`, `travel_km_before = 0`, `handle_minutes` = định mức/ input, `projected_sla = ""`, còn lại (`task_id`, nhóm/loại, `location`, `latlng`, `contract_*`, `checkindate`/`checkoutdate = ""`) như dòng TASK. `priority` chưa phát (chờ công thức — 7.19).
+- **Vị trí**: cuối `schedule` của cụm được gán, sắp theo `task_id` tăng (tất định: cùng input → cùng OUT).
+- **Không đếm** `DEFERRED` vào `task_count`, `travel_km_*`, `handle_minutes` của cụm, hay bất kỳ metrics nào (`tasks_total` = "số việc được xếp").
+- **Hiện thực**: `plan.cpp` — `unplaced` đổi thành danh sách (task, lý do); sau khi dựng cụm, bung dòng `DEFERRED`. Không đổi `dp.cpp`, thứ tự tuyến.
+- **Test**: `test_plan` (hẹn mai → `DEFERRED NEXT_DAY` đúng cụm gần nhất, không đếm metrics; lọc K → `BEYOND_K`; chỉ còn ca ngày mai → `200` một cụm toàn `DEFERRED`); `test_invariants` (mỗi candidate xuất hiện đúng 1 lần: TASK hoặc DEFERRED; metrics chỉ tính TASK; `seq = 0` ⇔ `DEFERRED`).
+
+###### 7.20.3 — `SAME_ADDRESS` chữ hoa
+- `insert_reason` của ca chèn cùng địa chỉ: `"same_address"` → `"SAME_ADDRESS"` (sheet 03 bản (5)). Đổi `plan.cpp` + `test_plan`, review map nếu có hiển thị.
+
+###### 7.20.4 — Giờ ca cứng (`OUT_OF_HOURS` / `NO_CAPACITY`) — **chưa code, trình bày trước**
+- Sheet 01 (5): AI không xếp việc vượt `available`. Hiện QHĐ xếp hết, phần dư báo `overload_minutes` (rule `AFTER_SHIFT` là chi phí, không phải ràng buộc).
+- Cần chốt: ca không kịp trong ca → `DEFERRED OUT_OF_HOURS` (bỏ khỏi tuyến, giữ thứ tự phần còn lại?) hay chọn **tập con** ca tối ưu để giữ (bài toán chọn — đổi `dp.cpp`/objective); `NO_CAPACITY` khác `OUT_OF_HOURS` thế nào (quá 64 việc? hết giờ ca?); `overload_minutes` còn ý nghĩa không (luôn 0?). Trình bày bài toán + ví dụ + chi phí trước khi sửa `dp.cpp`.
+
+###### 7.20.5 — Log `unplaced` + invariants phủ 7.18 (từ review 7.17 → 7.19)
+- `kafka/main.cpp:343`: log `tasks.routed` đang lấy `stats.candidates` (trước lọc K / ngày sau) → đổi sang `result.routed`; thêm đếm theo lý do (`next_day`, `beyond_k`) — ca không xếp nhìn được trên log production.
+- `test_invariants`: kiểm `unplaced ⊆ beyond_k` lỗi thời từ 7.18 (chỉ chưa đỏ vì generator luôn hẹn cùng ngày) → sửa điều kiện + generator sinh ~10% ca hẹn mai/hôm qua.
+
+**Câu hỏi gửi OA/BE** (ghi `DATA_QUESTIONS.md` khi làm): JSON mẫu (5) hỏng ngoặc + vẫn `type`; `change_id`/`trace_id` có đúng nghĩa cache gateway không; danh sách đầy đủ `insert_reason`; `NO_CAPACITY` khác `OUT_OF_HOURS`.
+
+##### 7.21 — KTV off vẫn xếp tuyến (kế hoạch, người dùng nêu 2026-10-07)
+
+**Bối cảnh.** Workbook (5) sheet 01: `staff.status` int bắt buộc, "tình trạng nhân sự on/off: 1-rảnh, 2-bận, 3-off". Code hiện (từ Phase 1/normalization): `status = 3` hoặc giá trị lạ (`kStaffStatusUnknown`) → `staff_off` → **không xếp gì, `422`** "KTV đang off" / "Trạng thái KTV không rõ" (`normalization.cpp:59,66`, `plan.cpp:280`). Rảnh (1) và bận (2) xếp như nhau.
+Nghiệp vụ thực tế (người dùng): KTV off **vẫn có thể có việc** → vẫn phải có tuyến. Khớp catalogue ISC: E-01 "duyệt MỌI KTV còn ca tồn, **gồm cả KTV có lịch trực off**"; sheet 2 bước 1 "KTV có lịch trực off VẪN được tính tuyến, với toàn bộ ca tồn của chính KTV đó"; payload `laNgayTrucOff` "vẫn tính tuyến bình thường, cờ chỉ để ghi log và phân tích".
+
+**Đề xuất (chưa code):**
+1. `status = 3` → xếp tuyến **như 1/2**, cùng `available`, cùng luật. `status` không còn chặn tuyến; chỉ để log: thêm cảnh báo log `STAFF_OFF` (không vào OUT, như các cảnh báo khác) để đội vận hành đếm được KTV off vẫn có việc.
+2. Status lạ (`9`, `"off"`, `null`…): trước `422` với lý do "xếp nhầm cho người đang nghỉ tệ hơn bỏ sót" — lý do này hết hiệu lực khi off cũng xếp → **xếp tuyến + cảnh báo `STAFF_STATUS`** (giữ mã cảnh báo hiện có). Status không gửi (`0`) như cũ: xếp.
+3. Rảnh (1) / bận (2): giữ như nhau (bận đã thể hiện qua `staff.current_task`). Ghi câu hỏi: "bận" có nghĩa gì khác không (VD đang đi việc ngoài hệ thống → lùi giờ xuất phát?).
+4. `available` khi off: hiện bắt buộc, sai/rỗng → `400`. [GIẢ ĐỊNH] OA vẫn gửi khung giờ (lịch OT / khung làm việc) cho KTV off. Nếu thực tế gửi `""` → hỏi OA trước khi đặt khung mặc định (không tự bịa giờ ca). Liên quan 7.20.4 (giờ ca cứng): KTV off mà khung giờ hẹp → nhiều `DEFERRED OUT_OF_HOURS`.
+5. `422` chỉ còn: không có ca trả được (rỗng / toàn thiếu toạ độ — sau 7.20.2 ca ngày sau/K thành `DEFERRED`), quá 64 việc.
+
+**File chạm:** `normalization.cpp/.hpp` (bỏ `staff_off` chặn candidates; giữ cờ cho log hoặc bỏ hẳn), `plan.cpp` (bỏ nhánh `422` off/không rõ), `api.cpp` (thông điệp `STAFF_STATUS` "không xếp tuyến" → "vẫn xếp"), comment `api.hpp` (`kStaffStatusUnknown`), `kafka/main.cpp` (log `staff_status`/cờ off nếu cần). Docs: `README.md` (bảng mã `422`, mục chọn task), `docs/DATA_QUESTIONS.md` (dòng `STAFF_STATUS`, thêm `STAFF_OFF`), `docs/BUSINESS_RULES.md`.
+**Test:** `test_normalization` (status 3 → có candidates, không `staff_off` chặn; status lạ → có candidates + cảnh báo), `test_pipeline:165` (off → `200` có tuyến thay `422`), `test_plan` (off + status 1 cùng input → cùng tuyến).
+**Thứ tự:** độc lập với 7.20 — làm được trước 7.20.1 (nhỏ, không đổi hợp đồng OUT). Chờ người dùng duyệt 5 điểm trên.
+
+##### 7.22 — Thời gian còn lại của việc đang làm = ½ định mức (người dùng duyệt 2026-10-07)
+
+**Trước:** có `staff.current_task` → giờ xuất phát lùi hằng `rules.current_task_minutes = 30′` [GIẢ ĐỊNH], mọi loại việc như nhau (thu bill 15′ hay triển khai 120′). `staff.status` 2 "bận" không ảnh hưởng gì (chỉ `current_task` mang nghĩa đang làm dở).
+**Đo dữ liệu thật** (`QOS_MAINT_CHECKIN_INFO_utf8.csv`, HNI_04 tháng 6, 9.306 lượt có check-in + check-out, bỏ > 8 giờ): thời lượng trung vị 14′, trung bình 43′, p75 36′, p90 111′ — đuôi rất dài (có lượt quên check-out). Biết đã làm t phút → trung vị còn lại tăng theo t (t=30 → 41′, t=60 → 78′). Không có một hằng số đúng chung; dữ liệu chỉ có bảo trì, nhiễu → chưa học từ dữ liệu.
+**Các cách đã cân nhắc:** (0) hằng 30′; **(1) ½ định mức loại việc** — dữ liệu có sẵn trong IN; (2) định mức − đã làm, cần OA gửi giờ check-in của `current_task` (câu hỏi trong `DATA_QUESTIONS`, đổi hợp đồng IN); (3) học phân phối từ lịch sử sạch. Người dùng chọn (1). Sai số chỉ sống tới event kế tiếp: check-out (E-03) / check-in (E-06) làm OA gửi IN mới → tính lại.
+**Hiện thực** (`plan.cpp`): còn lại = `handle_minutes` của row việc đang làm trong `tasks` / 2; không có `handle_minutes` → định mức danh mục (`find_kind` theo nhóm + loại) / 2; không tra được (current_task không có row trong `tasks` → thiếu tên nhóm/loại; hoặc loại ngoài danh mục) → `rules.current_task_minutes` (30′) như cũ. Làm tròn phút. "½" = không biết đã làm bao lâu → coi như đang giữa chừng [GIẢ ĐỊNH]. Không đổi `dp.cpp`, hợp đồng IN/OUT.
+**Test** (`test_pipeline`): current_task không có row → +30′ (giữ); row `handle_minutes` 120 → +60′; 20 → +10′; không `handle_minutes` → định mức `bao_tri_vat_ly` 60′ → +30′. Hai kiểm đầu fail trên code cũ. `ctest` 18/18.
+**Docs:** `core/README.md` (giả định đang dùng), `DATA_QUESTIONS.md` (`CURRENT_TASK`, câu giờ check-in), comment `rules.hpp`.
 
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 

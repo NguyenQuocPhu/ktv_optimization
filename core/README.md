@@ -107,4 +107,4 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 | 8 | service | Reoptimize do KTV yêu cầu: chốt mode + owner snapshot/baseline rồi làm (sau Kafka) |
 | 9 | binding | (đã bỏ) Python legacy xóa 2026-09-30 (tag `python-legacy-2026-09-30`); chỉ làm pybind11 nếu cần chạy lại backtest/mô phỏng |
 
-Giả định đang dùng (chờ xác nhận): nghỉ trưa bắt buộc, phải bắt đầu trong 11:30–12:45, nghỉ 45 phút (`lunch_break`, `lunch_break_minutes` trong rules); việc đang làm còn 30 phút nữa xong; việc "trong ngày tạo phiếu" không hẹn tính hạn là hết hôm nay (API chưa có ngày tạo phiếu); định mức thời gian xử lý theo loại ở `src/api.cpp`.
+Giả định đang dùng (chờ xác nhận): nghỉ trưa bắt buộc, phải bắt đầu trong 11:30–12:45, nghỉ 45 phút (`lunch_break`, `lunch_break_minutes` trong rules); việc đang làm còn ½ định mức của loại việc đó (không tra được → 30 phút, `current_task_minutes`; Phase 7.22); việc "trong ngày tạo phiếu" không hẹn tính hạn là hết hôm nay (API chưa có ngày tạo phiếu); định mức thời gian xử lý theo loại ở `src/api.cpp`.

@@ -32,7 +32,7 @@ Khi gặp team data: mở `/healthz`, lấy các loại gặp nhiều nhất, h�
 | `CURRENT_NOT_MATCHED` | Trạng thái "đang làm" (`trien_khai` 0, `bao_tri` 10) nhưng `task_id` không trùng `staff.current_task` | **Không xếp**; giờ xuất phát không bị đẩy thêm | `staff.current_task` có luôn được gửi khi KTV đang làm một việc không? Một KTV có thể đang làm hai việc? | mở |
 | `STAFF_STATUS` | `staff.status` không phải số nguyên 1/2/3 | `"3"`, `3.0` → hiểu là số đó. Giá trị khác (`9`, `"off"`, `null`…) → **không xếp tuyến**, `422` "Trạng thái KTV không rõ" (xếp nhầm cho người đang nghỉ tệ hơn bỏ sót một lần) | Các giá trị status của KTV? Gửi dạng số hay chuỗi? | mở |
 | `STAFF_PLOTS` | `plots` thiếu/rỗng, một lô hỏng, hoặc không đúng một lô chính | Bỏ lô hỏng; tên cụm lùi về `Lô <id>` / "Khu vực chưa xác định" | KTV có thể không có lô / nhiều lô chính không? | mở |
-| `CURRENT_TASK` | `current_task` thiếu field hoặc hỏng | Coi như không có việc đang làm (xuất phát lúc lập tuyến thay vì +30 phút) | Khi KTV không làm gì, gửi `null` đúng không? | mở |
+| `CURRENT_TASK` | `current_task` thiếu field hoặc hỏng | Coi như không có việc đang làm (xuất phát lúc lập tuyến, không lùi thêm thời gian còn lại của việc đang làm) | Khi KTV không làm gì, gửi `null` đúng không? | mở |
 | `PLANNED_AT` | `planned_at` sai định dạng | Bỏ, lập tuyến theo giờ xử lý | OA có gửi `planned_at` không, định dạng nào? | mở |
 
 Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; thiếu hoặc hỏng `staff`, `staff.staff_id`, `staff.staff_account`, `staff.latlng`, `staff.available`; `tasks` không phải object.
@@ -44,7 +44,7 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 - Nhóm `cscd` (workbook (4) nhóm 6): tên khóa đúng là `cscd`? Danh sách loại việc và bảng trạng thái của `cscd`? (Đang tạm: 2 loại `ngung_ket_noi_4h`, `chap_chon_suy_hao`; trạng thái đoán theo tên.)
 - `onsite`: workbook (4) cùng một dòng ghi cả "Hoàn tất trong ngày hẹn" lẫn "rule như bao_tri" (check-in trước mốc B). Đang theo "như bao_tri" (Phase 7.15) — xác nhận? Hai loại `ngung_ket_noi_4h`, `chap_chon_suy_hao` (CSKH chủ động) còn thuộc `onsite` không, hay đã sang `cscd`?
 - `complete_date`: từ 7.17 dùng cho `hoa_don` (mục E). Còn hỏi: có nhóm nào vẫn dùng `complete_date` theo nghĩa cũ "task này đã xong" mà không đổi `task_status_id` không? Nhóm khác (`thu_hoi`…) gửi `complete_date` thì nghĩa là gì (hiện bỏ qua)?
-- Việc đang làm: OA gửi được **giờ check-in** của `staff.current_task` không? Có thì tính được thời gian còn lại (định mức − đã làm) thay vì luôn 30 phút (IMPLEMENTATION_SPEC 7.7–7.10, ghi chú việc đang làm).
+- Việc đang làm: OA gửi được **giờ check-in** của `staff.current_task` không? Có thì tính được thời gian còn lại (định mức − đã làm) thay vì ½ định mức như hiện tại (IMPLEMENTATION_SPEC 7.22).
 - OA có gửi message IN mới cho KTV **mỗi khi task đổi trạng thái** (check-in, hoàn tất, gán thêm, đổi hẹn) không, hay chỉ khi gán việc? Route (worker lẫn `replan`) chỉ biết danh sách việc trong IN mới nhất: nếu OA không gửi lại, việc KTV đã làm xong vẫn nằm trong tuyến tới IN kế tiếp. (Đã chốt 2026-10-01: IN mới thì worker tính luôn — IMPLEMENTATION_SPEC Phase 7.)
 - Kafka timestamp của topic IN là `CreateTime` (giờ OA gửi) hay `LogAppendTime`? Version của state dùng timestamp này (Phase 7.3).
 - **Danh sách ngày lễ** (7.16.1): "số ngày làm việc còn lại" tính theo T2–T6 **trừ ngày lễ** (catalogue, tham số #2), nhưng chưa có danh sách lễ → hiện tính bỏ qua lễ (`rules.holidays` để rỗng). Cần lễ chính thức để `days_left` (lọc K, urgency) khỏi lệch quanh lễ.
