@@ -91,22 +91,24 @@ target_link_libraries(test_kafka_config kafka)
 add_test(NAME kafka_config COMMAND test_kafka_config)
 
 # Redis store: chỉ build khi có hiredis; test tự skip nếu không kết nối được Redis.
+# Redis cho test: -DKTV_TEST_REDIS=host:port (máy dùng chung có Redis người khác ở 6379 → trỏ Redis riêng).
+set(KTV_TEST_REDIS "127.0.0.1:6379" CACHE STRING "Redis cho test_gateway_redis / test_publish / test_gateway_replan")
 if(HIREDIS_FOUND)
   add_executable(test_gateway_redis tests/test_gateway_redis.cpp)
   target_include_directories(test_gateway_redis PRIVATE ${HIREDIS_INCLUDE_DIRS})
   target_link_libraries(test_gateway_redis gateway ${HIREDIS_LINK_LIBRARIES})
   add_test(NAME gateway_redis COMMAND test_gateway_redis)
-  set_tests_properties(gateway_redis PROPERTIES ENVIRONMENT "KTV_TEST_REDIS=127.0.0.1:6379")
+  set_tests_properties(gateway_redis PROPERTIES ENVIRONMENT "KTV_TEST_REDIS=${KTV_TEST_REDIS}")
   add_executable(test_publish tests/test_publish.cpp)
   target_include_directories(test_publish PRIVATE ${HIREDIS_INCLUDE_DIRS})
   target_link_libraries(test_publish gateway ${HIREDIS_LINK_LIBRARIES})
   add_test(NAME publish COMMAND test_publish)
-  set_tests_properties(publish PROPERTIES ENVIRONMENT "KTV_TEST_REDIS=127.0.0.1:6379")
+  set_tests_properties(publish PROPERTIES ENVIRONMENT "KTV_TEST_REDIS=${KTV_TEST_REDIS}")
   add_executable(test_gateway_replan tests/test_gateway_replan.cpp)
   target_include_directories(test_gateway_replan PRIVATE ${HIREDIS_INCLUDE_DIRS})
   target_link_libraries(test_gateway_replan gateway ${HIREDIS_LINK_LIBRARIES})
   add_test(NAME gateway_replan COMMAND test_gateway_replan)
-  set_tests_properties(gateway_replan PROPERTIES ENVIRONMENT "KTV_TEST_REDIS=127.0.0.1:6379")
+  set_tests_properties(gateway_replan PROPERTIES ENVIRONMENT "KTV_TEST_REDIS=${KTV_TEST_REDIS}")
 endif()
 
 # Bất biến trên diện rộng; tùy chọn chạy thêm benchmark thật.
