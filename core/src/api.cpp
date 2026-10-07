@@ -274,7 +274,12 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
         r.fail("", "cần object JSON");
         return message;
     }
-    r.only(data, "", {"message_id", "planned_at", "trigger", "staff", "tasks"});
+    r.only(data, "", {"message_id", "planned_at", "trigger", "priority_type", "staff", "tasks"});
+    if (data.contains("priority_type")) {  // 7.23: chế độ sắp xếp; nới lỏng: sai → 0 (mặc định) + cảnh báo
+        const json& value = data["priority_type"];
+        if (value.is_number_integer() && value.get<int>() >= 0 && value.get<int>() <= 2) message.priority_type = value.get<int>();
+        else r.tolerate("PRIORITY_TYPE", ".priority_type", "cần 0, 1 hoặc 2 (đang là " + value.dump() + "), dùng 0");
+    }
     message.message_id = r.text(data, "", "message_id", false);
     message.trigger = r.text(data, "", "trigger", false);
     if (data.contains("planned_at")) {  // Nới lỏng: sai thì bỏ, lập tuyến theo giờ server.

@@ -2,6 +2,7 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <map>
 
 #include "ktv/plan.hpp"
 
@@ -252,6 +253,61 @@ int main() {
         CHECK(task_rows[0]["insert_reason"] == "" && task_rows[1]["insert_reason"] == "SAME_ADDRESS");  // 7.20.3: chữ hoa
         CHECK(task_rows[0]["end_at"] == task_rows[1]["start_at"]);
         CHECK(task_rows[1]["travel_km_before"] == 0.0);  // km chỉ tính ở ca đầu của điểm dừng
+    }
+
+    {  // 7.23: chế độ sắp xếp priority_type ở gốc IN → echo ra data.priority_type; 2 = bộ tầng Tuyến (R2).
+        const auto with_mode = [&](json mode) {
+            json data = message();
+            if (!mode.is_null()) data["priority_type"] = mode;
+            errors.clear();
+            std::vector<ktv::Error> warnings;
+            ktv::Message parsed = ktv::parse_message(data, errors, &warnings);
+            CHECK(errors.empty());
+            ktv::PlanResult out = ktv::plan(parsed, ktv::default_rules(), server_now, "", true);
+            return std::make_pair(out, warnings);
+        };
+        auto [plain, w0] = with_mode(json());
+        CHECK(plain.response["data"]["priority_type"] == 0 && w0.empty());
+        auto [sla, w1] = with_mode(1);
+        CHECK(sla.response["data"]["priority_type"] == 1);
+        CHECK(sla.response["data"]["clusters"] == plain.response["data"]["clusters"]);  // 1 = cùng bộ tầng với 0
+        auto [route, w2] = with_mode(2);
+        CHECK(route.response["data"]["priority_type"] == 2);
+        // Bộ tầng Tuyến: KM nằm ở tầng 2 (SLA: tầng 3), LATE_CHECKIN vẫn tầng 1.
+        const json& tiers = route.response["data"]["score"]["tiers"];
+        CHECK(tiers[0]["rules"].contains("LATE_CHECKIN") && tiers[1]["rules"].contains("KM"));
+        CHECK(plain.response["data"]["score"]["tiers"][2]["rules"].contains("KM"));
+        auto [odd, w3] = with_mode("route");  // sai kiểu → 0 + cảnh báo
+        CHECK(odd.response["data"]["priority_type"] == 0 && w3.size() == 1 && w3[0].code == "PRIORITY_TYPE");
+        std::vector<ktv::Error> strict;
+        json bad = message();
+        bad["priority_type"] = 7;
+        ktv::parse_message(bad, strict);
+        CHECK(!strict.empty());
+        // rules.json: route_tiers đọc / in lại được.
+        const ktv::Rules loaded = ktv::rules_from_json(json::parse(R"({"route_tiers":[{"KM":1},{"LATE_CHECKIN":1}]})"));
+        CHECK(loaded.route_tiers.size() == 2 && loaded.route_tiers[0][0].first == ktv::KM);
+        CHECK(ktv::rules_to_json(ktv::default_rules()).contains("route_tiers"));
+    }
+    {  // 7.23: priority = 100 × (0,5·P + 0,3·S + 0,2·U).
+        json data = message();  // chạy 28/09 09:20: triển khai P3 hẹn 14:00 + SLA 120 → B 16:00 (còn 400′ > 240 → S = 0)
+        errors.clear();
+        const json out = ktv::plan(ktv::parse_message(data, errors), ktv::default_rules(), server_now, "").response;
+        std::map<long long, double> score;
+        for (const auto& cluster : out["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row.contains("priority")) score[row["task_id"]] = row["priority"].get<double>();
+        CHECK(score.at(5454541) == 25.0);  // P3: 100 × 0,5 × 0,5
+        // Hóa đơn P4 ca chèn, 28/09 → hạn 30/09 còn 2 ngày làm việc: U = (5 − 2) / 5 = 0,6 → 100 × (0,125 + 0,12) = 24,5.
+        CHECK(score.at(5454544) == 24.5);
+        json urgent = message();  // B còn 30′: hẹn 09:00 + SLA 50 → B 09:50, chạy 09:20 → S = 1 − 30/240 = 0,875
+        urgent["tasks"]["trien_khai"][0]["appointment"] = "2026-09-28 09:00:00";
+        urgent["tasks"]["trien_khai"][0]["sla"] = {{"sla_minutes", 50}, {"priority_in_day", 1}};
+        errors.clear();
+        const json u = ktv::plan(ktv::parse_message(urgent, errors), ktv::default_rules(), server_now, "").response;
+        for (const auto& cluster : u["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row.value("task_id", 0LL) == 5454541) CHECK(row["priority"] == 76.3);  // 100 × (0,5 + 0,2625)
     }
 
     if (failures) std::cerr << failures << " lỗi\n" << r.dump(2) << "\n";

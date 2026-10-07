@@ -108,6 +108,9 @@ struct Task {
 struct Message {
     std::string message_id, trigger;  // Vỏ Kafka (đề xuất), không bắt buộc.
     std::optional<Minutes> planned_at;  // Thời điểm tính tuyến; không có thì lấy giờ server.
+    // 7.23 [GIẢ ĐỊNH, chờ OA]: chế độ sắp xếp ở gốc IN, cùng tên/nghĩa data.priority_type của OUT (sheet 03):
+    // 0 mặc định · 1 SLA (cùng bộ tầng với 0) · 2 Tuyến (rules.route_tiers). Không gửi / sai → 0 + cảnh báo PRIORITY_TYPE.
+    int priority_type = 0;
     Staff staff;
     std::vector<Task> tasks;            // Gộp các nhóm, thứ tự trien_khai → bao_tri → thu_hoi → hoa_don → onsite → cscd.
 };

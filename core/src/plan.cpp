@@ -30,13 +30,31 @@ double round_to(double value, int digits) {
     return std::round(value * scale) / scale;
 }
 
+// 7.23: điểm ưu tiên 0–100 của một ca (sheet 03 `priority`: "từ rule tính ra điểm ưu tiên cho task"). Không phụ thuộc
+// thứ tự tuyến hay mode — chỉ nói ca quan trọng / gấp tới đâu tại lúc chạy:
+//   priority = 100 × (0,5·P + 0,3·S + 0,2·U)
+//   P = (5 − priority_in_day) / 4   (P1 = 1 … P4 = 0,25; không có = 0)
+//   S = 1 − min(1, phút còn tới hạn check-in B / 240)   (B đã qua = 1; không có B = 0)
+//   U = độ gấp ca chèn / K = max(0, K − ngày làm việc còn lại) / K   (ca chính / không có hạn = 0)
+// VD bảo trì P1 còn 30′ tới B → 100 × (0,5 + 0,3 × 0,875) = 76,3; thu bill P4 còn 1 ngày → 100 × (0,125 + 0,2 × 0,8) = 28,5.
+double priority_score(const Task& task, const TaskKind& kind, const Deadlines& d, Minutes now, const Rules& rules) {
+    const int level = task.priority_in_day;
+    const double P = level >= 1 && level <= 4 ? (5.0 - level) / 4 : 0;
+    const double S = d.due ? 1 - std::min(1.0, std::max<double>(0, static_cast<double>(*d.due - now)) / 240) : 0;
+    const double U = kind.extra && d.complete_by && rules.k_month_days > 0
+                         ? std::max(0, rules.k_month_days - workdays_until(now, *d.complete_by)) / static_cast<double>(rules.k_month_days)
+                         : 0;
+    return round_to(100 * (0.5 * P + 0.3 * S + 0.2 * U), 1);
+}
+
 // 7.20.2: một ca tồn không xếp hôm nay (workbook (5) sheet 03: entry_type DEFERRED, seq 0, at "", task_role inserted).
 // Cùng field với dòng TASK; giờ/SLA/chặng rỗng hoặc 0. reason: NEXT_DAY (hẹn ngày sau) / BEYOND_K (còn > K ngày).
-ojson deferred_row(const Task& task, const char* reason) {
+ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rules& rules) {
     const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
+    const double priority = priority_score(task, kind, resolve_deadlines(task, kind, now), now, rules);
     return {{"seq", 0}, {"entry_type", "DEFERRED"}, {"at", ""}, {"start_at", ""}, {"end_at", ""},
             {"task_id", task.task_id}, {"location", task.location}, {"latlng", latlng(*task.latlng, 6)},
-            {"task_role", "inserted"}, {"insert_reason", reason},
+            {"task_role", "inserted"}, {"priority", priority}, {"insert_reason", reason},
             {"task_group_id", task.task_group_id}, {"task_group_name", task.task_group_name},
             {"task_type_id", task.task_type_id}, {"task_type_name", task.task_type_name},
             {"task_sub_id", task.task_sub_id}, {"task_sub_name", task.task_sub_name},
@@ -283,9 +301,12 @@ ojson error_response(const std::string& statuscode, const std::string& text, con
             {"server_time", format_datetime(server_now)}, {"data", nullptr}};
 }
 
-PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, const std::string& osrm_url,
+PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_now, const std::string& osrm_url,
                 bool explain) {
     auto clock = std::chrono::steady_clock::now();
+    // 7.23: chế độ sắp xếp = bộ tầng rule. 0 mặc định / 1 SLA → tiers; 2 Tuyến → route_tiers (R2). Không sửa dp.
+    Rules rules = base_rules;
+    if (message.priority_type == 2) rules.tiers = base_rules.route_tiers;
     PlanResult result;
     const Staff& staff = message.staff;
     const Minutes now = message.planned_at.value_or(server_now);
@@ -353,7 +374,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         for (const auto& [task, reason] : deferred) spots.push_back({task, 0.0, 0.0});
         const ClusterSummary summary = summarize_clusters(spots, staff.plots, 1e9).front();  // một cụm duy nhất
         ojson schedule = ojson::array();
-        for (const auto& [task, reason] : deferred) schedule.push_back(deferred_row(*task, reason));
+        for (const auto& [task, reason] : deferred) schedule.push_back(deferred_row(*task, reason, now, rules));
         ojson clusters = ojson::array({{{"cluster_seg", 1}, {"cluster_code", summary.code}, {"name", summary.name},
                                         {"center", latlng(summary.center)}, {"radius_m", std::llround(summary.radius_km * 1000)},
                                         {"task_count", 0}, {"travel_km_inbound", 0.0}, {"travel_km_internal", 0.0},
@@ -368,7 +389,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
                          {"overload_minutes", 0}, {"generated_in_ms", ms}};
         result.response = {{"success", true}, {"statuscode", "200"}, {"message", ""}, {"trace_id", message.message_id},
                            {"server_time", format_datetime(server_now)},
-                           {"data", {{"staff_id", staff.staff_id}, {"priority_type", 0}, {"clusters", clusters}, {"metrics", metrics}}}};
+                           {"data", {{"staff_id", staff.staff_id}, {"priority_type", message.priority_type}, {"clusters", clusters}, {"metrics", metrics}}}};
         return result;
     }
     if (routed_stops.empty() || routed_stops.size() > 64) {
@@ -510,6 +531,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
                          // Workbook (1): vai trò ca (main = ca chính theo hẹn SLA, inserted = ca chèn) + lý do chèn
                          // (ca chèn cùng địa chỉ với ca khác → "SAME_ADDRESS" — chữ hoa theo workbook (5), 7.20.3; chưa có lý do khác → "").
                          {"task_role", kind.extra ? "inserted" : "main"},
+                         {"priority", priority_score(task, kind, d, now, rules)},  // 7.23
                          {"insert_reason", kind.extra && stop.tasks.size() > 1 ? "SAME_ADDRESS" : ""},
                          {"task_group_id", task.task_group_id},
                          {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
@@ -551,7 +573,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
         for (int c = 1; c < static_cast<int>(summaries.size()); ++c)
             if (distance_km(summaries[c].center, *task->latlng) < distance_km(summaries[nearest].center, *task->latlng))
                 nearest = c;
-        cluster_schedule[nearest].push_back(deferred_row(*task, reason));
+        cluster_schedule[nearest].push_back(deferred_row(*task, reason, now, rules));
     }
 
     ojson clusters = ojson::array();
@@ -592,7 +614,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
     metrics["generated_in_ms"] = ms;
 
     const bool estimated = !travel_error.empty();  // Sheet 07: bản đồ lỗi vẫn trả tuyến, mã 424.
-    ojson data = {{"staff_id", staff.staff_id}, {"priority_type", 0}, {"clusters", clusters}, {"metrics", metrics}};
+    ojson data = {{"staff_id", staff.staff_id}, {"priority_type", message.priority_type}, {"clusters", clusters}, {"metrics", metrics}};
     if (explain) {  // --explain: chi phí từng tầng/rule + vài phương án so sánh (không đổi thứ tự).
         const Explained chosen = explain_order(p, rules, solution.order);
         ojson tiers = ojson::array();
@@ -617,7 +639,7 @@ PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, 
                        {"message", estimated ? "Không lấy được dữ liệu bản đồ, khoảng cách là ước lượng đường chim bay (" + travel_error + ")" : ""},
                        {"trace_id", message.message_id},
                        {"server_time", format_datetime(server_now)},
-                       // priority_type (workbook (4)): 0 default · 1 SLA · 2 tuyến. Chưa có mode → luôn 0 (7.13).
+                       // priority_type (workbook (4)/(5)): 0 default · 1 SLA · 2 tuyến — echo mode của IN (7.23; trước luôn 0, 7.13).
                        {"data", std::move(data)}};
     return result;
 }

@@ -53,8 +53,11 @@ inline constexpr const char* kRuleCodes[RULE_COUNT] = {
 inline constexpr int kMaxTiers = 4;  // Tối đa 4 tầng.
 
 // Toàn bộ cấu hình routing. VD tiers = { {LATE_CHECKIN:1}, {LATE_COMPLETION:1, AFTER_SHIFT:1}, {KM:1, ...} }.
+using Tiers = std::vector<std::vector<std::pair<Rule, double>>>;  // Mỗi tầng: danh sách (rule, trọng số). Tầng 1 trước.
+
 struct Rules {
-    std::vector<std::vector<std::pair<Rule, double>>> tiers;  // Mỗi tầng: danh sách (rule, trọng số). Tầng 1 trước.
+    Tiers tiers;        // Mode SLA (priority_type 0 mặc định / 1 SLA).
+    Tiers route_tiers;  // 7.23 — mode Tuyến (priority_type 2), phương án R2: không làm THÊM ca trễ hẹn, rồi mới tới km.
     double priority_weight[5] = {1, 4, 3, 2, 1};  // [0] = việc không có ưu tiên; [1..4] = P1..P4.
     int max_exact_tasks = 12;      // Tới ngần này việc thì QHĐ ra thứ tự tốt nhất; nhiều hơn dùng tham lam (12 việc: chậm nhất ~0,1 s).
     int max_labels = 32;           // Mỗi trạng thái QHĐ giữ tối đa ngần này nhãn; vượt thì kết quả gần đúng.

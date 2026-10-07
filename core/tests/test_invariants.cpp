@@ -179,6 +179,8 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
             }
             CHECK(row.contains("entry_type") && !row.contains("type"));
             const std::string entry = row["entry_type"].get<std::string>();
+            if (entry == "TASK" || entry == "DEFERRED")  // 7.23: điểm ưu tiên 0–100
+                CHECK(row["priority"].is_number() && row["priority"].get<double>() >= 0 && row["priority"].get<double>() <= 100);
             if (entry == "DEFERRED") {  // 7.20.2: seq 0, không giờ, cuối schedule, không tính vào tổng
                 deferred_tail = true;
                 CHECK(row["seq"] == 0 && row["at"] == "" && row["start_at"] == "" && row["end_at"] == "");

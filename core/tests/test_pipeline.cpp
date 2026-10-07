@@ -245,7 +245,7 @@ int main() {
             for (auto it = ra.begin(); it != ra.end(); ++it) keys.push_back(it.key());
             const std::vector<std::string> expected = {
                 "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role",
-                "insert_reason", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
+                "priority", "insert_reason", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
                 "task_sub_name", "checkindate", "checkoutdate", "travel_minutes_before", "travel_km_before",
                 "handle_minutes", "projected_sla", "contract_id", "contract_no"};
             if (keys != expected) {

@@ -27,6 +27,14 @@ Rules default_rules() {
          {DEADLINE_URGENCY, 0.5},                  //   việc gấp để muộn 1 giờ ≈ 0,5 km (7.16.2)
          {FINISH, 0.01}},                          //   xong muộn 100 phút ≈ 1 km
     };
+    // 7.23 mode Tuyến (R2): tầng 1 giữ "không thêm ca trễ hẹn"; tầng 2 là quãng đường; SLA còn lại + ưu tiên xuống tầng 3.
+    // Đo 400 biến thể sample_in (chim bay): km −14%, số ca dự báo trễ không tăng (R1 thuần km: −29% km nhưng trễ +87%).
+    rules.route_tiers = {
+        {{LATE_CHECKIN, 1}},
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}},
+        {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1}, {LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5},
+         {FINISH, 0.01}},
+    };
     return rules;
 }
 
@@ -39,14 +47,15 @@ Rules rules_from_json(const nlohmann::json& data) {
         if (!data[key].is_number() || data[key].get<double>() < low) fail(std::string(key) + " cần số ≥ " + std::to_string(low));
         target = data[key].get<double>();
     };
-    if (data.contains("tiers")) {
-        const auto& tiers = data["tiers"];
-        if (!tiers.is_array() || tiers.empty() || tiers.size() > kMaxTiers) fail("tiers cần 1–4 tầng");
-        rules.tiers.clear();
+    auto read_tiers = [&](const char* key, Tiers& target) {
+        if (!data.contains(key)) return;
+        const auto& tiers = data[key];
+        if (!tiers.is_array() || tiers.empty() || tiers.size() > kMaxTiers) fail(std::string(key) + " cần 1–4 tầng");
+        target.clear();
         bool seen[RULE_COUNT] = {};
         for (const auto& tier : tiers) {
             if (!tier.is_object() || tier.empty()) fail("mỗi tầng cần object {mã rule: trọng số}");
-            auto& out = rules.tiers.emplace_back();
+            auto& out = target.emplace_back();
             for (auto it = tier.begin(); it != tier.end(); ++it) {
                 int rule = 0;
                 while (rule < RULE_COUNT && it.key() != kRuleCodes[rule]) ++rule;
@@ -57,7 +66,9 @@ Rules rules_from_json(const nlohmann::json& data) {
                 out.emplace_back(static_cast<Rule>(rule), it->get<double>());
             }
         }
-    }
+    };
+    read_tiers("tiers", rules.tiers);
+    read_tiers("route_tiers", rules.route_tiers);  // 7.23 mode Tuyến
     if (data.contains("priority_weights")) {
         const auto& weights = data["priority_weights"];
         if (!weights.is_object()) fail("priority_weights cần object {\"1\": 4, ...}");
@@ -120,14 +131,18 @@ Rules load_rules(const std::string& path) {
 }
 
 nlohmann::json rules_to_json(const Rules& rules) {
-    nlohmann::json tiers = nlohmann::json::array();
-    for (const auto& tier : rules.tiers) {
-        nlohmann::json out = nlohmann::json::object();
-        for (auto [rule, weight] : tier) out[kRuleCodes[rule]] = weight;
-        tiers.push_back(out);
-    }
+    auto tiers_json = [](const Tiers& source) {
+        nlohmann::json tiers = nlohmann::json::array();
+        for (const auto& tier : source) {
+            nlohmann::json out = nlohmann::json::object();
+            for (auto [rule, weight] : tier) out[kRuleCodes[rule]] = weight;
+            tiers.push_back(out);
+        }
+        return tiers;
+    };
     return {
-        {"tiers", tiers},
+        {"tiers", tiers_json(rules.tiers)},
+        {"route_tiers", tiers_json(rules.route_tiers)},
         {"priority_weights", {{"1", rules.priority_weight[1]}, {"2", rules.priority_weight[2]},
                               {"3", rules.priority_weight[3]}, {"4", rules.priority_weight[4]}}},
         {"default_priority_weight", rules.priority_weight[0]},
