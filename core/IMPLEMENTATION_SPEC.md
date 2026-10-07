@@ -1378,6 +1378,7 @@ dùng cache  ⇔  dấu vân tay trùng (cùng ngày, cùng ca, cùng GPS)
 
 ###### 7.20.3 — `SAME_ADDRESS` chữ hoa
 - `insert_reason` của ca chèn cùng địa chỉ: `"same_address"` → `"SAME_ADDRESS"` (sheet 03 bản (5)). Đổi `plan.cpp` + `test_plan`, review map nếu có hiển thị.
+- **Kết quả 7.20.3 (2026-10-07):** `plan.cpp` + `test_plan` + `STAGING_DATA_SPEC.md`; review map không hiển thị field này. Ghi chép các phase cũ (7.16.x) giữ chữ thường như lúc làm. `ctest` 18/18.
 
 ###### 7.20.4 — Giờ ca cứng (`OUT_OF_HOURS` / `NO_CAPACITY`) — **chưa code, trình bày trước**
 - Sheet 01 (5): AI không xếp việc vượt `available`. Hiện QHĐ xếp hết, phần dư báo `overload_minutes` (rule `AFTER_SHIFT` là chi phí, không phải ràng buộc).
@@ -1386,6 +1387,7 @@ dùng cache  ⇔  dấu vân tay trùng (cùng ngày, cùng ca, cùng GPS)
 ###### 7.20.5 — Log `unplaced` + invariants phủ 7.18 (từ review 7.17 → 7.19)
 - `kafka/main.cpp:343`: log `tasks.routed` đang lấy `stats.candidates` (trước lọc K / ngày sau) → đổi sang `result.routed`; thêm đếm theo lý do (`next_day`, `beyond_k`) — ca không xếp nhìn được trên log production.
 - `test_invariants`: kiểm `unplaced ⊆ beyond_k` lỗi thời từ 7.18 (chỉ chưa đỏ vì generator luôn hẹn cùng ngày) → sửa điều kiện + generator sinh ~10% ca hẹn mai/hôm qua.
+- **Kết quả 7.20.5 (2026-10-07):** phần invariants đã làm cùng 7.20.2. Log worker: `tasks.routed` = số dòng TASK trong OUT (trước: `stats.candidates`, chưa trừ ca ngày sau / lọc K); thêm `tasks.deferred` = đếm dòng DEFERRED theo `insert_reason` (VD `{"NEXT_DAY":1,"BEYOND_K":2}`) và `change_id`. Trả cache (7.20.1b) vẫn điền `stats` (gọi `normalize_worklist`, không gọi `plan()`) để log đủ số đếm. `README.md` bảng log. Test: `test_publish` kiểm `stats` khi trả cache. Log worker **chưa chạy thử với Kafka thật** (không dựng broker) — chỉ build + test đơn vị.
 
 **Câu hỏi gửi OA/BE** (ghi `DATA_QUESTIONS.md` khi làm): JSON mẫu (5) hỏng ngoặc + vẫn `type`; `change_id`/`trace_id` có đúng nghĩa cache gateway không; danh sách đầy đủ `insert_reason`; `NO_CAPACITY` khác `OUT_OF_HOURS`.
 

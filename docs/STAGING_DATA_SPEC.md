@@ -92,7 +92,7 @@ Quy ước retry/DLQ và format lỗi cuối cùng sẽ chốt cùng Infra. Hai 
 ## 4. Output mới cần biết (sheet 03 bản mới)
 
 `type` → `entry_type`. Thêm `task_role` (main/inserted), `priority` (điểm rule),
-`insert_reason` (same_address...). Dùng cho Rule 5 chèn + giải thích.
+`insert_reason` (`SAME_ADDRESS`, `NEXT_DAY`, `BEYOND_K`… — workbook (5)). Dùng cho Rule 5 chèn + giải thích.
 
 ## 5. Giả định prototype (không chặn refactor)
 

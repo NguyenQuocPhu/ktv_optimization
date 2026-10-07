@@ -223,7 +223,7 @@ có giây), `event`.
 
 | `event` | Khi nào | Trường chính |
 |---|---|---|
-| `message` (worker) | Mỗi message IN | `topic` `partition` `offset` `key` `headers` `message_id` `run_code` `staff_id` `statuscode` `message` `errors` (đầy đủ, response chỉ ghi 3 lỗi đầu) `warnings` `tasks` (`received`/`routed`/`skipped_status`/`current`/`missing_location`) `sent_to` (`"kafka"` khi thật sự đẩy OUT, không thì `null`) `stored` (route ghi Redis) `used_mobix_loc` `generated_in_ms` `total_ms`, `payload` (theo `--log-payload`) |
+| `message` (worker) | Mỗi message IN | `topic` `partition` `offset` `key` `headers` `message_id` `run_code` `staff_id` `statuscode` `message` `errors` (đầy đủ, response chỉ ghi 3 lỗi đầu) `warnings` `tasks` (`received`/`routed` = số dòng TASK/`deferred` = số dòng DEFERRED theo lý do, VD `{"NEXT_DAY":1}`/`skipped_status`/`current`/`missing_location`) `change_id` (`"no"` = trả cache) `sent_to` (`"kafka"` khi thật sự đẩy OUT, không thì `null`) `stored` (route ghi Redis) `used_mobix_loc` `generated_in_ms` `total_ms`, `payload` (theo `--log-payload`) |
 | `http` (gateway) | Mỗi request `/api/` (không log `/healthz`, `/readyz`, không log query) | `method` `route` (`route`/`replan`) `staff_id` `http_status` `cache` (HIT/MISS) `statuscode` `message` `total_ms` |
 | `start` / `stop` | Khởi động / dừng | cấu hình (không password) / số message, lý do |
 | `fatal` | Lỗi làm tiến trình thoát | `error`, `exit_code` |
