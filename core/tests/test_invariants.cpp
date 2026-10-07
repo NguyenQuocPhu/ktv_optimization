@@ -261,6 +261,7 @@ int main(int argc, char** argv) {
         std::mt19937 rng(20260910);
         for (long long seed = 0; seed < 3000; ++seed) {
             json msg = random_message(rng, kinds, seed);
+            msg["priority_type"] = seed % 3;  // 7.26: cả 3 mode — 0 Kết nối · 1 SLA · 2 Tuyến
             std::vector<ktv::Error> errors;
             ktv::Message message = ktv::parse_message(msg, errors);
             CHECK(errors.empty());
@@ -271,11 +272,12 @@ int main(int argc, char** argv) {
             if (result.response["statuscode"] == "200" || result.response["statuscode"] == "424")
                 CHECK(result.routed == static_cast<int>(worklist.candidates.size()) - static_cast<int>(result.unplaced.size()));
             CHECK(result.excluded == worklist.stats.excluded_missing_location);
-            if (seed % 3 == 0) {  // 7.24: chèn ca tuỳ chọn (ngoài K) không làm tầng 1 / 2 tệ đi; SPARE_TIME chỉ là ca ngoài K
+            if (seed % 3 == 1) {  // 7.24 (mode SLA): chèn ca tuỳ chọn (ngoài K) không làm tầng 1 / 2 tệ đi; SPARE_TIME chỉ là ca ngoài K
                 ktv::Rules off = rules;
-                for (auto& tier : off.tiers)
-                    for (auto& [rule, weight] : tier)
-                        if (rule == ktv::SKIP_OPTIONAL) weight = 0;
+                for (ktv::Tiers* tiers : {&off.tiers, &off.route_tiers, &off.mix_tiers})
+                    for (auto& tier : *tiers)
+                        for (auto& [rule, weight] : tier)
+                            if (rule == ktv::SKIP_OPTIONAL) weight = 0;
                 const ojson with = ktv::plan(message, rules, now, "", true).response;
                 const ojson without = ktv::plan(message, off, now, "", true).response;
                 if (with["statuscode"] == "200" && without["statuscode"] == "200" && with["data"].contains("score") &&

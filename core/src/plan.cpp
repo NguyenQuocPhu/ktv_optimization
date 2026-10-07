@@ -304,8 +304,10 @@ ojson error_response(const std::string& statuscode, const std::string& text, con
 PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_now, const std::string& osrm_url,
                 bool explain) {
     auto clock = std::chrono::steady_clock::now();
-    // 7.23: chế độ sắp xếp = bộ tầng rule. 0 mặc định / 1 SLA → tiers; 2 Tuyến → route_tiers (R2). Không sửa dp.
+    // Chế độ sắp xếp = bộ tầng rule (không sửa dp): 0 mặc định = Kết nối 70/30 → mix_tiers (7.26);
+    // 1 SLA → tiers; 2 Tuyến → route_tiers (km tầng 1).
     Rules rules = base_rules;
+    if (message.priority_type == 0) rules.tiers = base_rules.mix_tiers;
     if (message.priority_type == 2) rules.tiers = base_rules.route_tiers;
     PlanResult result;
     const Staff& staff = message.staff;
@@ -756,7 +758,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                        {"message", estimated ? "Không lấy được dữ liệu bản đồ, khoảng cách là ước lượng đường chim bay (" + travel_error + ")" : ""},
                        {"trace_id", message.message_id},
                        {"server_time", format_datetime(server_now)},
-                       // priority_type (workbook (4)/(5)): 0 default · 1 SLA · 2 tuyến — echo mode của IN (7.23; trước luôn 0, 7.13).
+                       // priority_type (workbook (4)/(5)): 0 default (Kết nối 70/30, 7.26) · 1 SLA · 2 tuyến — echo mode của IN (7.23).
                        {"data", std::move(data)}};
     return result;
 }

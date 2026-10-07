@@ -18,6 +18,7 @@
 //   Rule, kRuleCodes – 9 rule mềm và tên chữ của chúng (dùng trong file JSON)
 //   Rules            – toàn bộ cấu hình: các tầng, trọng số ưu tiên P1–P4, ngưỡng, giả định
 //   default_rules, load_rules, rules_from_json, rules_to_json – tạo / đọc / ghi Rules
+//   mix_tiers_from   – 7.26: sinh bộ tầng mode Kết nối từ tỷ trọng SLA + tỷ giá ca trễ ↔ km
 //
 // Ẩn trong rules.cpp: giá trị mặc định cụ thể, kiểm tra file JSON hợp lệ.
 // Phụ thuộc: không module nào.
@@ -57,8 +58,13 @@ inline constexpr int kMaxTiers = 4;  // Tối đa 4 tầng.
 using Tiers = std::vector<std::vector<std::pair<Rule, double>>>;  // Mỗi tầng: danh sách (rule, trọng số). Tầng 1 trước.
 
 struct Rules {
-    Tiers tiers;        // Mode SLA (priority_type 0 mặc định / 1 SLA).
-    Tiers route_tiers;  // 7.23 — mode Tuyến (priority_type 2), phương án R2: không làm THÊM ca trễ hẹn, rồi mới tới km.
+    Tiers tiers;        // Mode SLA (priority_type 1).
+    Tiers route_tiers;  // Mode Tuyến 100% (priority_type 2): km + trễ hẹn trọng số nhỏ ở tầng 1, SLA còn lại xuống dưới (7.26; 7.23 từng là R2).
+    // 7.26 — mode Kết nối (priority_type 0, mặc định): mix_sla_share SLA + phần còn lại Tuyến, gom chung tầng 1.
+    // Mặc định sinh từ 2 tham số dưới (mix_tiers_from); rules.json có "mix_tiers" thì dùng nguyên văn.
+    Tiers mix_tiers;
+    double mix_sla_share = 0.7;  // Tỷ trọng SLA (0 ≤ x < 1): 0,7 = 70% SLA · 30% Tuyến.
+    double mix_breach_km = 5;    // Q: 1 ca trễ hạn / quá giờ ≈ Q km khi trộn 50/50. [GIẢ ĐỊNH, chọn theo bảng quét 7.26]
     double priority_weight[5] = {1, 4, 3, 2, 1};  // [0] = việc không có ưu tiên; [1..4] = P1..P4.
     int max_exact_tasks = 12;      // Tới ngần này việc thì QHĐ ra thứ tự tốt nhất; nhiều hơn dùng tham lam (12 việc: chậm nhất ~0,1 s).
     int max_labels = 32;           // Mỗi trạng thái QHĐ giữ tối đa ngần này nhãn; vượt thì kết quả gần đúng.
@@ -80,6 +86,9 @@ struct Rules {
 };
 
 Rules default_rules();                              // Bộ mặc định.
+// 7.26: bộ tầng Kết nối. Tầng 1 = km + LATE_CHECKIN / LATE_COMPLETION / AFTER_SHIFT trọng số share/(1 − share) × breach_km
+// (70/30, Q = 5 → tránh 1 ca trễ nếu đi thêm < 11,7 km); tầng 2 phần mềm còn lại (phút trễ, ưu tiên, độ gấp, giờ xong).
+Tiers mix_tiers_from(double sla_share, double breach_km);
 Rules rules_from_json(const nlohmann::json& data);  // Field thiếu lấy mặc định; sai thì ném std::runtime_error.
 Rules load_rules(const std::string& path);          // Đọc file JSON.
 nlohmann::json rules_to_json(const Rules& rules);   // Ghi ra JSON (lệnh print-rules).

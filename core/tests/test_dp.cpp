@@ -295,6 +295,43 @@ int main() {
         }
     }
 
+    {  // 7.26 ba mode trên một thang: tránh 1 ca trễ hạn bằng cách đi thêm 10 km?
+        // Thứ tự [0,1] đúng hạn nhưng đi 12 km; [1,0] chỉ 2 km nhưng ca 0 xong sau hạn. (1 km = 1 phút)
+        Problem p;
+        const double d = 10;
+        p.travel.km = {{0, 1 + d, 1}, {1 + d, 0, 1}, {1, 1, 0}};
+        p.travel.minutes = p.travel.km;
+        p.service = {10, 10};
+        p.opens = p.due = {kNone, kNone};
+        p.complete_by = {11 + d + 0.5, kNone};
+        p.weight = {1, 1};
+        p.urgency = {0, 0};
+        p.same_area = {0, 0};
+        p.optional = {0, 0};
+        p.shift_end = 600;
+        Rules sla = default_rules(), route = default_rules(), mix = default_rules(), cheap = default_rules();
+        route.tiers = route.route_tiers;
+        mix.tiers = mix.mix_tiers;                     // Q = 5: ca trễ ≈ 11,7 km > 10,5 → đi vòng
+        cheap.tiers = mix_tiers_from(0.7, 3);          // Q = 3: ca trễ ≈ 7 km < 10,5 → chịu trễ
+        CHECK((solve(p, sla).order == std::vector<int>{0, 1}));
+        CHECK((solve(p, route).order == std::vector<int>{1, 0}));
+        CHECK((solve(p, mix).order == std::vector<int>{0, 1}));
+        CHECK((solve(p, cheap).order == std::vector<int>{1, 0}));
+        // Trễ HẸN check-in cũng vào cán cân (yêu cầu data): ca 0 hẹn, mở cửa ngay, hạn B = 11,5 + d.
+        p.complete_by = {kNone, kNone};
+        p.opens = {0, kNone};
+        p.due = {11 + d + 0.5 - 10, kNone};  // check-in muộn nhất = xong muộn nhất − 10 phút làm
+        CHECK((solve(p, sla).order == std::vector<int>{0, 1}));
+        CHECK((solve(p, route).order == std::vector<int>{1, 0}));
+        CHECK((solve(p, mix).order == std::vector<int>{0, 1}));
+        CHECK((solve(p, cheap).order == std::vector<int>{1, 0}));
+        // Tuyến: 2 thứ tự lệch 0,5 km → tránh trễ hẹn (tầng 1, ≈ 1 km) thắng; lệch 10 km thì km thắng (đã kiểm trên).
+        p.travel.km = {{0, 2.5, 2}, {2.5, 0, 30}, {2, 30, 0}};
+        p.travel.minutes = p.travel.km;
+        p.due = {5, kNone};  // ca 0 phải đi trước, đi sau thì check-in 2 + 10 + 30 = 42 > 5
+        CHECK((solve(p, route).order == std::vector<int>{0, 1}));
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_dp: OK (" << checked << " bài so với vét cạn)\n";
     return failures != 0;

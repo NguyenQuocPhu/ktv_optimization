@@ -48,6 +48,7 @@ int main() {
     std::vector<ktv::Error> errors;
     ktv::Message parsed = ktv::parse_message(message(), errors);
     CHECK(errors.empty());
+    parsed.priority_type = 1;  // các kiểm tra bố cục dưới viết cho mode SLA (từ 7.26 mặc định 0 là Kết nối)
     ktv::Minutes server_now = *ktv::parse_datetime("2026-09-28 09:20:05");
     ktv::PlanResult result = ktv::plan(parsed, ktv::default_rules(), server_now);
     const auto& r = result.response;
@@ -76,6 +77,7 @@ int main() {
     // Tính lại lúc 14:10 (đã qua giờ chốt nghỉ 12:45): không còn dòng nghỉ.
     json late = message();
     late["planned_at"] = "2026-09-28 14:10:00";
+    late["priority_type"] = 1;
     errors.clear();
     ktv::PlanResult after = ktv::plan(ktv::parse_message(late, errors), ktv::default_rules(), server_now);
     CHECK(after.response["data"]["metrics"]["break_minutes"] == 0);
@@ -122,6 +124,7 @@ int main() {
     early["planned_at"] = "2026-09-10 09:20:00";
     early["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 14:00:00";
     early["tasks"]["hoa_don"][0]["latlng"] = "21.1000,105.9000";
+    early["priority_type"] = 1;  // chỉ số tầng [2] dưới là bố cục mode SLA (mặc định Kết nối chỉ có 2 tầng, 7.26)
     errors.clear();
     ktv::PlanResult k_filtered = ktv::plan(ktv::parse_message(early, errors), ktv::default_rules(), server_now, "", true);
     CHECK(errors.empty());
@@ -159,9 +162,10 @@ int main() {
         CHECK(spare_rows == 1);
         // Trọng số SKIP_OPTIONAL = 0 → tắt điều kiện 3: ca ngoài K lại thành DEFERRED như trước 7.24.
         ktv::Rules off = ktv::default_rules();
-        for (auto& tier : off.tiers)
-            for (auto& [rule, weight] : tier)
-                if (rule == ktv::SKIP_OPTIONAL) weight = 0;
+        for (ktv::Tiers* tiers : {&off.tiers, &off.route_tiers, &off.mix_tiers})
+            for (auto& tier : *tiers)
+                for (auto& [rule, weight] : tier)
+                    if (rule == ktv::SKIP_OPTIONAL) weight = 0;
         errors.clear();
         CHECK(ktv::plan(ktv::parse_message(near, errors), off, server_now, "").unplaced.size() == 1);
         // Ca gần nhưng không kịp xong trong ca (ca hết 10:00) → không chèn (ràng buộc cứng của ca tuỳ chọn).
@@ -293,7 +297,7 @@ int main() {
         CHECK(task_rows[1]["travel_km_before"] == 0.0);  // km chỉ tính ở ca đầu của điểm dừng
     }
 
-    {  // 7.23: chế độ sắp xếp priority_type ở gốc IN → echo ra data.priority_type; 2 = bộ tầng Tuyến (R2).
+    {  // 7.23: chế độ sắp xếp priority_type ở gốc IN → echo ra data.priority_type; 2 = bộ tầng Tuyến (km tầng 1, 7.26).
         const auto with_mode = [&](json mode) {
             json data = message();
             if (!mode.is_null()) data["priority_type"] = mode;
@@ -308,13 +312,23 @@ int main() {
         CHECK(plain.response["data"]["priority_type"] == 0 && w0.empty());
         auto [sla, w1] = with_mode(1);
         CHECK(sla.response["data"]["priority_type"] == 1);
-        CHECK(sla.response["data"]["clusters"] == plain.response["data"]["clusters"]);  // 1 = cùng bộ tầng với 0
         auto [route, w2] = with_mode(2);
         CHECK(route.response["data"]["priority_type"] == 2);
-        // Bộ tầng Tuyến: KM nằm ở tầng 2 (SLA: tầng 3), LATE_CHECKIN vẫn tầng 1.
+        // Bộ tầng Tuyến 100%: KM + LATE_CHECKIN (trọng số 1) tầng 1, LATE_COMPLETION tầng 2 (SLA: KM tầng 3).
         const json& tiers = route.response["data"]["score"]["tiers"];
-        CHECK(tiers[0]["rules"].contains("LATE_CHECKIN") && tiers[1]["rules"].contains("KM"));
-        CHECK(plain.response["data"]["score"]["tiers"][2]["rules"].contains("KM"));
+        CHECK(tiers[0]["rules"].contains("KM") && tiers[0]["rules"].contains("LATE_CHECKIN") &&
+              tiers[1]["rules"].contains("LATE_COMPLETION"));
+        CHECK(sla.response["data"]["score"]["tiers"][2]["rules"].contains("KM"));
+        // 7.26 mặc định 0 = Kết nối: KM + LATE_CHECKIN / LATE_COMPLETION / AFTER_SHIFT chung tầng 1, ca trễ ≈ 0,7/0,3 × Q km.
+        const json& mix = plain.response["data"]["score"]["tiers"];
+        CHECK(mix[0]["rules"].contains("KM") && mix[0]["rules"].contains("LATE_CHECKIN") &&
+              mix[0]["rules"].contains("LATE_COMPLETION") && mix[0]["rules"].contains("AFTER_SHIFT"));
+        const ktv::Rules base = ktv::default_rules();
+        int weighted = 0;
+        for (auto [rule, weight] : base.mix_tiers[0])
+            if (rule == ktv::LATE_CHECKIN || rule == ktv::LATE_COMPLETION || rule == ktv::AFTER_SHIFT)
+                weighted += std::abs(weight - 0.7 / 0.3 * base.mix_breach_km) < 1e-9;
+        CHECK(weighted == 3);
         auto [odd, w3] = with_mode("route");  // sai kiểu → 0 + cảnh báo
         CHECK(odd.response["data"]["priority_type"] == 0 && w3.size() == 1 && w3[0].code == "PRIORITY_TYPE");
         std::vector<ktv::Error> strict;
@@ -326,6 +340,20 @@ int main() {
         const ktv::Rules loaded = ktv::rules_from_json(json::parse(R"({"route_tiers":[{"KM":1},{"LATE_CHECKIN":1}]})"));
         CHECK(loaded.route_tiers.size() == 2 && loaded.route_tiers[0][0].first == ktv::KM);
         CHECK(ktv::rules_to_json(ktv::default_rules()).contains("route_tiers"));
+        // 7.26: mix sinh lại từ mix_sla_share / mix_breach_km; "mix_tiers" ghi rõ thì thắng; share = 1 bị từ chối.
+        const ktv::Rules half = ktv::rules_from_json(json::parse(R"({"mix_sla_share":0.5,"mix_breach_km":8})"));
+        for (auto [rule, weight] : half.mix_tiers[0])
+            if (rule == ktv::AFTER_SHIFT) CHECK(std::abs(weight - 8) < 1e-9);
+        const ktv::Rules given = ktv::rules_from_json(json::parse(R"({"mix_breach_km":8,"mix_tiers":[{"KM":1}]})"));
+        CHECK(given.mix_tiers.size() == 1);
+        bool rejected = false;
+        try {
+            ktv::rules_from_json(json::parse(R"({"mix_sla_share":1})"));
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        CHECK(rejected);
+        CHECK(ktv::rules_to_json(ktv::default_rules()).contains("mix_tiers"));
     }
     {  // 7.23: priority = 100 × (0,5·P + 0,3·S + 0,2·U).
         json data = message();  // chạy 28/09 09:20: triển khai P3 hẹn 14:00 + SLA 120 → B 16:00 (còn 400′ > 240 → S = 0)

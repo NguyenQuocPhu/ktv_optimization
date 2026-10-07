@@ -28,15 +28,27 @@ Rules default_rules() {
          {FINISH, 0.01},                           //   xong muộn 100 phút ≈ 1 km
          {SKIP_OPTIONAL, 2}},                      //   7.24: bỏ 1 ca tuỳ chọn ≈ 2 km — chèn khi tốn thêm < 2 [GIẢ ĐỊNH, BR-16]
     };
-    // 7.23 mode Tuyến (R2): tầng 1 giữ "không thêm ca trễ hẹn"; tầng 2 là quãng đường; SLA còn lại + ưu tiên xuống tầng 3.
-    // Đo 400 biến thể sample_in (chim bay): km −14%, số ca dự báo trễ không tăng (R1 thuần km: −29% km nhưng trễ +87%).
+    // Mode Tuyến 100% (7.26, yêu cầu data — thay R2 của 7.23): quãng đường lên tầng 1, kèm trễ hẹn trọng số nhỏ
+    // (1 ca trễ hẹn ≈ 1 km × trọng số ưu tiên: P4 1 km … P1 4 km) để phân xử các tuyến dài gần bằng nhau.
+    // Đo 400 biến thể sample_in (chim bay): km −23% so SLA, trễ hẹn +30% (trễ hẹn ở tầng 2: km −25%, trễ hẹn +69%).
     rules.route_tiers = {
-        {{LATE_CHECKIN, 1}},
-        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 2}},
-        {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1}, {LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5},
-         {FINISH, 0.01}},
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 2}, {LATE_CHECKIN, 1}},
+        {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1}},
+        {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},
     };
+    rules.mix_tiers = mix_tiers_from(rules.mix_sla_share, rules.mix_breach_km);
     return rules;
+}
+
+Tiers mix_tiers_from(double sla_share, double breach_km) {
+    // Tầng 1 = share × SLA + (1 − share) × Tuyến, quy về km: mỗi ca trễ hẹn (× trọng số ưu tiên) / trễ hạn / quá giờ
+    // ≈ share/(1 − share) × breach_km km. Không còn tầng "đúng hẹn tuyệt đối": đủ km thì chịu trễ (yêu cầu data).
+    const double breach = sla_share / (1 - sla_share) * breach_km;
+    return {
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 2},
+         {LATE_CHECKIN, breach}, {LATE_COMPLETION, breach}, {AFTER_SHIFT, breach}},
+        {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},
+    };
 }
 
 Rules rules_from_json(const nlohmann::json& data) {
@@ -70,6 +82,11 @@ Rules rules_from_json(const nlohmann::json& data) {
     };
     read_tiers("tiers", rules.tiers);
     read_tiers("route_tiers", rules.route_tiers);  // 7.23 mode Tuyến
+    number("mix_sla_share", rules.mix_sla_share, 0);  // 7.26 mode Kết nối
+    if (rules.mix_sla_share >= 1) fail("mix_sla_share cần trong [0, 1) — 100% SLA là priority_type 1");
+    number("mix_breach_km", rules.mix_breach_km, 0);
+    rules.mix_tiers = mix_tiers_from(rules.mix_sla_share, rules.mix_breach_km);
+    read_tiers("mix_tiers", rules.mix_tiers);  // ghi rõ trong rules.json thì thắng 2 tham số trên
     if (data.contains("priority_weights")) {
         const auto& weights = data["priority_weights"];
         if (!weights.is_object()) fail("priority_weights cần object {\"1\": 4, ...}");
@@ -144,6 +161,9 @@ nlohmann::json rules_to_json(const Rules& rules) {
     return {
         {"tiers", tiers_json(rules.tiers)},
         {"route_tiers", tiers_json(rules.route_tiers)},
+        {"mix_sla_share", rules.mix_sla_share},
+        {"mix_breach_km", rules.mix_breach_km},
+        {"mix_tiers", tiers_json(rules.mix_tiers)},
         {"priority_weights", {{"1", rules.priority_weight[1]}, {"2", rules.priority_weight[2]},
                               {"3", rules.priority_weight[3]}, {"4", rules.priority_weight[4]}}},
         {"default_priority_weight", rules.priority_weight[0]},

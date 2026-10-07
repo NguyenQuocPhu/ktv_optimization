@@ -676,6 +676,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.23 ✅ | Hai chế độ sắp xếp qua `priority_type` ở gốc IN (0/1 SLA = bộ tầng hiện tại, 2 Tuyến = R2) + điểm `priority` 0–100 từng ca — chi tiết bên dưới | IN `priority_type: 2` → OUT `data.priority_type: 2`, KM lên tầng 2; mọi dòng TASK/DEFERRED có `priority` |
 | 7.24 ✅ | Điều kiện 3 catalogue (ca thu bill / thu hồi ngoài K vẫn chèn khi KTV có khoảng trống thật): QHĐ có **ca tuỳ chọn** + rule `SKIP_OPTIONAL` — chi tiết bên dưới | ca ngoài K gần tuyến lên tuyến `SPARE_TIME`, số ca trễ không tăng; không có ca ngoài K → như cũ |
 | 7.25 ✅ | Định mức thời gian xử lý (khi input bỏ trống `handle_minutes`) theo TGXL chuẩn catalogue ISC sheet 5 — chi tiết bên dưới | 7 loại đổi số; 7.22 (việc đang làm còn ½ định mức) đổi theo |
+| 7.26 ✅ | 3 mode theo yêu cầu data: **0 mặc định Kết nối 70/30** (SLA + km chung tầng 1 có trọng số), 1 SLA 100%, 2 Tuyến 100% (km + trễ hẹn trọng số 1 ở tầng 1, thay R2) — chi tiết bên dưới | IN không gửi / 0 → `mix_tiers`, 1 ca trễ ≈ 11,7 km; 2 → km −23% so SLA, trễ hẹn +30% |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1431,7 +1432,7 @@ Nghiệp vụ thực tế (người dùng): KTV off **vẫn có thể có việc
 ##### 7.23 — Chế độ sắp xếp SLA / Tuyến + điểm `priority` (người dùng chốt 2026-10-07)
 
 **Bối cảnh.** Workbook (5) sheet 03 OUT có `data.priority_type` (0 default · 1 SLA · 2 Tuyến) nhưng IN **không có field mode**; code luôn trả 0 (7.13). Catalogue ISC: `optMode` mix (mặc định, 70% SLA + 30% quãng đường) · sla · route; trigger **E-10 "KTV đổi chế độ tối ưu"** (đồng bộ FE → BE → OA → AI), E-01 đầu ngày luôn mặc định. Sheet 03 `priority` (float) "từ rule tính ra điểm ưu tiên cho task" — chưa phát.
-**Người dùng chốt:** làm sẵn 2 mode (khi nào OA bật chưa rõ); mode Tuyến dùng **R2**; **không làm mix**; công thức `priority` như đề xuất.
+**Người dùng chốt:** làm sẵn 2 mode (khi nào OA bật chưa rõ); mode Tuyến dùng **R2**; **không làm mix**; công thức `priority` như đề xuất. *(7.26 thay: 3 mode theo yêu cầu data, Tuyến = km tầng 1, mặc định = Kết nối 70/30.)*
 
 **Thiết kế — mode = bộ tầng rule, không sửa `dp.cpp`:** QHĐ so tuyến theo từng tầng (tầng trên thắng thì dừng); mỗi mode chỉ là một bộ tầng.
 
@@ -1508,6 +1509,44 @@ Số ca dự báo trễ **không đổi ở mọi mức** (đúng thiết kế);
 
 Chỉ có hiệu lực khi input bỏ trống / 0 `handle_minutes` (sheet 02: "server dùng định mức theo task_type_id"), và kéo theo 7.22 (việc đang làm còn ½ định mức), dòng `DEFERRED` `handle_minutes`. Test: `test_api` khoá 11 loại theo ISC (fail 7 kiểm trên số cũ); các fixture khác gửi sẵn `handle_minutes` nên không đổi. `ctest` 18/18.
 
+##### 7.26 — 3 mode theo yêu cầu data: Kết nối 70/30 (mặc định) · SLA 100% · Tuyến 100% (người dùng chốt 2026-10-07)
+
+**Bối cảnh.** Catalogue ISC: `optMode` mix 70% SLA + 30% quãng đường (mặc định) · sla · route. 7.23 làm 2 mode (0 = 1 = SLA, 2 = R2 giữ "không thêm ca trễ hẹn" ở tầng 1). **Người dùng chốt (chiều theo yêu cầu data, hiểu đúng nghĩa đen):** `priority_type` **0 mặc định = Kết nối 70/30**, 1 = SLA 100% (SLA ở tầng 1–2 như cũ), 2 = Tuyến 100% (**quãng đường lên tầng 1**, bỏ R2; sau đó người dùng bổ sung: kèm `LATE_CHECKIN` trọng số nhỏ ở tầng 1 vì hai tuyến dài *đúng* bằng nhau hiếm khi xảy ra nên tầng 2 gần như không bao giờ được xét); Kết nối = **SLA và quãng đường cùng lên tầng 1 có trọng số** — chấp nhận tuyến có thể không giữ SLA. Không thêm mã mới (workbook (5) chỉ có 0/1/2).
+
+> **Quyết định của Data/PO:** 3 mode đúng như trên là yêu cầu của bên Data/PO. **Mode 100% Tuyến chủ ý hi sinh SLA** để lấy quãng đường (trễ hẹn +30%, quá giờ +110% so mode SLA trên bộ mẫu); mode Kết nối cũng có thể chịu trễ khi đổi được đủ km. Đây là hành vi mong muốn, không phải lỗi.
+
+**Thiết kế — vẫn là bộ tầng rule, không sửa `dp.cpp`.** Tầng xét tuần tự (tầng trên thắng thì dừng), nên trộn = đưa SLA và km vào **cùng một tầng** với tỷ giá Q (1 ca trễ ≈ Q km khi trộn 50/50):
+
+| Tầng | SLA (1) | Tuyến (2) | Kết nối (0, mặc định) |
+|---|---|---|---|
+| 1 | `LATE_CHECKIN` | `KM` 1 + `TRAVEL_MINUTES` 0,05 + `AREA_REENTRY` 2 + `SKIP_OPTIONAL` 2 + **`LATE_CHECKIN` 1** | `KM` 1 + `TRAVEL_MINUTES` 0,05 + `AREA_REENTRY` 2 + `SKIP_OPTIONAL` 2 + `LATE_CHECKIN`, `LATE_COMPLETION`, `AFTER_SHIFT` trọng số **0,7/0,3 × Q = 11,67** |
+| 2 | `LATE_COMPLETION`, `AFTER_SHIFT` | `LATE_COMPLETION`, `AFTER_SHIFT` | `LATE_MINUTES` 0,1, `PRIORITY_DELAY` 0,5, `DEADLINE_URGENCY` 0,5, `FINISH` 0,01 |
+| 3 | km + phần mềm | `LATE_MINUTES`, `PRIORITY_DELAY`, `DEADLINE_URGENCY`, `FINISH` | — |
+
+
+Kết nối: đi thêm tối đa ~11,7 km để tránh 1 ca trễ hạn / quá giờ; ca trễ **hẹn** nhân thêm trọng số ưu tiên của ca (`LATE_CHECKIN` = P1 4 · P2 3 · P3 2 · P4 / không có 1) → ca P1 trễ hẹn ≈ 46,7 km. Hai đầu thang: share → 1 tiến về SLA, share = 0 = Tuyến tầng 1 (khác bộ Tuyến ở thứ tự các tầng dưới). `rules.json`: `mix_sla_share` (0,7; cần [0, 1)), `mix_breach_km` (Q = 5) → sinh `mix_tiers`; ghi `mix_tiers` nguyên văn thì thắng 2 tham số; `route_tiers` sửa được như 7.23. `SKIP_OPTIONAL` vẫn cùng tầng với `KM` trọng số 1 ở cả 3 mode (bộ lọc 7.24 đọc đúng). Ca tuỳ chọn ở mode 0 / 2 có thể làm ca khác trễ hơn nếu đủ km bù (điều kiện 3 catalogue "không ảnh hưởng ca nào" chỉ còn giữ chắc ở mode SLA); xong ≤ giờ hết ca vẫn là ràng buộc cứng.
+
+**Bảng quét Q** (400 biến thể `sample_in.json`, chim bay, lệch tọa độ ±0,05°; đếm theo `score.raw` và `projected_sla`):
+
+| Mode | km TB / tuyến | Trễ hẹn | Quá giờ | WILL_BREACH |
+|---|---|---|---|---|
+| SLA (1) | 31,95 | 510 | 473 | 225 |
+| Kết nối Q = 1 (ca ≈ 2,3 km) | 26,68 | 549 | 620 | 264 |
+| Kết nối Q = 2 (4,7 km) | 28,08 | 523 | 525 | 238 |
+| Kết nối Q = 3 (7 km) | 28,77 | 519 | 492 | 234 |
+| **Kết nối Q = 5 (11,7 km)** | **29,62 (−7%)** | **512** | **473** | **227** |
+| Kết nối Q ≥ 8 | 29,83 | 512 | 468 | 227 |
+| Tuyến (2), trễ hẹn tầng 1 trọng số 1 | 24,57 (−23%) | 665 (+30%) | 993 (+110%) | 380 |
+
+Trọng số `LATE_CHECKIN` ở tầng 1 mode Tuyến (cùng bộ mẫu): tầng 2 (không trọng số) 23,86 km / 860 trễ hẹn · 0,25 → 23,92 / 808 · 0,5 → 24,12 / 748 · **1 → 24,57 / 665** · 2 → 25,66 / 570. Chọn **1** [GIẢ ĐỊNH]: 1 ca trễ hẹn P4 ≈ 1 km, P1 ≈ 4 km — vẫn "tuyến trước" (Kết nối 11,7 km / ca), km +3% so khi để tầng 2, trễ hẹn −23%.
+Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, trễ hẹn +2 / 510, quá giờ bằng SLA. Q ≥ 8 bão hòa (phần km còn lại so SLA đến từ việc hạ ưu tiên / giờ xong xuống tầng 2); 2 ca trễ hẹn hơn SLA ở Q lớn là đổi 1 ca trễ hẹn lấy bớt ca quá giờ (cùng trọng số trong tầng 1 — đúng ý "có trọng số").
+**Lưu ý hành vi:** ưu tiên / giờ xong ở tầng dưới nên tiết kiệm chưa tới 1 km có thể thắng "làm việc không hẹn sớm" — VD `test_plan` sheet 08: SLA làm hóa đơn 09:20 rồi chờ hẹn 14:00 (3,3 km); Kết nối ngồi chờ 09:20 → 14:00, làm triển khai rồi mới làm hóa đơn (2,4 km). Nếu không muốn: đưa `FINISH` / `PRIORITY_DELAY` lên tầng 1 của `mix_tiers` (chỉ sửa `rules.json`).
+
+**Đổi hành vi mặc định:** mọi IN không gửi `priority_type` (hiện là tất cả) chuyển từ SLA sang Kết nối; IN gửi 2 chuyển từ R2 sang Tuyến 100%. Muốn giữ như trước 7.26: OA gửi `priority_type: 1`.
+**File:** `rules.hpp/.cpp` (`route_tiers` km tầng 1, `mix_tiers`, `mix_sla_share`, `mix_breach_km`, `mix_tiers_from`, đọc/in JSON), `plan.cpp` (0 → `mix_tiers`), `api.hpp` (chú thích mode).
+**Test:** `test_dp` — 2 việc, tránh 1 ca trễ (hạn, rồi hẹn) phải đi thêm 10 km: SLA đi vòng, Tuyến chịu trễ, Kết nối Q = 5 (11,7 km) đi vòng, Q = 3 (7 km) chịu trễ; Tuyến lệch 0,5 km thì tránh trễ hẹn (≈ 1 km) thắng. `test_plan` — 0 → tầng 1 có KM + 3 rule SLA trọng số 0,7/0,3 × Q; 2 → KM + LATE_CHECKIN tầng 1, LATE_COMPLETION tầng 2; `rules.json` sinh lại / ghi đè / từ chối share = 1; các khối kiểm bố cục tầng SLA (sheet 08, lọc K, 7.17 mục E) chạy mode 1. `test_invariants` — 3.000 message chia đều 3 mode; kiểm "chèn ca tuỳ chọn không làm tầng 1/2 tệ đi" chạy ở mode SLA và tắt SKIP ở cả 3 bộ tầng (trước đó chỉ tắt ở `tiers`). `ctest` 18/18.
+**Hỏi OA:** xác nhận mặc định 0 = 70/30, tuyến 100% bỏ hẳn SLA; tỷ giá Q (1 ca trễ đáng bao nhiêu km) có số nghiệp vụ không.
+
 ### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.
@@ -1527,7 +1566,7 @@ Không mặc định Gateway/OA/Core là nơi lấy snapshot; phải chốt vớ
 
 Với cùng snapshot + cùng rules/mode + cùng travel matrix, QHĐ hiện tại deterministic nên cho cùng route. Mode là ý định mới của KTV; nếu mode và data không đổi, reoptimize có thể không tạo thứ tự mới. Không thêm randomness.
 
-**Còn phải chốt trước khi code logic mode:** workbook/PDF nêu default 70% SLA + 30% distance, SLA 100%, distance 100%; QHĐ hiện tại dùng objective theo tier. Cần định nghĩa rõ từng mode ánh xạ vào objective ra sao. Default 70/30 không được tự quy đổi ngầm; nếu cần sửa objective QHĐ thì trình bày/duyệt riêng trước khi đổi `dp.cpp`.
+**Mode:** đã định nghĩa ở 7.26 (0 Kết nối 70/30 mặc định · 1 SLA · 2 Tuyến km tầng 1; 7.23 R2 đã thay) bằng bộ tầng rule, không sửa `dp.cpp`.
 
 Phase 8 bắt đầu bằng design gate cho request/response, owner snapshot/baseline và mode semantics. Sau đó mới thêm application function/use case `reoptimize(...)` riêng, gọi chung normalization/SLA/travel/QHĐ/cluster pipeline. Không định nghĩa candidate payload/API trước khi các owner được chốt.
 
