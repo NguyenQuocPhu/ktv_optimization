@@ -65,9 +65,10 @@ int main() {
         // 7.20.1: data là array 1 phần tử; change_id "yes", trace_id "" ngay sau staff_id (sheet 03 bản (5)).
         CHECK(out["data"].is_array() && out["data"].size() == 1);
         CHECK(ktv::out_data(out)["staff_id"] == "1" && ktv::out_data(out)["change_id"] == "yes" && ktv::out_data(out)["trace_id"] == "");
+        CHECK(ktv::out_data(out)["route_changed"] == "yes");  // 7.28: mặc định "yes"
         std::vector<std::string> inner;
         for (auto it = out["data"][0].begin(); it != out["data"][0].end(); ++it) inner.push_back(it.key());
-        CHECK((inner == std::vector<std::string>{"staff_id", "change_id", "trace_id", "priority_type", "clusters"}));
+        CHECK((inner == std::vector<std::string>{"staff_id", "change_id", "trace_id", "route_changed", "priority_type", "clusters"}));
         // Thứ tự field: message_id đứng trước, data đứng cuối.
         std::vector<std::string> keys;
         for (auto it = out.begin(); it != out.end(); ++it) keys.push_back(it.key());
@@ -79,10 +80,11 @@ int main() {
         CHECK(again["message_id"] == "local-9" && again["run_code"] == "local-9" && again["trigger"] == "TRAFFIC");
         CHECK(again["trace_id"] == "local-9" && again["planned_at"] == format_datetime(now + 10));
         CHECK(ktv::out_data(again)["change_id"] == "no" && ktv::out_data(again)["trace_id"] == "local-1");
+        CHECK(ktv::out_data(again)["route_changed"] == "no");  // 7.28: cache = cùng tuyến
         CHECK(ktv::out_data(again)["clusters"] == ktv::out_data(out)["clusters"]);
         inner.clear();
         for (auto it = again["data"][0].begin(); it != again["data"][0].end(); ++it) inner.push_back(it.key());
-        CHECK((inner == std::vector<std::string>{"staff_id", "change_id", "trace_id", "priority_type", "clusters"}));
+        CHECK((inner == std::vector<std::string>{"staff_id", "change_id", "trace_id", "route_changed", "priority_type", "clusters"}));
         // Cache của cache: vẫn trỏ về lần tính thật (local-1), không phải local-9.
         Envelope third{"local-10", "TRAFFIC", now + 20};
         CHECK(ktv::out_data(ktv::reuse_response(again, third, now + 20))["trace_id"] == "local-1");

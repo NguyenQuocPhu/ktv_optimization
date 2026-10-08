@@ -57,6 +57,28 @@ std::optional<nlohmann::ordered_json> reuse_cached(RedisStore& store, const std:
     return reuse_response(cached, envelope, now);  // không có TASK (422): chỉ xét trần tuổi
 }
 
+// 7.28: "chữ ký" tuyến để biết tuyến có đổi so với bản mới nhất trong cache: thứ tự TASK (task_id) + cụm của từng ca
+// + projected_sla từng ca, và tập DEFERRED (sắp theo task_id). Không xét giờ, km, metrics, insert_reason, IDLE / BREAK.
+// Không có clusters (lỗi / 422) → không có chữ ký.
+std::optional<std::string> route_signature(const nlohmann::ordered_json& out) {
+    const nlohmann::ordered_json& data = out_data(out);
+    if (!data.is_object() || !data.contains("clusters") || !data["clusters"].is_array()) return std::nullopt;
+    std::string tasks;
+    std::vector<std::string> deferred;
+    for (const auto& cluster : data["clusters"])
+        for (const auto& row : cluster.value("schedule", nlohmann::ordered_json::array())) {
+            const std::string entry = row.value("entry_type", "");
+            const std::string id = row.contains("task_id") ? row["task_id"].dump() : "";
+            if (entry == "TASK")
+                tasks += cluster.value("cluster_code", "") + ":" + id + ":" + row.value("projected_sla", "") + ";";
+            else if (entry == "DEFERRED")
+                deferred.push_back(id);
+        }
+    std::sort(deferred.begin(), deferred.end());
+    for (const std::string& id : deferred) tasks += "D:" + id + ";";
+    return tasks;
+}
+
 }  // namespace
 
 std::string in_fingerprint(const json& in, const Point& staff_latlng, Minutes planned_at) {
@@ -149,6 +171,16 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
 
     // 422 (KTV off / hết việc) vẫn ghi + gửi: Mobix/OA không được giữ tuyến cũ còn việc đã gỡ. 500 thì giữ route cũ.
     if (result.status == "500") return result;
+    // 7.28: tuyến giống bản mới nhất trong cache (cùng ngày) → route_changed "no". Vẫn ghi + gửi OUT mới như thường
+    // (giờ dự kiến mới nhất); change_id giữ nghĩa cũ (tính lại = "yes").
+    if (store) {
+        if (const std::optional<std::string> latest = store->get(staff_id, format_datetime(envelope.planned_at).substr(0, 10))) {
+            const nlohmann::ordered_json previous = nlohmann::ordered_json::parse(*latest, nullptr, false);
+            const std::optional<std::string> before = previous.is_discarded() ? std::nullopt : route_signature(previous);
+            const std::optional<std::string> after = route_signature(*result.out);
+            if (before && after && *before == *after) (*result.out)["data"][0]["route_changed"] = "no";
+        }
+    }
     const std::string json_text = result.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     bool current = true;  // route này là bản hiện hành (không có bản mới hơn)?
     if (store) {

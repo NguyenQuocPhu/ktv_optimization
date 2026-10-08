@@ -210,6 +210,7 @@ int main() {
 
             const ktv::Published a = go(at("m-a", "09:00", base));
             CHECK(a.status == "200" && !a.cached && a.route_stored && data_of(a)["change_id"] == "yes" && data_of(a)["trace_id"] == "");
+            CHECK(data_of(a)["route_changed"] == "yes");  // 7.28: chưa có bản nào trong cache
             // Cùng nội dung, khác message_id / trigger / giờ (09:05 < ca đầu 10:00, tuổi 5′) → cache.
             json b_in = at("m-b", "09:05", base);
             b_in["trigger"] = "TRAFFIC";
@@ -217,7 +218,7 @@ int main() {
             CHECK(b.cached && !b.route_stored && b.status == "200");
             CHECK(b.stats.tasks == 2 && b.stats.candidates == 2);  // 7.20.5: trả cache vẫn có số đếm task cho log
             CHECK((*b.out)["message_id"] == "m-b" && (*b.out)["trigger"] == "TRAFFIC" && (*b.out)["planned_at"] == "2026-10-01 09:05:00");
-            CHECK(data_of(b)["change_id"] == "no" && data_of(b)["trace_id"] == "m-a");
+            CHECK(data_of(b)["change_id"] == "no" && data_of(b)["trace_id"] == "m-a" && data_of(b)["route_changed"] == "no");
             CHECK(data_of(b)["clusters"] == data_of(a)["clusters"]);
             CHECK(b.out_sent && sent.size() == 1);  // worker: mỗi IN một OUT trả lời
             CHECK(json::parse(*store.get("S2", "2026-10-01"))["run_code"] == "m-a");  // route cache không bị ghi đè
@@ -230,6 +231,8 @@ int main() {
             // Trần 30′: 09:31 − 09:00 > 30 → tính lại dù y hệt.
             const ktv::Published d = go(at("m-d", "09:31", base));
             CHECK(!d.cached && d.route_stored && data_of(d)["change_id"] == "yes");
+            // 7.28: tính lại nhưng tuyến y hệt bản trong cache → route_changed "no", vẫn ghi + gửi OUT mới.
+            CHECK(data_of(d)["route_changed"] == "no" && d.out_sent && json::parse(*store.get("S2", "2026-10-01"))["run_code"] == "m-d");
             // (b) ca đầu: bản cache tính 09:31, ca đầu 10:00 → IN y hệt lúc 10:00 (tuổi 29′) vẫn tính lại.
             CHECK(go(at("m-d2", "09:45", base)).cached);  // 09:45 < 10:00 và tuổi 14′ → cache
             const ktv::Published e = go(at("m-e", "10:00", base));
@@ -238,20 +241,30 @@ int main() {
             json f_in = at("m-f", "10:05", base);
             f_in["tasks"]["trien_khai"][1]["task_status_id"] = 97;
             const ktv::Published f = go(f_in);
-            CHECK(!f.cached && data_of(f)["change_id"] == "yes");
+            // 7.28: đổi tình trạng ca (97 của trien_khai = "Đã nhận tuyến", vẫn xếp) → tính lại nhưng tuyến không đổi.
+            CHECK(!f.cached && data_of(f)["change_id"] == "yes" && data_of(f)["route_changed"] == "no");
+            json f2_in = at("m-f2", "10:05", base);
+            f2_in["tasks"]["trien_khai"].erase(1);  // ca 2 rời khỏi IN → tuyến đổi
+            const ktv::Published f2 = go(f2_in);
+            CHECK(!f2.cached && data_of(f2)["route_changed"] == "yes");
             // GPS đổi ~300 m → tính lại.
             json g_in = at("m-g", "10:06", f_in);
             g_in["staff"]["latlng"] = "21.0227,105.80";
-            CHECK(!go(g_in).cached);
+            const ktv::Published g = go(g_in);
+            CHECK(!g.cached && data_of(g)["route_changed"] == "yes");  // so với f2 (1 ca): tuyến f_in có 2 ca
+            json g2_in = at("m-g2", "10:06", g_in);
+            g2_in["staff"]["latlng"] = "21.0232,105.8005";  // GPS nhích ~60 m (vượt làm tròn) → tính lại, tuyến như g
+            const ktv::Published g2 = go(g2_in);
+            CHECK(!g2.cached && data_of(g2)["change_id"] == "yes" && data_of(g2)["route_changed"] == "no");
             // Khác ngày → tính lại (ngày nằm trong dấu vân tay).
             CHECK(ktv::in_fingerprint(base, {21.02, 105.80}, *ktv::parse_datetime("2026-10-01 09:00:00")) !=
                   ktv::in_fingerprint(base, {21.02, 105.80}, *ktv::parse_datetime("2026-10-02 09:00:00")));
             // force_recompute_triggers: trigger trong danh sách luôn tính.
             ktv::Rules forced = rules;
             forced.force_recompute_triggers = {"TRAFFIC"};
-            json h_in = at("m-h", "10:07", g_in);
+            json h_in = at("m-h", "10:07", g2_in);
             h_in["trigger"] = "TRAFFIC";
-            CHECK(go(at("m-h0", "10:07", g_in)).cached);  // không ép: cache
+            CHECK(go(at("m-h0", "10:07", g2_in)).cached);  // không ép: cache
             sent.clear();
             const ktv::Published h = ktv::plan_and_store(h_in, ktv::local_envelope(h_in, "t", now), now, {++v, 1}, forced, "",
                                                          &store, send_out);

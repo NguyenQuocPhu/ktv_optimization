@@ -678,6 +678,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.25 ✅ | Định mức thời gian xử lý (khi input bỏ trống `handle_minutes`) theo TGXL chuẩn catalogue ISC sheet 5 — chi tiết bên dưới | 7 loại đổi số; 7.22 (việc đang làm còn ½ định mức) đổi theo |
 | 7.26 ✅ | 3 mode theo yêu cầu data: **0 mặc định Kết nối 70/30** (SLA + km chung tầng 1 có trọng số), 1 SLA 100%, 2 Tuyến 100% (km + trễ hẹn trọng số 1 ở tầng 1, thay R2) — chi tiết bên dưới | IN không gửi / 0 → `mix_tiers`, 1 ca trễ ≈ 11,7 km; 2 → km −23% so SLA, trễ hẹn +30% |
 | 7.27 ✅ | Theo workbook (6): `seq` tăng liên tục qua mọi cụm; IN nhận `contract_name` / `bill_number` / `timezone`; OUT thêm `sla_buffer_minutes` (dư tới hạn, âm = trễ) + echo `contract_name`, `timezone`, `appointment`, `complete_date` — chi tiết bên dưới | 2 cụm → seq 1, 2, 3 (không 1, 1, 2); hết cảnh báo `UNKNOWN_FIELD` cho 3 field mới |
+| 7.28 ✅ | Field mới `data[0].route_changed` ("yes" / "no"): tuyến có đổi so với bản mới nhất trong cache không — chi tiết bên dưới | đổi tình trạng ca / GPS mà tuyến giữ nguyên → `change_id` "yes", `route_changed` "no"; OUT vẫn ghi + đẩy Kafka |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1564,6 +1565,34 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 - **Tên loại hóa đơn** (người dùng chốt: theo sheet INPUT / OUTPUT mới nhất): `hoa_don` 1 = `tra_truoc`, 2 = `tra_sau` (sheet 05 workbook (6)); bỏ tên cũ `hoa_don_tra_truoc` / `hoa_don_tra_sau` (JSON mẫu sheet 08 vẫn ghi tên cũ — workbook tự mâu thuẫn). OA gửi tên cũ → `UNKNOWN_TASK_TYPE`, rơi về loại mặc định (check-in trước B, 60′, mất luật hoàn tất trong tháng) — cần OA gửi đúng tên mới. Sửa `task_kinds()` + mọi test / `sample_in.json` / mẫu review_map.
 
 **Chưa làm (chờ chốt):** `action_type` cho API Mobix (sheet 09) — trùng nghĩa `priority_type` 0/1/2 (7.26); chưa chốt transport và việc ghi đè mode của IN.
+
+##### 7.28 — `route_changed`: tuyến có đổi so với lần trước không (người dùng chốt 2026-10-08)
+
+**Yêu cầu (bên nhận OUT):** "thêm trường đánh dấu có sắp xếp lại ca so với lần trước không: 'không' thì bên anh không cần cập nhật dữ liệu, 'có' thì ghi nhận"; làm rõ thêm: "khi nào tuyến có thay đổi thì mới tính là đổi, còn thay đổi tình trạng, GPS… đánh dấu là không thay đổi nhưng vẫn đẩy Kafka như hiện tại". Khác cache 7.20.1b: cache quyết **trước khi tính** theo IN (IN giống → không tính); đây quyết **sau khi tính** theo OUT (IN đổi nhưng tuyến ra y hệt — cache không biết trước được).
+**Người dùng chốt:** **field mới**, không đụng nghĩa `change_id` (vẫn: "yes" tính lại / "no" trả cache); so với **bản OUT mới nhất trong cache** (Redis, cùng bản đã đẩy Kafka); tiêu chí: thứ tự ca + cụm, tập DEFERRED, `projected_sla` từng ca; **không** so `insert_reason`, giờ, km, metrics.
+
+**Thiết kế:**
+- `data[0].route_changed` ngay sau `trace_id`: `"yes"` mặc định; `"no"` khi chữ ký tuyến của OUT vừa tính = chữ ký của bản mới nhất trong cache cùng ngày.
+- Chữ ký (`route_signature`, `publish.cpp`): chuỗi `cluster_code:task_id:projected_sla` của từng dòng TASK theo thứ tự + `D:task_id` của các dòng DEFERRED (sắp theo task_id). Bỏ qua IDLE / BREAK, giờ, km, `sla_buffer_minutes`, `priority`, `insert_reason`, metrics.
+- Chưa có bản nào trong cache / bản trước là lỗi (data null) / bản mới là lỗi → `"yes"` (lỗi: data null, không có field).
+- Trả cache 7.20.1b (`change_id` "no") → `route_changed` "no" (cùng tuyến).
+- OUT luôn ghi cache + đẩy Kafka như cũ (giờ dự kiến mới nhất); field chỉ để bên nhận biết có cần cập nhật tuyến không.
+- Worker và gateway `/replan` cùng đường `plan_and_store` → cả hai có field.
+
+**Các tình huống** (kiểm trong `test_publish`):
+
+| Tình huống | `change_id` | `route_changed` | OUT |
+|---|---|---|---|
+| Lần đầu, chưa có bản trong cache | yes | **yes** | Ghi + gửi |
+| IN y hệt, dùng cache (7.20.1b) | no | **no** | Bản cache (worker gửi, gateway không gửi) |
+| Tính lại (VD quá trần tuổi cache), tuyến y hệt | yes | **no** | Ghi + gửi bản mới |
+| Đổi tình trạng một ca, tuyến không đổi | yes | **no** | Ghi + gửi bản mới |
+| Bỏ một ca khỏi IN (tuyến đổi) | yes | **yes** | Ghi + gửi bản mới |
+| GPS nhích ~60 m (vượt làm tròn), tuyến không đổi | yes | **no** | Ghi + gửi bản mới |
+| Lỗi (400 / 422 / 500…) | — | — (`data` null) | Như cũ |
+
+**File:** `envelope.cpp` (`route_changed` trong `wrap_response` / `reuse_response`), `publish.cpp` (`route_signature`, so với `store->get` trước khi ghi). **Test:** `test_adapter` (mặc định "yes", cache "no", thứ tự field); `test_publish` (lần đầu "yes"; cache "no"; tính lại do trần tuổi, tuyến y hệt → "no" mà vẫn ghi + gửi; đổi tình trạng ca 97 → `change_id` "yes" + `route_changed` "no"; bỏ một ca → "yes"; GPS nhích ~60 m vượt làm tròn → "no"). `ctest` 18/18.
+**Hỏi OA:** tên field (`route_changed` do repo đặt, ngoài workbook (6)) — ghi vào sheet 03.
 
 ### Phase 8 — Bài lớn (> 12 việc): LNS và LNS + QHĐ cửa sổ trượt (người dùng duyệt 2026-10-08) ✅ đã thực thi
 

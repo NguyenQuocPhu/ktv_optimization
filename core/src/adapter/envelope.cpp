@@ -30,9 +30,10 @@ nlohmann::ordered_json wrap_response(const Envelope& envelope, const nlohmann::o
         if (it.key() == "staff_id") {
             item["change_id"] = "yes";
             item["trace_id"] = "";
+            item["route_changed"] = "yes";  // 7.28: plan_and_store hạ "no" khi tuyến giống bản mới nhất trong cache
         }
     }
-    if (!item.contains("change_id")) item["change_id"] = "yes", item["trace_id"] = "";
+    if (!item.contains("change_id")) item["change_id"] = "yes", item["trace_id"] = "", item["route_changed"] = "yes";
     out["data"] = nlohmann::ordered_json::array({item});
     return out;
 }
@@ -61,11 +62,12 @@ nlohmann::ordered_json reuse_response(const nlohmann::ordered_json& cached, cons
         const std::string origin = chained ? data.value("trace_id", computed) : computed;
         nlohmann::ordered_json item = nlohmann::ordered_json::object();
         for (auto it = data.begin(); it != data.end(); ++it) {
-            if (it.key() == "change_id" || it.key() == "trace_id") continue;
+            if (it.key() == "change_id" || it.key() == "trace_id" || it.key() == "route_changed") continue;
             item[it.key()] = it.value();
-            if (it.key() == "staff_id") item["change_id"] = "no", item["trace_id"] = origin;
+            // Trả cache = đúng tuyến đang có → route_changed "no" (7.28).
+            if (it.key() == "staff_id") item["change_id"] = "no", item["trace_id"] = origin, item["route_changed"] = "no";
         }
-        if (!item.contains("change_id")) item["change_id"] = "no", item["trace_id"] = origin;
+        if (!item.contains("change_id")) item["change_id"] = "no", item["trace_id"] = origin, item["route_changed"] = "no";
         data = std::move(item);
     }
     return out;
