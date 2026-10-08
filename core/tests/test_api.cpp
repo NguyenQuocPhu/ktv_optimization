@@ -32,7 +32,7 @@ static json sample() {
           "staff_role": 1, "block_id": 3434, "location_id": 4}],
         "bao_tri": [], "thu_hoi": [],
         "hoa_don": [{"task_id": 5454544, "task_group_id": 4, "task_group_name": "hoa_don", "task_type_id": 2,
-          "task_type_name": "hoa_don_tra_sau", "task_sub_id": 0, "task_sub_name": "", "task_status_id": 6,
+          "task_type_name": "tra_sau", "task_sub_id": 0, "task_sub_name": "", "task_status_id": 6,
           "task_status_name": "check_in", "sla": {"sla_minutes": null, "priority_in_day": 4}, "appointment": "",
           "location": "P1203 CT2 Trung Hòa Nhân Chính, Thanh Xuân", "latlng": "21.0043,105.8021",
           "handle_minutes": 20, "task_plots_id": 7, "staff_plots_id": 3, "staff_role": 2, "block_id": 3434,
@@ -446,11 +446,13 @@ int main() {
         json data = sample();
         json& t = data["tasks"]["hoa_don"][0];
         t["task_group_name"] = "";
-        t["handle_minutes"] = 0;  // dùng định mức của loại: hoa_don_tra_sau
+        t["handle_minutes"] = 0;  // dùng định mức của loại: tra_sau
         auto m = lenient(data);
         CHECK(errors.empty() && warned("TASK_GROUP", "tasks.hoa_don[0]") && !warned("UNKNOWN_TASK_TYPE", "tasks.hoa_don[0].task_type_name"));
         CHECK(m.tasks[1].task_group_name == "hoa_don" && m.tasks[1].task_group_id == 4);
-        const int norm = ktv::find_kind("hoa_don", "hoa_don_tra_sau")->handle_minutes;
+        const int norm = ktv::find_kind("hoa_don", "tra_sau")->handle_minutes;
+        // 7.27: tên theo sheet 05 workbook (6); tên cũ theo JSON mẫu không còn trong danh mục.
+        CHECK(ktv::find_kind("hoa_don", "tra_truoc") && !ktv::find_kind("hoa_don", "hoa_don_tra_sau"));
         CHECK(norm != 60);  // nếu bằng 60 thì test không phân biệt được với loại mặc định
         m.planned_at = *ktv::parse_datetime("2026-09-28 09:00:00");  // 7.16.1: chạy gần cuối tháng, hóa đơn không bị lọc K
         ktv::PlanResult r = ktv::plan(m, ktv::default_rules(), *ktv::parse_datetime("2026-09-28 09:00:00"));
@@ -496,8 +498,8 @@ int main() {
         const std::pair<const char*, const char*> kinds[] = {
             {"trien_khai", "trien_khai_net"}, {"trien_khai", "trien_khai_box"}, {"trien_khai", "box_cam_only"},
             {"trien_khai", "swap"}, {"trien_khai", "giao_thiet_bi_cam"}, {"bao_tri", "bao_tri_vat_ly"},
-            {"bao_tri", "bao_tri_logic"}, {"thu_hoi", "thu_hoi_thiet_bi"}, {"hoa_don", "hoa_don_tra_truoc"},
-            {"hoa_don", "hoa_don_tra_sau"}, {"onsite", "phieu_onsite"}};
+            {"bao_tri", "bao_tri_logic"}, {"thu_hoi", "thu_hoi_thiet_bi"}, {"hoa_don", "tra_truoc"},
+            {"hoa_don", "tra_sau"}, {"onsite", "phieu_onsite"}};
         const int isc[] = {120, 120, 120, 60, 60, 60, 60, 15, 15, 15, 60};
         for (size_t i = 0; i < std::size(kinds); ++i) {
             const ktv::TaskKind* kind = ktv::find_kind(kinds[i].first, kinds[i].second);

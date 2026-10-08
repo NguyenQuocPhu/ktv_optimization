@@ -134,7 +134,7 @@ int main() {
     }
 
     {  // Mục E (7.17b): hoa_don thanh toán đúng tháng trước, cùng ngày-trong-tháng ngày chạy → hạn cuối hôm nay.
-        const TaskKind* bill = find_kind("hoa_don", "hoa_don_tra_sau");
+        const TaskKind* bill = find_kind("hoa_don", "tra_sau");
         CHECK(bill);
         const auto deadline = [&](const TaskKind& kind, const char* paid, const char* run, bool appointment = false) {
             Task t;

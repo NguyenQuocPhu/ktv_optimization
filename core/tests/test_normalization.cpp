@@ -57,7 +57,7 @@ static bool warned(const ktv::NormalizedWorklist& w, const std::string& code) {
 static ktv::NormalizedWorklist one(const char* group, int status, const char* status_name = "") {
     struct Kind { const char* group; int gid; const char* type; int tid; json sla; int priority; };
     const Kind kinds[] = {{"trien_khai", 1, "trien_khai_net", 3, 120, 3}, {"bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1},
-                          {"thu_hoi", 3, "thu_hoi_thiet_bi", 1, nullptr, 4}, {"hoa_don", 4, "hoa_don_tra_sau", 2, nullptr, 4},
+                          {"thu_hoi", 3, "thu_hoi_thiet_bi", 1, nullptr, 4}, {"hoa_don", 4, "tra_sau", 2, nullptr, 4},
                           {"onsite", 5, "phieu_onsite", 1, 60, 2}, {"cscd", 6, "ngung_ket_noi_4h", 2, nullptr, 2}};
     json groups[6] = {json::array(), json::array(), json::array(), json::array(), json::array(), json::array()};
     for (int g = 0; g < 6; ++g)
@@ -150,7 +150,7 @@ int main() {
             make_task(106, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, 10, "21.07,105.85", ""),                     // trùng current
         });
         const json thu = json::array({make_task(104, "thu_hoi", 3, "thu_hoi_thiet_bi", 1, nullptr, 4, -1, "21.05,105.83", "")});
-        const json hoa = json::array({make_task(105, "hoa_don", 4, "hoa_don_tra_sau", 2, nullptr, 4, 4, "21.06,105.84", "")});  // mã 4: không có trong bảng
+        const json hoa = json::array({make_task(105, "hoa_don", 4, "tra_sau", 2, nullptr, 4, 4, "21.06,105.84", "")});  // mã 4: không có trong bảng
 
         std::vector<ktv::Error> errors;
         ktv::Message message = ktv::parse_message(make_message("2", current, trien, bao, thu, hoa, empty), errors);

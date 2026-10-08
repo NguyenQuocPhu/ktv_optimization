@@ -77,7 +77,7 @@ int main() {
                 "available": "08:00-17:30", "current_task": null},
       "tasks": {"trien_khai": [], "bao_tri": [], "thu_hoi": [], "onsite": [],
         "hoa_don": [{"task_id": 1, "task_group_id": 4, "task_group_name": "hoa_don", "task_type_id": 2,
-          "task_type_name": "hoa_don_tra_sau", "task_sub_id": 0, "task_sub_name": "", "task_status_id": 6,
+          "task_type_name": "tra_sau", "task_sub_id": 0, "task_sub_name": "", "task_status_id": 6,
           "task_status_name": "check_in", "sla": {"sla_minutes": null, "priority_in_day": 4}, "appointment": "",
           "location": "", "latlng": "21.0043,105.8021", "handle_minutes": 20, "task_plots_id": 2,
           "staff_plots_id": 2, "staff_role": 1, "block_id": 1}]}})");

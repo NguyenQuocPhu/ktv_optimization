@@ -1550,7 +1550,7 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 
 ##### 7.27 — Workbook API (6): seq liên tục + field khách hàng / hẹn (người dùng duyệt 2026-10-08)
 
-**Bối cảnh.** `API-Goi-y-cong-viec (6).xlsx` (08/10) so với (5): sheet 02 thêm `contract_name`, `bill_number`, `timezone`; sheet 03 đổi `seq` thành **tăng liên tục qua mọi cụm** ("1,2,3,4,5,6… chứ không phải 1,2,3,1,2,3…"), thêm `sla_buffer_minutes`, `contract_name`, `timezone`, `appointment`, `complete_date`; sheet 05 thêm `hoa_don` 1 `tra_truoc` / 2 `tra_sau`; sheet mới **09 In-Out Mobix** (IN `staff_id`, `latlng`, `action_type` 0/1/2; OUT rút gọn sheet 03 kèm ghi chú hiển thị). Sheet 08 JSON mẫu chưa cập nhật. **Người dùng chọn làm mục 2 + 3** (rẻ, không đổi thuật toán), sau đó thêm mục 4 `sla_buffer_minutes`.
+**Bối cảnh.** `API-Goi-y-cong-viec (6).xlsx` (08/10) so với (5): sheet 02 thêm `contract_name`, `bill_number`, `timezone`; sheet 03 đổi `seq` thành **tăng liên tục qua mọi cụm** ("1,2,3,4,5,6… chứ không phải 1,2,3,1,2,3…"), thêm `sla_buffer_minutes`, `contract_name`, `timezone`, `appointment`, `complete_date`; sheet 05 thêm `hoa_don` 1 `tra_truoc` / 2 `tra_sau` (đổi tên theo, xem dưới); sheet mới **09 In-Out Mobix** (IN `staff_id`, `latlng`, `action_type` 0/1/2; OUT rút gọn sheet 03 kèm ghi chú hiển thị). Sheet 08 JSON mẫu chưa cập nhật. **Người dùng chọn làm mục 2 + 3** (rẻ, không đổi thuật toán), sau đó thêm mục 4 `sla_buffer_minutes`.
 
 **Sửa:**
 - `seq`: một bộ đếm chung cho mọi dòng TASK / IDLE / BREAK theo thứ tự thời gian (cụm là đoạn liền của tuyến nên vẫn tăng dần trong từng schedule). `DEFERRED` vẫn `seq` 0.
@@ -1561,7 +1561,9 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 
 **File:** `api.hpp/.cpp` (`Task.contract_name/bill_number/timezone`, parse), `plan.cpp` (`echo_datetime`, 4 field ở `deferred_row` + dòng TASK, bộ đếm `seq` chung). **Test:** `test_cluster` + `test_invariants` (seq liên tục qua cụm); `test_plan` (`sla_buffer_minutes`: hẹn 14:00 / B 16:00 check-in 14:00 → 120, không hẹn → 0, chạy 10:30 với B 10:00 → âm đúng số phút trễ + `ALREADY_BREACHED`); `test_pipeline` (thứ tự field sheet 03 thêm 5 field; echo đúng / `""`; ca có `complete_date` chỉ khác đúng field đó); `test_api` (3 field hợp lệ strict, null = "", sai kiểu → lỗi). `ctest` 18/18.
 
-**Chưa làm (chờ chốt):** (1) tên loại hóa đơn `tra_truoc` / `tra_sau` của sheet 05 — code tra `hoa_don_tra_truoc` / `hoa_don_tra_sau`; nếu OA gửi tên mới → `UNKNOWN_TASK_TYPE`, rơi về loại mặc định (check-in trước B, 60′), **mất luật hoàn tất trong tháng / lọc K / mục E** → hỏi OA tên thật; (5) `action_type` cho API Mobix (sheet 09) — trùng nghĩa `priority_type` 0/1/2 (7.26); chưa chốt transport và việc ghi đè mode của IN.
+- **Tên loại hóa đơn** (người dùng chốt: theo sheet INPUT / OUTPUT mới nhất): `hoa_don` 1 = `tra_truoc`, 2 = `tra_sau` (sheet 05 workbook (6)); bỏ tên cũ `hoa_don_tra_truoc` / `hoa_don_tra_sau` (JSON mẫu sheet 08 vẫn ghi tên cũ — workbook tự mâu thuẫn). OA gửi tên cũ → `UNKNOWN_TASK_TYPE`, rơi về loại mặc định (check-in trước B, 60′, mất luật hoàn tất trong tháng) — cần OA gửi đúng tên mới. Sửa `task_kinds()` + mọi test / `sample_in.json` / mẫu review_map.
+
+**Chưa làm (chờ chốt):** `action_type` cho API Mobix (sheet 09) — trùng nghĩa `priority_type` 0/1/2 (7.26); chưa chốt transport và việc ghi đè mode của IN.
 
 ### Phase 8 — Bài lớn (> 12 việc): LNS và LNS + QHĐ cửa sổ trượt (người dùng duyệt 2026-10-08) ✅ đã thực thi
 
