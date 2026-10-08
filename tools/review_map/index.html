@@ -36,6 +36,7 @@
   button.primary { color: #fff; background: var(--accent); }
   button.primary:hover { background: #1d4ed8; }
   button:disabled { opacity: .55; cursor: progress; }
+  select { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
   .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin-left: auto; }
   .note { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
   .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
@@ -97,6 +98,11 @@
       <div class="row">
         <button class="primary" id="run">Tính tuyến</button>
         <button id="load">Nạp mẫu</button>
+        <select id="mode" title="Mode sắp xếp — ghi priority_type vào input rồi tính lại">
+          <option value="0">Kết nối 70/30 (0)</option>
+          <option value="1">SLA 100% (1)</option>
+          <option value="2">Tuyến 100% (2)</option>
+        </select>
         <label class="check"><input type="checkbox" id="osrm" checked> OSRM</label>
         <label class="check"><input type="checkbox" id="road" checked> Đường bộ</label>
         <label class="check"><input type="checkbox" id="explain" checked> Giải thích</label>
@@ -152,8 +158,22 @@ let legend = null;
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const badgeClass = (sla) => sla === "ON_TIME" ? "ok" : sla === "AT_RISK" ? "warn" : sla === "ON_TIME" || sla === "" ? "" : "late";
 
+// Mode sắp xếp (priority_type gốc IN, 7.26): 0 Kết nối 70/30 (mặc định) · 1 SLA · 2 Tuyến.
+const MODE_NAMES = { 0: "Kết nối 70/30", 1: "SLA 100%", 2: "Tuyến 100%" };
+function syncMode() {  // select theo input: không gửi priority_type = 0
+  try { $("mode").value = String(JSON.parse(input.value).priority_type ?? 0); } catch { /* input hỏng: giữ nguyên */ }
+}
+function applyMode() {  // ghi mode vào input (thấy gì gửi nấy) rồi tính lại
+  let message;
+  try { message = JSON.parse(input.value); } catch { return showError("input không phải JSON — không đổi được mode"); }
+  message.priority_type = Number($("mode").value);
+  input.value = JSON.stringify(message, null, 2);
+  run();
+}
+
 async function loadSample() {
   input.value = await (await fetch("/sample")).text();
+  syncMode();
   $("note").textContent = "Mẫu: 1 message thật từ staging (all_errors) đã vá staff.latlng/available/status/plots + thêm việc cho đủ nhóm.";
 }
 
@@ -260,6 +280,7 @@ function render(result) {
     `<span class="pill ${code === "200" ? "ok" : code === "424" ? "warn" : "late"}">statuscode ${esc(code)}</span>`,
     out.data?.metrics ? `<span class="pill blue">${out.data.metrics.tasks_total} việc · ${out.data.metrics.total_distance_km} km</span>` : "",
     out.data?.metrics ? `<span class="pill">${out.data.metrics.cluster_count} cụm</span>` : "",
+    out.data ? `<span class="pill">mode ${esc(out.data.priority_type)} · ${esc(MODE_NAMES[out.data.priority_type] ?? "?")}</span>` : "",
     `<span class="pill">${result.ms} ms</span>`,
   ].join("");
 
@@ -434,7 +455,8 @@ $("collapse").onclick = () => {
   setTimeout(() => map.invalidateSize(), 50);
 };
 input.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") run(); });
-input.addEventListener("input", () => { $("stale").hidden = lastRunText === null || input.value === lastRunText; });
+input.addEventListener("input", () => { $("stale").hidden = lastRunText === null || input.value === lastRunText; syncMode(); });
+$("mode").onchange = applyMode;
 
 loadSample().then(run);
 </script>
