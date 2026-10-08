@@ -102,6 +102,10 @@ struct Task {
     int task_plots_id = 0, staff_plots_id = 0, staff_role = 0, block_id = 0;  // staff_role 0 = không khớp lô nào của KTV.
     std::optional<long long> contract_id;    // ObjID hợp đồng. Không gửi / null = không có. Chỉ truy vết; OUT là string, "" khi không có (7.19).
     std::optional<std::string> contract_no;  // Số hợp đồng, VD "SGABP0236" ("" giữ nguyên). Không gửi / null = không có.
+    // 7.27 (workbook (6) sheet 02): chỉ để echo ra OUT (contract_name, timezone) / tra cứu (bill_number). Không gửi / null = "".
+    std::string contract_name;  // Tên khách hàng.
+    std::string bill_number;    // Mã hóa đơn (mã bill).
+    std::string timezone;       // Múi giờ hẹn (định dạng chưa chốt; chưa dùng để đổi giờ).
 };
 
 // Cả message = input của một lần gọi AI cho một KTV.

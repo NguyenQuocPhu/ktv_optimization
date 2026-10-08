@@ -223,6 +223,9 @@ int main() {
         a["location"] = "Số 12 ngõ 45 Trần Duy Hưng";
         a["contract_id"] = 1126569863;
         a["contract_no"] = "SGABP0236";
+        a["contract_name"] = "Nguyễn Văn A";  // 7.27: echo ra OUT
+        a["timezone"] = "+07:00";
+        a["complete_date"] = "2026-08-10 16:00:00";
         json b = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0301,105.8013", "");
         b["contract_id"] = nullptr;  // null → ""; contract_no không gửi → ""
         json c = task(3, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0311,105.8014", "");
@@ -241,13 +244,18 @@ int main() {
             CHECK(ra["contract_id"] == "1126569863" && ra["contract_no"] == "SGABP0236");
             CHECK(rows[2]["contract_id"] == "" && rows[2]["contract_no"] == "" && rows[2]["location"] == "");
             CHECK(rows[3]["contract_id"] == "" && rows[3]["contract_no"] == "");
+            // 7.27: echo contract_name / timezone / appointment / complete_date ("" khi không có).
+            CHECK(ra["contract_name"] == "Nguyễn Văn A" && ra["timezone"] == "+07:00");
+            CHECK(ra["appointment"] == "" && ra["complete_date"] == "2026-08-10 16:00:00");
+            CHECK(rows[2]["contract_name"] == "" && rows[2]["timezone"] == "" && rows[2]["complete_date"] == "");
             std::vector<std::string> keys;  // thứ tự field theo sheet 03
             for (auto it = ra.begin(); it != ra.end(); ++it) keys.push_back(it.key());
             const std::vector<std::string> expected = {
                 "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role",
                 "priority", "insert_reason", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
                 "task_sub_name", "checkindate", "checkoutdate", "travel_minutes_before", "travel_km_before",
-                "handle_minutes", "projected_sla", "contract_id", "contract_no"};
+                "handle_minutes", "projected_sla", "contract_id", "contract_no", "contract_name", "timezone",
+                "appointment", "complete_date"};
             if (keys != expected) {
                 std::cerr << "  thứ tự field TASK:";
                 for (const auto& k : keys) std::cerr << " " << k;
@@ -277,7 +285,19 @@ int main() {
                                    json::array({task(1, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", here, ""), same}),
                                    none, none, none));
         CHECK(with && with->response["data"]["metrics"]["tasks_total"] == 2);
-        CHECK(with && without && with->response["data"]["clusters"] == without->response["data"]["clusters"]);
+        // Giống hệt, trừ complete_date được echo ra OUT (7.27).
+        if (with && without) {
+            ojson a = with->response["data"]["clusters"], b = without->response["data"]["clusters"];
+            bool echoed = false;
+            for (ojson* clusters : {&a, &b})
+                for (auto& cluster : *clusters)
+                    for (auto& row : cluster["schedule"])
+                        if (row.contains("complete_date")) {
+                            echoed |= row["complete_date"] == "2026-09-01 10:00:00";
+                            row.erase("complete_date");
+                        }
+            CHECK(echoed && a == b);
+        }
     }
     {  // Nhiều cụm: tổng task_count = tasks_total; inbound+internal ≈ tổng khoảng cách.
         auto r = run(message("2026-09-10 09:00:00", none,

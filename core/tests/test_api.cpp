@@ -191,6 +191,19 @@ int main() {
         errors.clear();
         ktv::parse_message(data, errors);
         CHECK(!errors.empty());
+        // 7.27 (workbook (6)): contract_name / bill_number / timezone là field hợp lệ (strict không lỗi), null = "".
+        data["tasks"]["trien_khai"][0]["contract_no"] = "S1";
+        data["tasks"]["trien_khai"][0]["contract_name"] = "Nguyễn Văn A";
+        data["tasks"]["trien_khai"][0]["bill_number"] = "HD-01";
+        data["tasks"]["trien_khai"][0]["timezone"] = nullptr;
+        errors.clear();
+        auto named = ktv::parse_message(data, errors);
+        CHECK(errors.empty() && named.tasks[0].contract_name == "Nguyễn Văn A" && named.tasks[0].bill_number == "HD-01" &&
+              named.tasks[0].timezone.empty());
+        data["tasks"]["trien_khai"][0]["timezone"] = 7;
+        errors.clear();
+        ktv::parse_message(data, errors);
+        CHECK(!errors.empty());
     }
     {  // Mẫu workbook mới: trien_khai_box + subtype gsafe.
         json data = sample();

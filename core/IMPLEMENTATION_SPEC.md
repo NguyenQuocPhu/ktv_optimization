@@ -677,6 +677,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.24 ✅ | Điều kiện 3 catalogue (ca thu bill / thu hồi ngoài K vẫn chèn khi KTV có khoảng trống thật): QHĐ có **ca tuỳ chọn** + rule `SKIP_OPTIONAL` — chi tiết bên dưới | ca ngoài K gần tuyến lên tuyến `SPARE_TIME`, số ca trễ không tăng; không có ca ngoài K → như cũ |
 | 7.25 ✅ | Định mức thời gian xử lý (khi input bỏ trống `handle_minutes`) theo TGXL chuẩn catalogue ISC sheet 5 — chi tiết bên dưới | 7 loại đổi số; 7.22 (việc đang làm còn ½ định mức) đổi theo |
 | 7.26 ✅ | 3 mode theo yêu cầu data: **0 mặc định Kết nối 70/30** (SLA + km chung tầng 1 có trọng số), 1 SLA 100%, 2 Tuyến 100% (km + trễ hẹn trọng số 1 ở tầng 1, thay R2) — chi tiết bên dưới | IN không gửi / 0 → `mix_tiers`, 1 ca trễ ≈ 11,7 km; 2 → km −23% so SLA, trễ hẹn +30% |
+| 7.27 ✅ | Theo workbook (6): `seq` tăng liên tục qua mọi cụm; IN nhận `contract_name` / `bill_number` / `timezone`; OUT echo `contract_name`, `timezone`, `appointment`, `complete_date` — chi tiết bên dưới | 2 cụm → seq 1, 2, 3 (không 1, 1, 2); hết cảnh báo `UNKNOWN_FIELD` cho 3 field mới |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1546,6 +1547,20 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 **File:** `rules.hpp/.cpp` (`route_tiers` km tầng 1, `mix_tiers`, `mix_sla_share`, `mix_breach_km`, `mix_tiers_from`, đọc/in JSON), `plan.cpp` (0 → `mix_tiers`), `api.hpp` (chú thích mode).
 **Test:** `test_dp` — 2 việc, tránh 1 ca trễ (hạn, rồi hẹn) phải đi thêm 10 km: SLA đi vòng, Tuyến chịu trễ, Kết nối Q = 5 (11,7 km) đi vòng, Q = 3 (7 km) chịu trễ; Tuyến lệch 0,5 km thì tránh trễ hẹn (≈ 1 km) thắng. `test_plan` — 0 → tầng 1 có KM + 3 rule SLA trọng số 0,7/0,3 × Q; 2 → KM + LATE_CHECKIN tầng 1, LATE_COMPLETION tầng 2; `rules.json` sinh lại / ghi đè / từ chối share = 1; các khối kiểm bố cục tầng SLA (sheet 08, lọc K, 7.17 mục E) chạy mode 1. `test_invariants` — 3.000 message chia đều 3 mode; kiểm "chèn ca tuỳ chọn không làm tầng 1/2 tệ đi" chạy ở mode SLA và tắt SKIP ở cả 3 bộ tầng (trước đó chỉ tắt ở `tiers`). `ctest` 18/18.
 **Hỏi OA:** xác nhận mặc định 0 = 70/30, tuyến 100% bỏ hẳn SLA; tỷ giá Q (1 ca trễ đáng bao nhiêu km) có số nghiệp vụ không.
+
+##### 7.27 — Workbook API (6): seq liên tục + field khách hàng / hẹn (người dùng duyệt 2026-10-08)
+
+**Bối cảnh.** `API-Goi-y-cong-viec (6).xlsx` (08/10) so với (5): sheet 02 thêm `contract_name`, `bill_number`, `timezone`; sheet 03 đổi `seq` thành **tăng liên tục qua mọi cụm** ("1,2,3,4,5,6… chứ không phải 1,2,3,1,2,3…"), thêm `sla_buffer_minutes`, `contract_name`, `timezone`, `appointment`, `complete_date`; sheet 05 thêm `hoa_don` 1 `tra_truoc` / 2 `tra_sau`; sheet mới **09 In-Out Mobix** (IN `staff_id`, `latlng`, `action_type` 0/1/2; OUT rút gọn sheet 03 kèm ghi chú hiển thị). Sheet 08 JSON mẫu chưa cập nhật. **Người dùng chọn làm mục 2 + 3** (rẻ, không đổi thuật toán).
+
+**Sửa:**
+- `seq`: một bộ đếm chung cho mọi dòng TASK / IDLE / BREAK theo thứ tự thời gian (cụm là đoạn liền của tuyến nên vẫn tăng dần trong từng schedule). `DEFERRED` vẫn `seq` 0.
+- IN `tasks[]`: `contract_name`, `bill_number`, `timezone` — chuỗi, `null` / không gửi = `""`; kiểu khác → lỗi field (nới lỏng: bỏ ca + `TASK_DROPPED` như các field khác). Hết cảnh báo `UNKNOWN_FIELD`. `bill_number` chỉ nhận, chưa phát ra OUT (sheet 03 không có). `timezone` chỉ echo, **chưa dùng để đổi giờ** (định dạng chưa chốt).
+- OUT mỗi dòng TASK và DEFERRED, sau `contract_no` (đúng thứ tự sheet 03): `contract_name`, `timezone` (echo), `appointment`, `complete_date` (echo dạng `YYYY-MM-DD HH:mm:ss`, `""` khi không có).
+- Dấu vân tay cache (7.20.1b) băm cả IN → field mới tự vào, không sửa.
+
+**File:** `api.hpp/.cpp` (`Task.contract_name/bill_number/timezone`, parse), `plan.cpp` (`echo_datetime`, 4 field ở `deferred_row` + dòng TASK, bộ đếm `seq` chung). **Test:** `test_cluster` + `test_invariants` (seq liên tục qua cụm); `test_pipeline` (thứ tự field sheet 03 thêm 4 field; echo đúng / `""`; ca có `complete_date` chỉ khác đúng field đó); `test_api` (3 field hợp lệ strict, null = "", sai kiểu → lỗi). `ctest` 18/18.
+
+**Chưa làm (chờ chốt):** (4) `sla_buffer_minutes` — cần chốt công thức và dấu ("Dự kiến trễ N phút", demo Mobix "-5 phút"); (1) tên loại hóa đơn `tra_truoc` / `tra_sau` của sheet 05 — code tra `hoa_don_tra_truoc` / `hoa_don_tra_sau`; nếu OA gửi tên mới → `UNKNOWN_TASK_TYPE`, rơi về loại mặc định (check-in trước B, 60′), **mất luật hoàn tất trong tháng / lọc K / mục E** → hỏi OA tên thật; (5) `action_type` cho API Mobix (sheet 09) — trùng nghĩa `priority_type` 0/1/2 (7.26); chưa chốt transport và việc ghi đè mode của IN.
 
 ### Phase 8 — Bài lớn (> 12 việc): LNS và LNS + QHĐ cửa sổ trượt (người dùng duyệt 2026-10-08) ✅ đã thực thi
 

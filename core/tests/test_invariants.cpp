@@ -150,13 +150,13 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
     auto tenth = [](const ojson& value) { return std::llround(value.get<double>() * 10); };
     std::set<long long> seen;
     std::string last_time;
+    int expected_seq = 1;  // 7.27: seq tăng liên tục qua mọi cụm (workbook (6))
     for (size_t c = 0; c < clusters.size(); ++c) {
         const auto& cluster = clusters[c];
         CHECK(cluster["cluster_seg"] == static_cast<int>(c) + 1);
         CHECK(cluster["cluster_code"] == "CL-" + std::to_string(c + 1));
         cluster_tasks += cluster["task_count"].get<long long>();
         CHECK(cluster["radius_m"].get<long long>() >= 0);
-        int expected_seq = 1;
         bool deferred_tail = false;
         long long cluster_tenths = 0, cluster_handle = 0, first_tenths = -1;
         const auto& schedule = cluster["schedule"];

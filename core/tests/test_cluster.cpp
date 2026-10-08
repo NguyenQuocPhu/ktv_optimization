@@ -76,10 +76,10 @@ int main() {
         CHECK(r.response["data"]["metrics"]["cluster_count"] == 2);
         CHECK(r.response["data"]["metrics"]["tasks_total"] == 3);
 
-        // Ghép TASK theo đúng thứ tự cụm: [1] rồi [2,3], seq mỗi cụm bắt đầu từ 1.
+        // Ghép TASK theo đúng thứ tự cụm: [1] rồi [2,3]; 7.27: seq tăng liên tục qua các cụm (1, 2, 3, …).
         std::vector<long long> order;
+        int expected_seq = 1;
         for (const auto& cluster : clusters) {
-            int expected_seq = 1;
             for (const auto& row : cluster["schedule"]) {
                 CHECK(row.contains("entry_type") && !row.contains("type"));
                 CHECK(row["seq"] == expected_seq++);

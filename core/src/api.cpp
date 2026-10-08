@@ -437,7 +437,8 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                     {"task_id", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
                      "task_sub_name", "task_status_id", "task_status_name", "sla", "appointment", "create_date",
                      "CreateDate", "complete_date", "location", "latlng", "handle_minutes", "task_plots_id", "staff_plots_id",
-                     "staff_role", "block_id", "location_id", "contract_id", "contract_no"});
+                     "staff_role", "block_id", "location_id", "contract_id", "contract_no", "contract_name",
+                     "bill_number", "timezone"});
             Task t;
             t.task_id = tr.integer<long long>(item, path, "task_id");
             t.task_group_id = tr.integer<int>(item, path, "task_group_id");
@@ -492,6 +493,13 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
             if (item.contains("contract_no") && !item["contract_no"].is_null()) {  // null = không có, như contract_id
                 if (item["contract_no"].is_string()) t.contract_no = item["contract_no"].get<std::string>();
                 else tr.fail(path + ".contract_no", "cần chuỗi hoặc null");
+            }
+            // 7.27: field chuỗi mới của workbook (6); null = không có.
+            for (auto [key, target] : {std::pair<const char*, std::string*>{"contract_name", &t.contract_name},
+                                       {"bill_number", &t.bill_number}, {"timezone", &t.timezone}}) {
+                if (!item.contains(key) || item[key].is_null()) continue;
+                if (item[key].is_string()) *target = item[key].get<std::string>();
+                else tr.fail(path + "." + key, "cần chuỗi hoặc null");
             }
             if (!item.contains("latlng")) {
                 tr.fail(path + ".latlng", "thiếu field bắt buộc");

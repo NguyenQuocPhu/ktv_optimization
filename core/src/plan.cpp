@@ -49,6 +49,9 @@ double priority_score(const Task& task, const TaskKind& kind, const Deadlines& d
 
 // 7.20.2: một ca tồn không xếp hôm nay (workbook (5) sheet 03: entry_type DEFERRED, seq 0, at "", task_role inserted).
 // Cùng field với dòng TASK; giờ/SLA/chặng rỗng hoặc 0. reason: NEXT_DAY (hẹn ngày sau) / BEYOND_K (còn > K ngày).
+// 7.27: echo mốc giờ của IN ra OUT (workbook (6) sheet 03) — "" khi không có.
+std::string echo_datetime(const std::optional<Minutes>& when) { return when ? format_datetime(*when) : ""; }
+
 ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rules& rules) {
     const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
     const double priority = priority_score(task, kind, resolve_deadlines(task, kind, now), now, rules);
@@ -59,9 +62,10 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
             {"task_type_id", task.task_type_id}, {"task_type_name", task.task_type_name},
             {"task_sub_id", task.task_sub_id}, {"task_sub_name", task.task_sub_name},
             {"checkindate", ""}, {"checkoutdate", ""}, {"travel_minutes_before", 0}, {"travel_km_before", 0.0},
-            {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))}, {"projected_sla", ""},
-            {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
-            {"contract_no", task.contract_no.value_or("")}};
+            {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))}, {"projected_sla", ""}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
+            {"contract_no", task.contract_no.value_or("")}, {"contract_name", task.contract_name},
+            {"timezone", task.timezone}, {"appointment", echo_datetime(task.appointment)},
+            {"complete_date", echo_datetime(task.complete_date)}};
 }
 
 // ---- Giải thích tuyến (--explain): chi phí theo tầng/rule + so vài phương án khác. ----
@@ -661,7 +665,11 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                          {"handle_minutes", std::llround(service)}, {"projected_sla", sla},
                          // Sheet 03: string; sheet 00: rỗng là "" (không null). Không gửi / null → "" (7.19).
                          {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
-                         {"contract_no", task.contract_no.value_or("")}};
+                         {"contract_no", task.contract_no.value_or("")},
+                         // 7.27 (workbook (6)): echo từ IN để Mobix hiển thị; appointment / complete_date dạng ngày giờ đầy đủ.
+                         {"contract_name", task.contract_name}, {"timezone", task.timezone},
+                         {"appointment", echo_datetime(task.appointment)},
+                         {"complete_date", echo_datetime(task.complete_date)}};
             rows.push_back(std::move(row));
             row_task.push_back(task_ordinal);
             offset += service;
@@ -676,11 +684,13 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             cluster_of_task[k] = c;
 
     std::vector<ojson> cluster_schedule(summaries.size(), ojson::array());
-    std::vector<int> cluster_seq(summaries.size(), 0);
+    // 7.27 (workbook (6) sheet 03): seq tăng liên tục qua MỌI cụm (1, 2, 3, 4, …), không đếm lại từ 1 mỗi cụm.
+    // Dòng theo thứ tự thời gian và cụm là đoạn liền của tuyến → đếm chung một biến là đủ. DEFERRED vẫn seq 0.
+    int seq = 0;
     for (size_t i = 0; i < rows.size(); ++i) {
         const int c = row_task[i] < 0 ? 0 : cluster_of_task[row_task[i]];
         ojson ordered = ojson::object();
-        ordered["seq"] = ++cluster_seq[c];
+        ordered["seq"] = ++seq;
         for (auto it = rows[i].begin(); it != rows[i].end(); ++it) ordered[it.key()] = it.value();
         cluster_schedule[c].push_back(std::move(ordered));
     }
