@@ -254,7 +254,7 @@ int main() {
                 "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role",
                 "priority", "insert_reason", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
                 "task_sub_name", "checkindate", "checkoutdate", "travel_minutes_before", "travel_km_before",
-                "handle_minutes", "projected_sla", "contract_id", "contract_no", "contract_name", "timezone",
+                "handle_minutes", "projected_sla", "sla_buffer_minutes", "contract_id", "contract_no", "contract_name", "timezone",
                 "appointment", "complete_date"};
             if (keys != expected) {
                 std::cerr << "  thứ tự field TASK:";

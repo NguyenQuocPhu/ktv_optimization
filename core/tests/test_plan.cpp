@@ -66,6 +66,28 @@ int main() {
     CHECK(schedule[4]["task_id"] == 5454541 && schedule[4]["start_at"] == "2026-09-28 14:00:00");
     CHECK(schedule[4]["end_at"] == "2026-09-28 15:30:00" && schedule[4]["projected_sla"] == "ON_TIME");
     for (int i = 0; i < 5; ++i) CHECK(schedule[i]["seq"] == i + 1);
+    // 7.27 sla_buffer_minutes: ca hẹn 14:00 (B = 16:00), check-in 14:00 → dư 120′; hóa đơn không hẹn → 0.
+    CHECK(schedule[4]["sla_buffer_minutes"] == 120 && schedule[0]["sla_buffer_minutes"] == 0);
+    {  // Hẹn 09:00, SLA 60′ (B = 10:00), chạy lúc 10:30 → check-in sau B → âm = số phút trễ.
+        json overdue = message();
+        overdue["priority_type"] = 1;
+        overdue["planned_at"] = "2026-09-28 10:30:00";
+        overdue["tasks"]["trien_khai"][0]["appointment"] = "2026-09-28 09:00:00";
+        overdue["tasks"]["trien_khai"][0]["sla"]["sla_minutes"] = 60;
+        errors.clear();
+        const ktv::PlanResult late_run = ktv::plan(ktv::parse_message(overdue, errors), ktv::default_rules(), server_now);
+        bool seen = false;
+        for (const auto& cluster : late_run.response["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row.value("task_id", 0LL) == 5454541) {
+                    seen = true;
+                    const std::string at = row["start_at"].get<std::string>();
+                    const int checkin = std::stoi(at.substr(11, 2)) * 60 + std::stoi(at.substr(14, 2));
+                    CHECK(row["sla_buffer_minutes"] == 600 - checkin && row["sla_buffer_minutes"].get<int>() < 0);
+                    CHECK(row["projected_sla"] == "ALREADY_BREACHED");
+                }
+        CHECK(seen);
+    }
     CHECK(r["data"]["clusters"][0]["task_count"] == 2);
 
     const auto& m = r["data"]["metrics"];

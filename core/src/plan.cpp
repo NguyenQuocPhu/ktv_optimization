@@ -62,7 +62,8 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
             {"task_type_id", task.task_type_id}, {"task_type_name", task.task_type_name},
             {"task_sub_id", task.task_sub_id}, {"task_sub_name", task.task_sub_name},
             {"checkindate", ""}, {"checkoutdate", ""}, {"travel_minutes_before", 0}, {"travel_km_before", 0.0},
-            {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))}, {"projected_sla", ""}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
+            {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))}, {"projected_sla", ""},
+            {"sla_buffer_minutes", 0}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
             {"contract_no", task.contract_no.value_or("")}, {"contract_name", task.contract_name},
             {"timezone", task.timezone}, {"appointment", echo_datetime(task.appointment)},
             {"complete_date", echo_datetime(task.complete_date)}};
@@ -638,6 +639,12 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             const double checkin = v.checkin + offset;
             const double done = checkin + service;
             const char* sla = projected_sla(checkin, done, relative(d.due), relative(d.complete_by), service, now_rel, rules);
+            // 7.27 sla_buffer_minutes = phút còn dư tới hạn (âm = dự kiến trễ, VD -5 = trễ 5′). Chỉ ca có hẹn: hạn check-in B
+            // − giờ check-in dự kiến; loại "hoàn tất trong ngày hẹn" (không có B) → hạn hoàn tất − giờ xong. Không hẹn → 0.
+            const long long buffer = !task.appointment ? 0
+                                     : d.due         ? *d.due - at(checkin)
+                                     : d.complete_by ? *d.complete_by - at(done)
+                                                     : 0;
             at_risk += std::string(sla) == "AT_RISK";
             breach += std::string(sla) == "WILL_BREACH" || std::string(sla) == "ALREADY_BREACHED";
             completed += at(done) <= shift_end;
@@ -663,6 +670,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                          {"travel_minutes_before", k == 0 ? std::llround(v.travel) : 0},
                          {"travel_km_before", k == 0 ? round_to(v.km, 1) : 0.0},
                          {"handle_minutes", std::llround(service)}, {"projected_sla", sla},
+                         {"sla_buffer_minutes", buffer},
                          // Sheet 03: string; sheet 00: rỗng là "" (không null). Không gửi / null → "" (7.19).
                          {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
                          {"contract_no", task.contract_no.value_or("")},
