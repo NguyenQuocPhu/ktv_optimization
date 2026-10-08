@@ -68,6 +68,13 @@ struct Rules {
     double priority_weight[5] = {1, 4, 3, 2, 1};  // [0] = việc không có ưu tiên; [1..4] = P1..P4.
     int max_exact_tasks = 12;      // Tới ngần này việc thì QHĐ ra thứ tự tốt nhất; nhiều hơn dùng tham lam (12 việc: chậm nhất ~0,1 s).
     int max_labels = 32;           // Mỗi trạng thái QHĐ giữ tối đa ngần này nhãn; vượt thì kết quả gần đúng.
+    // Phase 8 — bài > max_exact_tasks: "improve" = tham lam + or-opt/2-opt (như trước); "lns" = thêm phá – dựng lại;
+    // "lns_window" = LNS + QHĐ cửa sổ trượt đánh bóng mỗi tuyến tốt nhất mới; "alns_dp" (8.1, thử nghiệm) = thêm QHĐ
+    // làm bước đi trong vòng LNS + chọn cách thích nghi. Giới hạn theo vòng (không theo đồng hồ)
+    // → cùng input cùng tuyến trên mọi máy.
+    std::string large_method = "lns_window";  // Người dùng chốt 2026-10-08 theo bảng quét Phase 8.
+    int lns_iterations = 1000;  // Số vòng phá – dựng lại (điểm gãy: 13–20 việc gần tối ưu, ≤ ~0,11 s).
+    int window_size = 8;       // Số phần tử (việc + nghỉ trưa) QHĐ sắp lại mỗi cửa sổ.
     int k_month_days = 5;          // 7.16.1: ca "hoàn tất trong tháng" còn hơn ngần này ngày làm việc thì không xếp (K theo catalogue). [GIẢ ĐỊNH]
     // 7.16.3 — gộp điểm dừng cùng địa chỉ (catalogue mục C; workbook không có mã nhóm → AI tự gom theo địa chỉ).
     double stop_group_radius_m = 50;       // Bán kính coi là cùng địa chỉ (tham số cấu hình catalogue, sheet 1).

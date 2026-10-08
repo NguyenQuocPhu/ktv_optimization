@@ -4,6 +4,7 @@
 #include <array>
 #include <limits>
 #include <optional>
+#include <random>
 #include <utility>
 
 namespace ktv {
@@ -159,7 +160,8 @@ struct Search {
     }
 
     // Chấm một thứ tự có sẵn (có thể chứa kBreak). Vi phạm luật nghỉ, thiếu/thừa việc → kInfeasible.
-    Key evaluate(const std::vector<int>& order) {
+    // partial = true (Phase 8, LNS đang dựng lại): không đòi đủ ca bắt buộc — chỉ so các tuyến dở cùng tập việc.
+    Key evaluate(const std::vector<int>& order, bool partial = false) {
         pool.resize(1);
         int label = 0, i = -1;
         uint64_t mask = 0;
@@ -172,7 +174,7 @@ struct Search {
             mask |= bit_of(p, j);
             if (j != kBreak) i = j;
         }
-        if ((mask & mandatory) != mandatory) return kInfeasible;  // Thiếu ca bắt buộc (ca tuỳ chọn được thiếu).
+        if (!partial && (mask & mandatory) != mandatory) return kInfeasible;  // Thiếu ca bắt buộc (ca tuỳ chọn được thiếu).
         return final_key(pool[label], mask);
     }
 };
@@ -358,13 +360,270 @@ std::vector<int> heuristic(Search& s) {
     return best;
 }
 
+// ---- Phase 8: bài > max_exact_tasks — LNS (phá – dựng lại) và QHĐ cửa sổ trượt ----
+
+// QHĐ cửa sổ: sắp lại TỐI ƯU w phần tử order[a, a + w) (việc và / hoặc nghỉ trưa), giữ nguyên phần trước và phần sau;
+// chấm theo khóa CẢ tuyến (phần sau bị đẩy sớm / muộn được tính). Bảng như exact() nhưng trên w phần tử, xuất phát từ
+// nhãn cuối phần trước. Ô cuối giữ mọi nhãn không bị trội (giờ xong + phạt) → nối phần sau vào từng nhãn, lấy khóa nhỏ
+// nhất: chính xác vì phạt phần sau không giảm khi xong muộn hơn (cùng việc cuối). Trả true nếu order đổi (khóa giảm).
+bool window_dp(Search& s, std::vector<int>& order, int a, int w, Key& best_key) {
+    const Problem& p = s.p;
+    s.pool.resize(1);
+    int start = 0, i = -1;
+    uint64_t mask = 0;
+    for (int k = 0; k < a; ++k) {
+        auto next = s.extend(start, mask, i, order[k]);
+        if (!next) return false;
+        s.pool.push_back(*next);
+        start = static_cast<int>(s.pool.size()) - 1;
+        mask |= bit_of(p, order[k]);
+        if (order[k] != kBreak) i = order[k];
+    }
+    const std::vector<int> elems(order.begin() + a, order.begin() + a + w);
+    const int full = (1 << w) - 1;
+    std::vector<uint64_t> bits(full + 1, 0);  // bit toàn cục của một tập con cửa sổ
+    for (int lm = 1; lm <= full; ++lm) bits[lm] = bits[lm & (lm - 1)] | bit_of(p, elems[__builtin_ctz(lm)]);
+    // Ô [tập con][phần tử thật làm cuối + 1]; -1 = vẫn ở chỗ cuối phần trước.
+    std::vector<std::vector<int>> table(static_cast<size_t>(full + 1) * (w + 1));
+    auto cell = [&](int lm, int last) -> std::vector<int>& { return table[lm * (w + 1) + last + 1]; };
+    cell(0, -1).push_back(start);
+    for (int lm = 0; lm < full; ++lm)
+        for (int last = -1; last < w; ++last) {
+            if (last >= 0 && !(lm >> last & 1)) continue;
+            const int at = last < 0 ? i : elems[last];
+            for (int label : cell(lm, last))
+                for (int e = 0; e < w; ++e) {
+                    if (lm >> e & 1) continue;
+                    if (auto next = s.extend(label, mask | bits[lm], at, elems[e]))
+                        s.keep(cell(lm | 1 << e, elems[e] == kBreak ? last : e), *next);
+                }
+        }
+    int best = -1;
+    for (int last = -1; last < w; ++last)
+        for (int label : cell(full, last)) {
+            int tail = label, at = last < 0 ? i : elems[last];
+            uint64_t done = mask | bits[full];
+            for (size_t k = a + w; k < order.size() && tail >= 0; ++k) {
+                auto next = s.extend(tail, done, at, order[k]);
+                if (!next) {
+                    tail = -1;
+                    break;
+                }
+                s.pool.push_back(*next);
+                tail = static_cast<int>(s.pool.size()) - 1;
+                done |= bit_of(p, order[k]);
+                if (order[k] != kBreak) at = order[k];
+            }
+            if (tail < 0) continue;
+            if (Key k = s.final_key(s.pool[tail], done); k < best_key) best_key = k, best = label;
+        }
+    if (best < 0) return false;
+    std::vector<int> middle;
+    for (int label = best; label != start; label = s.pool[label].parent) middle.push_back(s.pool[label].task);
+    std::reverse(middle.begin(), middle.end());
+    std::copy(middle.begin(), middle.end(), order.begin() + a);
+    return true;
+}
+
+constexpr int kMaxWindowPasses = 10;
+
+// Trượt cửa sổ w phần tử từ đầu tới cuối tuyến (bước 1), lặp lượt tới khi không cửa sổ nào cải thiện.
+std::vector<int> window_sweep(Search& s, std::vector<int> order, int w) {
+    w = std::min(w, static_cast<int>(order.size()));
+    if (w < 2) return order;
+    Key best_key = s.evaluate(order);
+    if (std::isinf(best_key[0])) return order;
+    for (int pass = 0; pass < kMaxWindowPasses; ++pass) {
+        bool improved = false;
+        for (int a = 0; a + w <= static_cast<int>(order.size()); ++a) improved |= window_dp(s, order, a, w, best_key);
+        if (!improved) break;
+    }
+    return order;
+}
+
+// LNS: lặp `iterations` vòng: PHÁ (rút k = 2–5 phần tử theo một trong 5 cách) → DỰNG LẠI (chèn từng phần tử vào chỗ
+// khóa nhỏ nhất; ca tuỳ chọn / nghỉ trưa được phép bỏ) → NHẬN nếu khóa không tăng. 60 vòng không có tuyến tốt nhất mới
+// thì quay về tuyến tốt nhất. window > 1: mỗi tuyến tốt nhất mới được QHĐ cửa sổ trượt đánh bóng. Bộ sinh ngẫu nhiên
+// seed cố định → tất định.
+// adaptive (Phase 8.1, "alns_dp"): QHĐ thành bước đi TRONG vòng lặp + chọn cách thích nghi (ALNS). Thêm 2 cách:
+//   5 "kéo cụm + QHĐ": rút 2–4 việc liên quan (gần về địa lý hoặc giờ) đang rải rác, đặt liền nhau ở vị trí chèn tốt
+//     nhất của việc đầu, rồi QHĐ sắp lại tối ưu cửa sổ quanh đó (các việc vừa kéo + hàng xóm);
+//   6 "cửa sổ ngẫu nhiên": QHĐ một cửa sổ ở vị trí ngẫu nhiên của tuyến HIỆN TẠI (kể cả khi chưa phải tốt nhất).
+//   Mỗi cách có trọng số, chọn kiểu quay xổ số; được điểm khi ra tuyến tốt nhất mới (5) / tốt hơn hiện tại (2) /
+//   được nhận (0,5); cứ 100 vòng trọng số = 0,8 × cũ + 0,2 × điểm TB mỗi lần dùng (sàn 0,05).
+constexpr int kInnerWindow = 6;  // cửa sổ trong vòng lặp (64 ô): rẻ hơn cửa sổ đánh bóng
+
+std::vector<int> lns(Search& s, std::vector<int> start, int iterations, int window, bool adaptive = false) {
+    const Problem& p = s.p;
+    const Rules& rules = s.rules;
+    std::mt19937 rng(20261008u + static_cast<unsigned>(p.size()));
+    auto pick = [&](int n) { return static_cast<int>(rng() % static_cast<unsigned>(n)); };
+    std::vector<int> best = window > 1 ? window_sweep(s, start, window) : start;
+    Key best_key = s.evaluate(best);
+    if (std::isinf(best_key[0])) return start;
+    std::vector<int> current = best;
+    Key current_key = best_key;
+    int since_best = 0;
+    constexpr int kOps = 7;
+    double weight[kOps], score[kOps] = {}, uses[kOps] = {};
+    std::fill(weight, weight + kOps, 1.0);
+    auto roulette = [&] {
+        double total = 0;
+        for (double w : weight) total += w;
+        double r = rng() / 4294967296.0 * total;
+        for (int op = 0; op < kOps; ++op)
+            if ((r -= weight[op]) < 0) return op;
+        return kOps - 1;
+    };
+    // Rút k việc thật gần `seed` nhất (theo km hoặc theo giờ: hạn B, không có thì giờ check-in hiện tại).
+    auto related = [&](const std::vector<int>& route, const std::vector<int>& real, bool geo, int k, std::vector<char>& drop) {
+        const std::vector<Visit> steps = walk(p, route);
+        const int seed = real[pick(static_cast<int>(real.size()))];
+        auto distance = [&](int pos) {
+            if (geo) return p.travel.km[route[seed] + 1][route[pos] + 1];
+            auto when = [&](int q) { return std::isnan(p.due[route[q]]) ? steps[q].checkin : p.due[route[q]]; };
+            return std::abs(when(pos) - when(seed));
+        };
+        std::vector<int> near = real;
+        std::stable_sort(near.begin(), near.end(), [&](int x, int y) { return distance(x) < distance(y); });
+        for (int c = 0; c < k; ++c) drop[near[c]] = 1;
+    };
+    auto hard_first = [&](std::vector<int>& items) {  // hạn B sớm trước, rồi ưu tiên cao
+        std::stable_sort(items.begin(), items.end(), [&](int x, int y) {
+            auto due = [&](int j) { return j == kBreak || std::isnan(p.due[j]) ? 1e18 : p.due[j]; };
+            if (due(x) != due(y)) return due(x) < due(y);
+            return (x == kBreak ? 0 : p.weight[x]) > (y == kBreak ? 0 : p.weight[y]);
+        });
+    };
+    for (int it = 0; it < iterations; ++it) {
+        const int op = adaptive ? roulette() : it % 5;
+        std::vector<int> route = current;
+        std::vector<int> real;  // vị trí các việc thật trong route
+        for (int k = 0; k < static_cast<int>(route.size()); ++k)
+            if (route[k] != kBreak) real.push_back(k);
+        if (real.size() < 3) break;
+        if (op == 6) {  // cửa sổ ngẫu nhiên trên tuyến hiện tại
+            const int w = std::min(kInnerWindow, static_cast<int>(route.size()));
+            Key key = current_key;
+            window_dp(s, route, pick(static_cast<int>(route.size()) - w + 1), w, key);
+        } else if (op == 5) {  // kéo cụm + QHĐ
+            const int k = std::min<int>(2 + pick(3), static_cast<int>(real.size()) - 1);
+            std::vector<char> drop(route.size(), 0);
+            related(route, real, pick(2) == 0, k, drop);
+            std::vector<int> removed, kept;
+            for (size_t q = 0; q < route.size(); ++q) (drop[q] ? removed : kept).push_back(route[q]);
+            hard_first(removed);
+            int anchor = 0;
+            Key anchor_key = kInfeasible;
+            for (int b = 0; b <= static_cast<int>(kept.size()); ++b) {
+                std::vector<int> candidate = kept;
+                candidate.insert(candidate.begin() + b, removed[0]);
+                if (Key key = s.evaluate(candidate, true); b == 0 || key < anchor_key) anchor = b, anchor_key = key;
+            }
+            route = kept;
+            route.insert(route.begin() + anchor, removed.begin(), removed.end());
+            const int m = static_cast<int>(route.size());
+            const int w = std::min(m, std::max(kInnerWindow, k + 2));
+            const int from = std::clamp(anchor - (w - k) / 2, 0, m - w);
+            Key key = s.evaluate(route);
+            window_dp(s, route, from, w, key);
+        } else {
+            const int k = std::min<int>(2 + pick(4), static_cast<int>(real.size()) - 1);
+            std::vector<char> drop(route.size(), 0);
+            switch (op) {
+                case 0:  // ngẫu nhiên (có thể trúng nghỉ trưa)
+                    for (int c = 0; c < k; ++c) drop[pick(static_cast<int>(route.size()))] = 1;
+                    break;
+                case 1:  // một đoạn liền (một "buổi")
+                    for (int c = 0, from = pick(static_cast<int>(route.size())); c < k && from + c < static_cast<int>(route.size()); ++c)
+                        drop[from + c] = 1;
+                    break;
+                case 2:  // gần nhau về địa lý quanh một việc ngẫu nhiên
+                case 3:  // gần nhau về giờ
+                    related(route, real, op == 2, k, drop);
+                    break;
+                default: {  // tệ nhất: bước có phạt (theo tầng) lớn nhất
+                    const std::vector<Visit> steps = walk(p, route);
+                    std::vector<std::pair<Key, int>> cost;
+                    for (int pos : real) {
+                        Key c{};
+                        for (int t = 0; t < s.tiers; ++t)
+                            for (auto [rule, weight] : rules.tiers[t])
+                                if (rule != FINISH) c[t] += weight * steps[pos].cost[rule];
+                        cost.push_back({c, pos});
+                    }
+                    std::stable_sort(cost.begin(), cost.end(), [](const auto& x, const auto& y) { return y.first < x.first; });
+                    for (int c = 0; c < k; ++c) drop[cost[c].second] = 1;
+                }
+            }
+            std::vector<int> removed, kept;
+            for (size_t q = 0; q < route.size(); ++q) (drop[q] ? removed : kept).push_back(route[q]);
+            route.swap(kept);
+            // Ca tuỳ chọn đang bỏ: 1/4 cơ hội được thử chèn lại ở vòng này.
+            for (int j = 0; j < p.size(); ++j)
+                if (p.is_optional(j) && std::find(current.begin(), current.end(), j) == current.end() && pick(4) == 0)
+                    removed.push_back(j);
+            // Thứ tự dựng: nghỉ trưa trước (thiếu nghỉ thì tuyến dở hay phạm luật); rồi xen kẽ "khó trước" (hạn B sớm,
+            // ưu tiên cao) và ngẫu nhiên.
+            if (pick(2) == 0) {
+                hard_first(removed);
+            } else {
+                for (int q = static_cast<int>(removed.size()) - 1; q > 0; --q) std::swap(removed[q], removed[pick(q + 1)]);
+            }
+            std::stable_partition(removed.begin(), removed.end(), [](int j) { return j == kBreak; });
+            for (int j : removed) {
+                const bool may_skip = j == kBreak || p.is_optional(j);
+                std::vector<int> chosen = route;
+                Key chosen_key = may_skip ? s.evaluate(route, true) : kInfeasible;
+                bool have = may_skip;
+                for (int b = 0; b <= static_cast<int>(route.size()); ++b) {
+                    std::vector<int> candidate = route;
+                    candidate.insert(candidate.begin() + b, j);
+                    if (Key key = s.evaluate(candidate, true); !have || key < chosen_key)
+                        chosen.swap(candidate), chosen_key = key, have = true;
+                }
+                route.swap(chosen);
+            }
+        }
+        uses[op] += 1;
+        const Key key = s.evaluate(route);
+        if (!std::isinf(key[0])) {
+            const bool new_best = key < best_key, better = key < current_key;
+            if (!(current_key < key)) current.swap(route), current_key = key, score[op] += new_best ? 5 : better ? 2 : 0.5;
+            if (current_key < best_key) {
+                best = window > 1 ? window_sweep(s, current, window) : current;
+                best_key = s.evaluate(best);
+                current = best, current_key = best_key, since_best = 0;
+            } else if (++since_best >= 60) {
+                current = best, current_key = best_key, since_best = 0;
+            }
+        }
+        if (adaptive && (it + 1) % 100 == 0) {
+            for (int o = 0; o < kOps; ++o) {
+                if (uses[o] > 0) weight[o] = std::max(0.05, 0.8 * weight[o] + 0.2 * score[o] / uses[o]);
+                score[o] = uses[o] = 0;
+            }
+        }
+    }
+    best = improve(s, best, false);
+    if (window > 1) best = window_sweep(s, best, window);
+    return best;
+}
+
 }  // namespace
 
 Solution solve(const Problem& p, const Rules& rules) {
     Search s(p, rules);
     Solution result{{}, {}, Source::Optimal};
-    if (p.size() > rules.max_exact_tasks) result = {heuristic(s), {}, Source::Heuristic};
-    else if (p.size() > 0) result = exact(s);
+    if (p.size() > rules.max_exact_tasks) {
+        std::vector<int> order = heuristic(s);
+        if (rules.large_method != "improve")  // Phase 8 / 8.1
+            order = lns(s, order, rules.lns_iterations, rules.large_method == "lns" ? 0 : rules.window_size,
+                        rules.large_method == "alns_dp");
+        result = {order, {}, Source::Heuristic};
+    } else if (p.size() > 0) {
+        result = exact(s);
+    }
     result.steps = walk(p, result.order);
     return result;
 }
@@ -375,6 +634,12 @@ Solution solve_from(const Problem& p, const Rules& rules, const std::vector<int>
     Key best_key = s.evaluate(start);
     for (bool reverse_first : {false, true}) {
         std::vector<int> candidate = improve(s, start, reverse_first);
+        if (Key k = s.evaluate(candidate); k < best_key) best.swap(candidate), best_key = k;
+    }
+    // Phase 8: tiếp tục bằng LNS (cùng large_method với solve) — rút / chèn lại cả ca tuỳ chọn, chỉ nhận khi khóa giảm.
+    if (rules.large_method != "improve" && !std::isinf(best_key[0])) {
+        std::vector<int> candidate = lns(s, best, rules.lns_iterations, rules.large_method == "lns" ? 0 : rules.window_size,
+                                         rules.large_method == "alns_dp");
         if (Key k = s.evaluate(candidate); k < best_key) best.swap(candidate), best_key = k;
     }
     return {best, walk(p, best), Source::Heuristic};

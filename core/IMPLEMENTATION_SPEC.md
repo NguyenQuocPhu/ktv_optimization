@@ -166,7 +166,7 @@ Không cần tạo một class riêng cho mỗi “service”. `plan()` hiện l
 | Tuyến có giờ hẹn | `plan()` → travel matrix → `dp::solve()` | QHĐ hiện có xử lý appointment/late/shift/lunch break |
 | Batch đầu ngày | input fan-out + worker loop | N message một KTV; mỗi record gọi cùng `plan()`, không tạo batch solver/API riêng |
 | Replan tự động | OA gửi worklist mới sau event; cùng pipeline `plan()` | Dữ liệu đổi là nguyên nhân tính lại; không cần ý định/tuỳ chọn của KTV |
-| Reoptimize do KTV | Use case riêng, bàn sau khi nối Kafka (Phase 8); có context/ý định của user | Không coi là replan thường; contract và tiêu chí chấp nhận kết quả chốt ở Phase 8 |
+| Reoptimize do KTV | Use case riêng, bàn sau khi nối Kafka (Phase 9); có context/ý định của user | Không coi là replan thường; contract và tiêu chí chấp nhận kết quả chốt ở Phase 9 |
 
 ### 4.4 Adapter Kafka
 
@@ -1294,7 +1294,7 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 - **Test** (`test_invariants`, 3.000 message): km/phút đi/xử lý/IDLE/BREAK của metrics = tổng dòng; km vào/trong cụm + `handle_minutes` cụm = tổng dòng của cụm; IDLE "Chờ tới khung hẹn" luôn có TASK ngay sau trong cùng cụm. Trên code cũ fail (tổng km 24 lần, phút đi 27, IDLE sai cụm 10). Kiểm chéo 400 biến thể `sample_in.json`: hết lệch. `ctest` 18/18.
 
 **Còn lại — để sau (người dùng chốt):**
-- **7.19.4 Field luôn rỗng / một giá trị.** `checkindate`, `checkoutdate` luôn `""` (sheet 03 tự mâu thuẫn: "giờ check-in **dự kiến**; `""` khi chưa check-in"; giờ dự kiến đã có ở `start_at`/`end_at`) — hỏi OA: là giờ thật (echo từ OA) hay bỏ? `priority_type` luôn 0 (chờ Phase 8 mode). `trace_id` = `message_id`.
+- **7.19.4 Field luôn rỗng / một giá trị.** `checkindate`, `checkoutdate` luôn `""` (sheet 03 tự mâu thuẫn: "giờ check-in **dự kiến**; `""` khi chưa check-in"; giờ dự kiến đã có ở `start_at`/`end_at`) — hỏi OA: là giờ thật (echo từ OA) hay bỏ? `priority_type` luôn 0 (chờ Phase 9 mode). `trace_id` = `message_id`.
 - **7.19.5 Nghĩa chưa chắc.** `task_role` theo **loại việc** (`TaskKind.extra`), không theo việc có thực sự được chèn: thu hồi xếp đầu tuyến lúc 08:05 vẫn là `inserted`. `name` cụm lấy tên lô KTV → nhiều cụm cùng tên (VD 5 cụm đều "Phú Mỹ"); workbook mẫu đặt tên theo phường/đường. Cắt cụm theo chặng > 2 km → 6 việc ra 5 cụm khá phổ biến. Chặng 0,1 km ra 0 phút (làm tròn).
 
 ##### 7.20 — Hợp đồng OUT theo `API-Goi-y-cong-viec (5).xlsx` (kế hoạch, người dùng duyệt hướng 2026-10-06)
@@ -1321,9 +1321,9 @@ key: tầng 3 cộng thêm weight × cost, mặc định weight = 0.5
 
 **7.20.1b — worker trả cache khi IN không đổi (thiết kế đã chốt hướng, chưa code):**
 
-*Quyết theo NỘI DUNG IN, không theo tên trigger* (người dùng duyệt). Lý do: IN là snapshot, trigger chỉ là nhãn — bỏ qua theo nhãn có thể trả tuyến sai (VD E-12 "giao thông" tới sau một E-08 hủy ca bị lỗi: IN đã phản ánh ca hủy, trả cache = tuyến còn ca đã hủy); tên trigger thật của OA chưa chốt; catalogue: `lyDoGoi` chỉ để log, nhiều thay đổi dồn vào một IN. `plan()` tất định → dấu vân tay nội dung trùng thì kết quả chắc chắn y hệt → trả cache luôn an toàn. Áp vào catalogue: E-02…E-08 (danh sách ca đổi) → `yes`; E-12 không có dữ liệu giao thông, KTV đứng yên → `no`; E-12 KTV lệch tuyến (GPS đổi) → `yes`; E-10 đổi mode (chưa có mode) → `no`, sau Phase 8 mode vào dấu vân tay → `yes`; E-09 "Tối ưu lại" không có gì đổi → `no`; spam IN giống hệt → `no`. Trigger chỉ dùng chiều ngược lại: `rules.json` `force_recompute_triggers` (mặc định rỗng; VD khi có dữ liệu giao thông thật thì thêm E-12).
+*Quyết theo NỘI DUNG IN, không theo tên trigger* (người dùng duyệt). Lý do: IN là snapshot, trigger chỉ là nhãn — bỏ qua theo nhãn có thể trả tuyến sai (VD E-12 "giao thông" tới sau một E-08 hủy ca bị lỗi: IN đã phản ánh ca hủy, trả cache = tuyến còn ca đã hủy); tên trigger thật của OA chưa chốt; catalogue: `lyDoGoi` chỉ để log, nhiều thay đổi dồn vào một IN. `plan()` tất định → dấu vân tay nội dung trùng thì kết quả chắc chắn y hệt → trả cache luôn an toàn. Áp vào catalogue: E-02…E-08 (danh sách ca đổi) → `yes`; E-12 không có dữ liệu giao thông, KTV đứng yên → `no`; E-12 KTV lệch tuyến (GPS đổi) → `yes`; E-10 đổi mode (chưa có mode) → `no`, sau Phase 9 mode vào dấu vân tay → `yes`; E-09 "Tối ưu lại" không có gì đổi → `no`; spam IN giống hệt → `no`. Trigger chỉ dùng chiều ngược lại: `rules.json` `force_recompute_triggers` (mặc định rỗng; VD khi có dữ liệu giao thông thật thì thêm E-12).
 
-*Dấu vân tay gồm:* **ngày** chạy (bỏ giờ) · `staff` (GPS **làm tròn 4 số ≈ 11 m** như gateway, `available`, `status`, `current_task`, `plots`) · toàn bộ `tasks` **sắp theo `task_id`** (OA đổi thứ tự mảng không lệch; kết quả `plan()` không phụ thuộc thứ tự). **Bỏ qua:** `message_id`, `trigger`, `run_code`, giờ trong `planned_at`. (Sau Phase 8: thêm mode.) Lưu cạnh `state` trong Redis.
+*Dấu vân tay gồm:* **ngày** chạy (bỏ giờ) · `staff` (GPS **làm tròn 4 số ≈ 11 m** như gateway, `available`, `status`, `current_task`, `plots`) · toàn bộ `tasks` **sắp theo `task_id`** (OA đổi thứ tự mảng không lệch; kết quả `plan()` không phụ thuộc thứ tự). **Bỏ qua:** `message_id`, `trigger`, `run_code`, giờ trong `planned_at`. (Sau Phase 9: thêm mode.) Lưu cạnh `state` trong Redis.
 
 Ví dụ (KTV `00061718`, 26/06):
 
@@ -1547,7 +1547,119 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 **Test:** `test_dp` — 2 việc, tránh 1 ca trễ (hạn, rồi hẹn) phải đi thêm 10 km: SLA đi vòng, Tuyến chịu trễ, Kết nối Q = 5 (11,7 km) đi vòng, Q = 3 (7 km) chịu trễ; Tuyến lệch 0,5 km thì tránh trễ hẹn (≈ 1 km) thắng. `test_plan` — 0 → tầng 1 có KM + 3 rule SLA trọng số 0,7/0,3 × Q; 2 → KM + LATE_CHECKIN tầng 1, LATE_COMPLETION tầng 2; `rules.json` sinh lại / ghi đè / từ chối share = 1; các khối kiểm bố cục tầng SLA (sheet 08, lọc K, 7.17 mục E) chạy mode 1. `test_invariants` — 3.000 message chia đều 3 mode; kiểm "chèn ca tuỳ chọn không làm tầng 1/2 tệ đi" chạy ở mode SLA và tắt SKIP ở cả 3 bộ tầng (trước đó chỉ tắt ở `tiers`). `ctest` 18/18.
 **Hỏi OA:** xác nhận mặc định 0 = 70/30, tuyến 100% bỏ hẳn SLA; tỷ giá Q (1 ca trễ đáng bao nhiêu km) có số nghiệp vụ không.
 
-### Phase 8 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
+### Phase 8 — Bài lớn (> 12 việc): LNS và LNS + QHĐ cửa sổ trượt (người dùng duyệt 2026-10-08) ✅ đã thực thi
+
+**Bối cảnh.** > `max_exact_tasks` (12) việc dùng tham lam + or-opt / 2-opt (`improve`). Stress test sau 7.25: thua tối ưu tầng 1 ở 8–15/30 bài 10–14 việc (lệch TB 0,5–1,3); ~1,8% KTV-ngày thật có > 12 việc. Người dùng muốn phương án **gần tối ưu nhất**. Branch-and-cut (MIP) đã bàn và **không chọn**: khung giờ + nghỉ trưa + phạt theo giờ + so theo tầng làm mô hình MIP lỏng, chậm, khó đoán thời gian, thêm phụ thuộc solver; chỉ đáng làm công cụ đo offline.
+
+**Hai phương án, cùng điểm xuất phát** = tuyến của `improve` → **không bao giờ tệ hơn** hiện tại (chỉ nhận tuyến có khóa nhỏ hơn).
+
+**(A) LNS — phá và dựng lại** (`large_method: "lns"`). Lặp `lns_iterations` (1.000) vòng:
+1. **Phá:** rút k = 2–5 phần tử (việc, có thể cả nghỉ trưa), luân phiên 5 cách theo số vòng: ngẫu nhiên · một đoạn liền ("một buổi") · gần nhau về địa lý quanh một việc · gần nhau về giờ (hạn B, không có thì giờ check-in hiện tại) · "tệ nhất" (bước có phạt theo tầng lớn nhất). Ca tuỳ chọn đang bỏ có 1/4 cơ hội được thử chèn lại mỗi vòng.
+2. **Dựng lại:** nghỉ trưa trước; còn lại xen kẽ "khó trước" (hạn B sớm, ưu tiên cao) hoặc ngẫu nhiên; mỗi phần tử chèn vào vị trí làm khóa (tuyến dở) nhỏ nhất; ca tuỳ chọn / nghỉ trưa được phép không chèn. `evaluate(..., partial)` chấm tuyến dở không đòi đủ ca bắt buộc.
+3. **Nhận:** khóa không tăng → thành tuyến hiện tại (cho đi ngang trên "mặt phẳng"); tốt hơn tuyến tốt nhất → lưu. 60 vòng không có tốt nhất mới → quay về tuyến tốt nhất.
+4. Cuối: `improve` (or-opt / 2-opt) trên tuyến tốt nhất.
+
+**(B) LNS + QHĐ cửa sổ trượt** (`large_method: "lns_window"`). Như (A), thêm **QHĐ cửa sổ** đánh bóng tuyến xuất phát, **mỗi tuyến tốt nhất mới** và tuyến cuối:
+- Cửa sổ = `window_size` (8) phần tử liên tiếp order[a, a + w); phần trước giữ nguyên → nhãn xuất phát (giờ, vị trí, đã nghỉ chưa); QHĐ như `exact()` trên w phần tử (bảng 2^w × (w + 1) ô, nhãn không bị trội).
+- Ô cuối: nối phần sau cửa sổ vào **từng nhãn** còn lại, chấm khóa **cả tuyến**, lấy nhỏ nhất → chính xác cho "sắp lại tối ưu đoạn này khi giữ nguyên phần trước / sau" (phạt phần sau không giảm khi xong muộn hơn, cùng việc cuối).
+- Trượt a = 0, 1, 2, … tới cuối; lặp lượt tới khi không cửa sổ nào cải thiện (tối đa 10 lượt).
+- Ý nghĩa: LNS sửa lỗi **toàn cục** (ca đặt sai buổi / sai khu), cửa sổ làm từng đoạn **tối ưu tuyệt đối** cục bộ.
+
+**Tất định:** `std::mt19937` seed cố định (20261008 + số việc), chỉ dùng `rng() % n` (đầu ra mt19937 do chuẩn C++ quy định); giới hạn theo **số vòng**, không theo đồng hồ (như `improve`) → cùng input cùng tuyến trên mọi máy.
+**Không đổi:** QHĐ chính xác ≤ 12 việc; luật nghỉ trưa / ca tuỳ chọn / tầng; `solve_from` (bước 3 của 7.24). Nguồn tuyến vẫn `HEURISTIC`.
+**`rules.json`:** `large_method` (`improve` | `lns` | `lns_window`; **mặc định `lns_window`**), `lns_iterations` (**mặc định 1.000**), `window_size` (8, tối đa 12); `print-rules` in ra. Quay về hành vi cũ: `"large_method": "improve"`.
+
+**Đo (chương trình scratch `bench_lns.cpp`, cùng bộ sinh bài "giống thật" của stress test 7.25):** 13–15 việc → so **QHĐ chính xác** (`max_exact_tasks` 15 làm đáp án): % trùng tối ưu, số bài thua tầng 1, lệch TB tầng 1 / 2, thời gian TB / chậm nhất; 20 / 30 / 45 / 63 việc → không có đáp án đúng, so với `lns_window` chạy 4.000 vòng làm tham chiếu; 2 mode (SLA, Kết nối). Kết quả (2026-10-08, 400 vòng, cửa sổ 8):
+
+*13–15 việc, so QHĐ chính xác (30 bài mỗi cỡ):*
+
+| Mode | n | `improve` trùng tối ưu / thua tầng 1 | `lns` | `lns_window` | Thời gian TB (max) improve · lns · lns_window |
+|---|---|---|---|---|---|
+| SLA | 13 | 7/30 · 11 | 23/30 · 2 | **24/30 · 0** | 2 (5) · 9 (12) · 19 (37) ms |
+| SLA | 14 | 5/30 · 13 | 23/30 · 3 | **24/30 · 0** | 3 (4) · 11 (13) · 25 (46) ms |
+| SLA | 15 | 3/30 · 17 | 18/30 · 6 | **21/30 · 5** | 3 (5) · 12 (15) · 33 (96) ms |
+| Kết nối | 13 | 4/30 · 26 (lệch 17,7) | 22/30 · 8 (1,1) | **25/30 · 5 (0,3)** | 2 · 9 · 27 (61) ms |
+| Kết nối | 14 | 4/30 · 26 (lệch 33) | 16/30 · 14 (4,4) | **18/30 · 12 (4,3)** | 3 · 10 · 35 (93) ms |
+| Kết nối | 15 | 1/30 · 29 (lệch 28,7) | **16/30 · 14 (2,7)** | 15/30 · 15 (3,2) | 3 · 11 · 45 (125) ms |
+
+*Bài lớn, so tham chiếu `lns_window` 4.000 vòng — lệch TB tầng 1 · thời gian TB (max):*
+
+| Mode | n | `improve` | `lns` | `lns_window` |
+|---|---|---|---|---|
+| SLA | 20 | 2,9 · 10 ms | 0,2 · 25 ms | **0,13 · 60 (99) ms** |
+| SLA | 30 | 4,8 · 33 ms | 0,8 · 69 ms | **0,6 · 134 (160) ms** |
+| SLA | 45 | 7,1 · 139 ms | 1,6 · 228 ms | **0,3 · 462 (573) ms** |
+| SLA | 63 | 10,4 · 387 ms | 2,8 · 576 ms | **2,0 · 923 (1.211) ms** |
+| Kết nối | 20 | 32,6 · 8 ms | 3,8 · 23 ms | **1,7 · 93 (167) ms** |
+| Kết nối | 30 | 64,7 · 26 ms | **3,7 · 59 ms** | 9,5 · 199 (335) ms |
+| Kết nối | 45 | 59,1 · 104 ms | 14,7 · 189 ms | **13,4 · 521 (839) ms** |
+| Kết nối | 63 | 118,3 · 273 ms | 27,2 · 463 ms | **15,2 · 1.311 (2.045) ms** |
+
+*Số vòng, mode Kết nối 14–15 việc (60 bài, so tối ưu) — trùng / thua tầng 1 / lệch TB / ms TB:* `lns` 400: 26 · 34 · 3,34 · 11 — 1.000: 34 · 26 · 2,23 · 23 — 2.500: 42 · 18 · 1,34 · 52; `lns_window` 400: 35 · 25 · 3,22 · 37 — 1.000: 40 · 20 · 1,91 · 50 — 2.500: 42 · 18 · 1,40 · 81.
+
+**Đọc kết quả:**
+- **`improve` (đang chạy production) rất kém ở mode Kết nối** (mặc định từ 7.26): thua tối ưu tầng 1 ở 26–29/30 bài 13–15 việc, lệch TB 18–33 km tương đương. Lý do: tầng 1 trộn km với phạt trễ lớn (11,7 × trọng số) → mặt tìm kiếm gồ ghề, dời 1–3 việc không thoát được hố. SLA ít bị hơn (tầng tách bạch).
+- **LNS sửa phần lớn:** SLA 13–14 việc gần như luôn tối ưu (`lns_window` 0 bài thua tầng 1); Kết nối giảm lệch 5–10 lần.
+- **Cửa sổ trượt** giúp rõ ở SLA và bài lớn, ở Kết nối 14–15 việc ngang `lns` (nhiễu theo bài); chi phí ×2–3 thời gian.
+- **Mode Kết nối còn xa tối ưu** ở 14–15 việc (18–34/60 bài thua): tăng vòng giúp đều (2.500 vòng: 42/60 trùng) → hướng cải tiến tiếp: nhận cả tuyến hơi tệ hơn (kiểu simulated annealing), rút nhiều phần tử hơn.
+- Thời gian: ≤ 30 việc dưới 0,35 s mọi phương án; 63 việc `lns_window` tới ~2 s (mode Kết nối).
+**Test:** `test_dp` — cửa sổ phủ cả tuyến (3–10 việc, không nghỉ, không tuỳ chọn) = QHĐ chính xác (40 bài); `lns` / `lns_window` trên 24 bài 13–20 việc (có nghỉ trưa, có ca tuỳ chọn): tất định (chạy 2 lần cùng thứ tự), không tệ hơn `improve`, luôn hợp lệ; lần chạy đầu: tốt hơn `improve` ở 42/48.
+**Quét số vòng** (cùng bộ bài cố định mỗi ô; 13–15 so QHĐ chính xác, bài lớn so tốt nhất từng thấy; lệch tầng 1 TB · ms TB):
+
+| Vòng | `lns_window` SLA 13–15 (trùng tối ưu) | Kết nối 13–15 | SLA 20 | Kết nối 20 | Kết nối 30 | Kết nối 45 |
+|---|---|---|---|---|---|---|
+| 400 | 34/40 · 27 | 0,84 · 35 | 0,14 · 69 | 5,3 · 84 | 5,1 · 242 | 25,6 · 613 |
+| 600 | 35/40 · 31 | 0,80 · 40 | 0 · 79 | 4,2 · 97 | 3,6 · 273 | 20,3 · 688 |
+| **1.000** | **36/40 · 39** | **0,78 · 46** | **0 · 93** | **1,5 · 111** | **3,0 · 307** | **14,7 · 811** |
+| 1.500 | 36/40 · 49 | 0,63 · 56 | 0 · 113 | 0,2 · 130 | 3,0 · 348 | 14,1 · 912 |
+| 2.500 | 37/40 · 68 | 0,63 · 74 | 0 · 148 | 0,2 · 167 | 3,0 · 429 | 13,4 · 1.105 |
+
+Điểm gãy: 13–15 việc bão hoà từ ~600 vòng; Kết nối 20 việc cải thiện mạnh tới 1.000–1.500; ≥ 30 việc cửa sổ đứng từ ~800 vòng. Ghi nhận: ở Kết nối ≥ 45 việc, **`lns` thuần nhiều vòng tốt hơn khi cùng thời gian** (45 việc `lns` 2.500 vòng: lệch 0,05 trong 0,6 s; `lns_window` 400 vòng cùng 0,6 s: 25,6) — bài > 25 việc rất hiếm nên chưa tách nhánh.
+**Người dùng chốt (2026-10-08):** mặc định **`lns_window`, 1.000 vòng** — 13–20 việc gần tối ưu trong ≤ ~0,11 s; 30 việc ~0,3 s; 45 việc ~0,8 s.
+**Để sau:** tách nhánh > 25 việc → `lns` 2.500 vòng; nhận tuyến hơi tệ hơn (kiểu simulated annealing) cho mode Kết nối.
+
+**Bước 4 của 7.24 cũng dùng Phase 8** (người dùng duyệt 2026-10-08). Ca tuỳ chọn còn thừa sau QHĐ chính xác (hoặc ca bắt buộc > 12) trước chỉ được "chèn / gỡ cục bộ" (`solve_from`). Nay `solve_from` chạy chèn / gỡ cục bộ như cũ rồi **tiếp tục LNS theo `large_method`** (mặc định `lns_window` 1.000 vòng) trên bài đã gồm ca tuỳ chọn: phá có thể rút ca tuỳ chọn, dựng được phép bỏ, mỗi vòng ca tuỳ chọn đang bỏ có 1/4 cơ hội thử chèn lại; chỉ nhận khi khóa giảm → không tệ hơn cách cũ. Đo (`bench_step4.cpp`, ~35% ca tuỳ chọn, tuyến xuất phát = tham lam ca bắt buộc — xấu hơn production nên chênh lệch của cách cũ bị phóng đại):
+
+| Mode | n | Cũ: trùng / thua tầng 1 / lệch | Mới: trùng / thua tầng 1 / lệch | ms TB cũ · mới |
+|---|---|---|---|---|
+| SLA | 14–15 (so tối ưu) | 17/40 · 12 · 0,88 | **36/40 · 0 · 0** | 0,3 · 17 |
+| SLA | 20 | 3/14 · 7 · 1,43 | **14/14 · 0 · 0** | 0,5 · 43 |
+| SLA | 30 | 0/8 · 5 · 1,25 | **8/8 · 0 · 0** | 1,4 · 101 |
+| Kết nối | 14–15 (so tối ưu) | 9/40 · 31 · 15,2 | **33/40 · 7 · 1,7** | 0,3 · 22 |
+| Kết nối | 20 | 2/14 · 12 · 25,3 | **14/14 · 0 · 0** | 0,8 · 58 |
+| Kết nối | 30 | 1/8 · 7 · 27,8 | **8/8 · 0 · 0** | 2,2 · 146 |
+
+`test_dp`: 12 bài 14–17 việc (1/3 tuỳ chọn) — `solve_from` mặc định không tệ hơn cách cũ, hợp lệ, tất định.
+
+### Phase 8.1 — Trộn QHĐ vào vòng LNS: `alns_dp` (thử nghiệm, người dùng yêu cầu 2026-10-08)
+
+**Bối cảnh.** Ở `lns_window`, LNS và QHĐ cửa sổ là 2 bước tách rời: QHĐ chỉ đánh bóng mỗi tuyến tốt nhất mới. Người dùng hỏi có trộn được không → thử phương án `large_method: "alns_dp"` (giữ nguyên `lns` / `lns_window`, cùng hàm `lns()` với cờ `adaptive`).
+
+**Thiết kế:** thêm 2 cách vào 5 cách phá – dựng của LNS (tổng 7), mỗi vòng **chọn thích nghi (ALNS)**:
+- **5 "kéo cụm + QHĐ":** rút 2–4 việc liên quan (gần về địa lý hoặc về giờ) đang rải rác, đặt liền nhau tại vị trí chèn tốt nhất của việc đầu, rồi QHĐ sắp lại tối ưu cửa sổ quanh đó (≥ 6 phần tử: việc vừa kéo + hàng xóm). LNS lo di chuyển xa, QHĐ lo sắp chính xác tại chỗ đến.
+- **6 "cửa sổ ngẫu nhiên":** QHĐ một cửa sổ 6 phần tử ở vị trí ngẫu nhiên của tuyến **hiện tại** (không chỉ tuyến tốt nhất).
+- **Chọn cách:** mỗi cách một trọng số, quay xổ số (`rng` seed cố định → tất định); điểm: tuyến tốt nhất mới 5 · tốt hơn hiện tại 2 · được nhận 0,5; cứ 100 vòng trọng số = 0,8 × cũ + 0,2 × điểm TB mỗi lần dùng (sàn 0,05). Vẫn giữ đánh bóng cửa sổ 8 phần tử cho mỗi tuyến tốt nhất mới + cuối (như `lns_window`).
+- Cửa sổ trong vòng lặp 6 phần tử (64 ô) cho rẻ.
+
+**Đo** (cùng bộ bài cố định như bảng quét Phase 8; 13–15 so QHĐ chính xác, bài lớn so tốt nhất từng thấy; lệch tầng 1 TB · ms TB):
+
+| Cỡ | Mode | `lns_window` 1.000 (mặc định) | `alns_dp` 600 | `alns_dp` 1.000 | `alns_dp` 1.500 |
+|---|---|---|---|---|---|
+| 13–15 | SLA | **36/40 trùng · 0 · 38** | 35/40 · 0,05 · 37 | 36/40 · 0,05 · 50 | 36/40 · 0,05 · 65 |
+| 20 | SLA | **0 · 92** | 0,29 · 73 | 0,14 · 94 | 0,14 · 117 |
+| 30 | SLA | **0,1 · 208** | 0,7 · 166 | 0,6 · 199 | 0,1 · 249 |
+| 45 | SLA | **0,33 · 498** | 0,83 · 367 | 0,83 · 443 | 0,5 · 574 |
+| 63 | SLA | 2,0 · 1.265 | 1,75 · 997 | 1,75 · 1.136 | **0,25 · 1.359** |
+| 13–15 | Kết nối | 30/40 · 0,78 · 47 | 28/40 · **0,57 · 47** | 30/40 · 0,53 · 63 | 30/40 · 0,53 · 82 |
+| 20 | Kết nối | 4,1 · 116 | 6,1 · 99 | **3,1 · 122** | 3,1 · 144 |
+| 30 | Kết nối | 3,9 · 312 | 7,9 · 242 | 4,5 · 289 | **2,0 · 338** |
+| 45 | Kết nối | 11,7 · 807 | 28,8 · 592 | **6,9 · 744** | 6,9 · 830 |
+| 63 | Kết nối | 49,7 · 1.336 | 42,5 · 1.326 | 15,8 · 1.675 | **0,3 · 1.911** |
+
+**Đọc (so cùng thời gian):** không phương án nào thắng mọi ô. **SLA ≤ 45 việc: `lns_window` tốt hơn** (cửa sổ đánh bóng đã đủ, các cách mới tốn vòng). **Kết nối: `alns_dp` tốt hơn vừa phải** (13–15 việc lệch 0,78 → 0,57 cùng 47 ms; 20 việc 4,1 → 3,1; 45 việc 11,7 → 6,9) — tầng 1 gồ ghề nên "kéo cụm + QHĐ" có ích. 63 việc `alns_dp` tốt hơn rõ ở cả 2 mode nhưng chậm hơn. Bộ bài nhỏ (4–14 bài với bài lớn) → chênh lệch nhỏ có thể là nhiễu.
+**Trạng thái:** có trong code, chọn được qua `rules.json`; **mặc định giữ `lns_window` 1.000** cho tới khi người dùng chốt. **Test:** `test_dp` — `alns_dp` cùng bộ kiểm tất định / không tệ hơn `improve` / hợp lệ (tốt hơn `improve` ở 63/72 lần chạy cả 3 cách).
+
+### Phase 9 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.
 
@@ -1568,11 +1680,11 @@ Với cùng snapshot + cùng rules/mode + cùng travel matrix, QHĐ hiện tại
 
 **Mode:** đã định nghĩa ở 7.26 (0 Kết nối 70/30 mặc định · 1 SLA · 2 Tuyến km tầng 1; 7.23 R2 đã thay) bằng bộ tầng rule, không sửa `dp.cpp`.
 
-Phase 8 bắt đầu bằng design gate cho request/response, owner snapshot/baseline và mode semantics. Sau đó mới thêm application function/use case `reoptimize(...)` riêng, gọi chung normalization/SLA/travel/QHĐ/cluster pipeline. Không định nghĩa candidate payload/API trước khi các owner được chốt.
+Phase 9 bắt đầu bằng design gate cho request/response, owner snapshot/baseline và mode semantics. Sau đó mới thêm application function/use case `reoptimize(...)` riêng, gọi chung normalization/SLA/travel/QHĐ/cluster pipeline. Không định nghĩa candidate payload/API trước khi các owner được chốt.
 
-**Luồng reoptimize xuyên hệ thống (dự kiến, theo hướng Phase 7):** Mobix → `ktv_gateway` (API reoptimize, kèm mode) → lấy state cache + baseline (owner baseline chốt ở Phase 8) → use case reoptimize → Kafka OUT → phía Mobix đọc.
+**Luồng reoptimize xuyên hệ thống (dự kiến, theo hướng Phase 7):** Mobix → `ktv_gateway` (API reoptimize, kèm mode) → lấy state cache + baseline (owner baseline chốt ở Phase 9) → use case reoptimize → Kafka OUT → phía Mobix đọc.
 
-### Phase 9 — Feedback/AI learning
+### Phase 10 — Feedback/AI learning
 
 - Chỉ sau khi chốt nguồn check-in/out/thứ tự thực tế, storage/topic và versioning.
 - Log suggestion/run + rule/model version; nối kết quả thật; backtest/guardrail trước khi cập nhật model hoặc trọng số.
@@ -1595,12 +1707,12 @@ Giao **một phase mỗi lần**, không giao “implement toàn bộ architectu
 | KPI/SLA/rule và route | SLA đã tách; QHĐ vẫn chấm theo tier rules | Không thêm scalar pre-sort score hoặc scorer thứ hai khi chưa có công thức nghiệp vụ |
 | Gom cụm và output | ✅ Phase 4 + 5.2: `summarize_clusters` trong `cluster.cpp`, `plan.cpp` chỉ còn điều phối | Không thay optimizer |
 | ProcessWorklist, batch | `plan()` là entrypoint dùng chung; một message = một KTV; batch là driver gọi `plan()` N lần | Không tạo service class. Batch chậm thì tối ưu **worker/parallelism/OSRM**, không viết lại `plan()`. Chỉ tách `plan_batch` khi batch cần **đánh đổi khác** (solver xấp xỉ, chia sẻ ma trận OSRM, deadline riêng), không phải khi chỉ cần nhanh hơn |
-| Reoptimize | Chưa được implement; KTV chọn mode và route hợp lệ được thay route đang xem | Phase 8 (sau Kafka); owner của snapshot/baseline vẫn chưa chốt, không tự mặc định Gateway/OA/Core |
+| Reoptimize | Chưa được implement; KTV chọn mode và route hợp lệ được thay route đang xem | Phase 9 (sau Kafka); owner của snapshot/baseline vẫn chưa chốt, không tự mặc định Gateway/OA/Core |
 | Local adapter | ✅ Phase 5 + 5.1 hardening | CLI là harness chuẩn cho test local |
 | Kafka | ✅ đọc IN (7.1) + hardening; produce OUT ⏸ tạm hoãn | Phase 7B khi có topic OUT và đã bàn với OA/Mobix |
 | Gateway read model | ✅ Phase 6.1–6.3, nhưng là **đồ nghề dev** | Production dùng API kích hoạt Phase 7, không phải `GET worklist` |
 | API cho Mobix | Gateway API của team (`ktv_gateway`) expose `replan`; chỉ trả `202`, kết quả đi Kafka OUT. Bot Gateway là phía Mobix | Phase 7A; không tạo API riêng cho normalization/rule/cluster/DP |
-| Feedback để học model/weights | Chưa có nguồn feedback contract hoặc DB/topic | Phase 9; cần versioning và actual outcomes từ OA/Gateway |
+| Feedback để học model/weights | Chưa có nguồn feedback contract hoặc DB/topic | Phase 10; cần versioning và actual outcomes từ OA/Gateway |
 
 ### Luồng chạy cần nắm
 
@@ -1673,7 +1785,7 @@ vector rỗng (~24 MB chỉ để header). Đổi sang mảng phẳng + offset (
 
 **A6. Tính lại tăng dần khi replan.** Khi Mobix gọi replan chỉ vì vị trí đổi, phần lớn thứ tự cũ vẫn tốt.
 Seed heuristic bằng thứ tự lần trước (lấy từ dedup/route cache ở 12.4), 2-opt từ đó → hội tụ nhanh và ít
-"nhảy tuyến" làm KTV khó chịu. Liên quan Rule 4 (giữ tuyến cũ) ở Phase 8.
+"nhảy tuyến" làm KTV khó chịu. Liên quan Rule 4 (giữ tuyến cũ) ở Phase 9.
 
 ### 12.2 Scale hệ thống
 
@@ -1872,7 +1984,7 @@ cũ vài giờ rồi mới thay hết.
 ### 12.12 Tính năng sản phẩm (sau khi luồng chính ổn)
 
 - **Tuyến thay thế**: trả thêm 1–2 thứ tự khác gần tốt nhất (lấy từ các nhãn còn lại của QHĐ ở trạng thái
-  cuối, hoặc chạy lại với một rule tắt) để KTV chọn — nối vào Phase 8 reoptimize.
+  cuối, hoặc chạy lại với một rule tắt) để KTV chọn — nối vào Phase 9 reoptimize.
 - **Đường đi trên bản đồ**: gọi OSRM `/route` cho các chặng đã chọn, trả polyline (BUSINESS_RULES Q26);
   chỉ gọi khi app cần hiển thị, không gọi trong `plan()`.
 - **Giải thích bằng số**: chi phí từng rule của tuyến chọn so với tuyến "gần nhất trước" — cho điều phối

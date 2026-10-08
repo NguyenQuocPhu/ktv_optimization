@@ -332,6 +332,58 @@ int main() {
         CHECK((solve(p, route).order == std::vector<int>{0, 1}));
     }
 
+    {  // Phase 8: QHĐ cửa sổ phủ cả tuyến = QHĐ chính xác; LNS / LNS + cửa sổ / ALNS + QHĐ (8.1) không tệ hơn "improve", tất định.
+        std::mt19937 lns_rng(20261008);
+        Rules whole = default_rules();
+        whole.max_exact_tasks = 0, whole.large_method = "lns_window", whole.lns_iterations = 0, whole.window_size = 12;
+        for (int k = 0; k < 40; ++k) {
+            const int n = 3 + k % 8;  // không nghỉ trưa, không ca tuỳ chọn → cửa sổ n phần tử = cả bài
+            Problem p = random_problem(lns_rng, n);
+            CHECK(objective(p, whole, solve(p, whole).order) == objective(p, whole, solve(p, default_rules()).order));
+        }
+        int better = 0;
+        for (int k = 0; k < 24; ++k) {
+            Problem p = random_problem(lns_rng, 13 + k % 8);
+            if (k % 2) p.break_open = 180, p.break_latest = 255, p.break_minutes = 45;
+            if (k % 3 == 0) {
+                p.optional.assign(p.size(), 0);
+                p.optional[0] = p.optional[3] = 1;
+                p.opens[0] = p.due[0] = p.complete_by[0] = p.opens[3] = p.due[3] = p.complete_by[3] = kNone;
+            }
+            Rules base = default_rules();
+            base.large_method = "improve";  // so với cách trước Phase 8
+            const auto plain = objective(p, base, solve(p, base).order);
+            for (const char* method : {"lns", "lns_window", "alns_dp"}) {
+                Rules r = base;
+                r.large_method = method;
+                r.lns_iterations = 150;
+                const Solution a = solve(p, r), b = solve(p, r);
+                CHECK(a.order == b.order);                     // tất định
+                const auto got = objective(p, base, a.order);
+                CHECK(!(plain < got));                         // không bao giờ tệ hơn tuyến xuất phát
+                CHECK(!std::isinf(got[0]));
+                better += got < plain;
+            }
+        }
+        // Bước 4 của 7.24: solve_from mặc định (chèn / gỡ cục bộ rồi LNS) không tệ hơn cách cũ, giữ ca bắt buộc.
+        for (int k = 0; k < 12; ++k) {
+            Problem p = random_problem(lns_rng, 14 + k % 4);
+            p.optional.assign(p.size(), 0);
+            for (int j = 0; j < p.size(); j += 3) p.optional[j] = 1, p.opens[j] = p.due[j] = p.complete_by[j] = kNone;
+            std::vector<int> start;
+            for (int j = 0; j < p.size(); ++j)
+                if (!p.optional[j]) start.push_back(j);
+            Rules old_rules = default_rules();
+            old_rules.large_method = "improve";
+            const auto before = objective(p, default_rules(), solve_from(p, old_rules, start).order);
+            const Solution now = solve_from(p, default_rules(), start);
+            const auto after = objective(p, default_rules(), now.order);
+            CHECK(!(before < after) && !std::isinf(after[0]));
+            CHECK(now.order == solve_from(p, default_rules(), start).order);
+        }
+        std::cout << "  Phase 8 LNS: tốt hơn \"improve\" ở " << better << "/72 lần chạy (13–20 việc, 3 cách)\n";
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_dp: OK (" << checked << " bài so với vét cạn)\n";
     return failures != 0;

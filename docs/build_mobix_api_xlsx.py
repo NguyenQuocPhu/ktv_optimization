@@ -126,7 +126,7 @@ row([1, "404 khi chưa có snapshot có đúng UX không, hay muốn 202 + retry
 row([2, "Tên host STAG/PROD (base URL) và token scope: Mobix lấy KTV token từ đâu?"])
 row([3, "Tên field tọa độ thống nhất là latlng (theo API-Goi-y) hay location?"])
 row([4, "Policy log/retention: không log latlng thô trong access log"])
-row([5, "Mode DEFAULT/SLA/DISTANCE thuộc Phase 8 (reoptimize), không trộn vào API này"])
+row([5, "Mode DEFAULT/SLA/DISTANCE thuộc Phase 9 (reoptimize), không trộn vào API này"])
 
 wb.save(OUT)
 print(f"saved {OUT}")

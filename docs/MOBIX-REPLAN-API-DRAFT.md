@@ -19,7 +19,7 @@ Mobix ──GET replan─▶ ktv_gateway ── IN mới nhất + latlng ─ pla
 
 - Danh sách việc và trạng thái task lấy từ message IN mới nhất của OA. API không nhận `task_id` hoàn tất.
 - `replan` chỉ đổi điểm xuất phát và giờ bắt đầu (= giờ gọi); thứ tự có thể đổi theo vị trí/giờ mới.
-- Chọn mode tối ưu (`REOPTIMIZE`) là Phase 8, không thuộc API này.
+- Chọn mode tối ưu (`REOPTIMIZE`) là Phase 9, không thuộc API này.
 
 ## 2. Configuration
 

@@ -96,7 +96,7 @@ Trên 5.332 message giả (HNI_04, 3 ngày), mỗi lần gọi:
 | ✅ 2 | cluster | Tách cụm theo chặng > 2 km, tên cụm theo lô, `revisit_count` |
 | ✅ 3a | dp | Nghỉ trưa = việc ảo + 1 bit "đã nghỉ" trong QHĐ (bắt buộc, khung 11:30–13:30, 45 phút) |
 | 3b | dp | Nhiều khung giờ làm (OT) |
-| 4 | dp | Rule 4: giữ tuyến cũ nếu tuyến mới không tốt hơn rõ (Phase 8 reoptimize) |
+| 4 | dp | Rule 4: giữ tuyến cũ nếu tuyến mới không tốt hơn rõ (Phase 9 reoptimize) |
 | ✅ 5 | travel | OSRM tự host (một lần gọi `/table` mỗi KTV), lỗi thì chim bay × 1,3 |
 | ✅ 5.1 | adapter, main | Hardening CLI local: `--at` sai báo lỗi, JSON hỏng một output |
 | ✅ 5.2 | cluster | Tách `summarize_clusters`; plan chỉ còn điều phối |

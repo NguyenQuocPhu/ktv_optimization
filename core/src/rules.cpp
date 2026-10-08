@@ -103,6 +103,18 @@ Rules rules_from_json(const nlohmann::json& data) {
     if (exact > 16) fail("max_exact_tasks tối đa 16");  // Bộ nhớ QHĐ tăng theo 2^n.
     rules.max_exact_tasks = static_cast<int>(exact);
     rules.max_labels = static_cast<int>(labels);
+    if (data.contains("large_method")) {  // Phase 8
+        const auto& method = data["large_method"];
+        if (!method.is_string() || (method != "improve" && method != "lns" && method != "lns_window" && method != "alns_dp"))
+            fail("large_method cần \"improve\", \"lns\", \"lns_window\" hoặc \"alns_dp\"");
+        rules.large_method = method.get<std::string>();
+    }
+    double iterations = rules.lns_iterations, window = rules.window_size;
+    number("lns_iterations", iterations, 0);
+    number("window_size", window, 2);
+    if (window > 12) fail("window_size tối đa 12");  // QHĐ cửa sổ 2^w ô
+    rules.lns_iterations = static_cast<int>(iterations);
+    rules.window_size = static_cast<int>(window);
     double k_month = rules.k_month_days;
     number("k_month_days", k_month, 0);
     rules.k_month_days = static_cast<int>(k_month);
@@ -169,6 +181,9 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"default_priority_weight", rules.priority_weight[0]},
         {"max_exact_tasks", rules.max_exact_tasks},
         {"max_labels_per_state", rules.max_labels},
+        {"large_method", rules.large_method},
+        {"lns_iterations", rules.lns_iterations},
+        {"window_size", rules.window_size},
         {"k_month_days", rules.k_month_days},
         {"stop_group_radius_m", rules.stop_group_radius_m},
         {"stop_group_max_wait_minutes", rules.stop_group_max_wait_minutes},

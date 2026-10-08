@@ -10,7 +10,8 @@
 //   Mỗi trạng thái giữ vài "nhãn" = tuyến dở dang tốt nhất tới đó (giờ xong + điểm phạt theo tầng).
 //   Nhãn thua nhãn khác ở MỌI mặt thì bỏ. Hết việc thì chọn nhãn nhỏ nhất theo tầng (rules).
 //   ≤ max_exact_tasks việc: ra thứ tự tốt nhất. Nhiều hơn: tham lam rồi cải thiện cục bộ (or-opt dời đoạn 1–3 việc
-//   + 2-opt đảo đoạn) từ nhiều điểm xuất phát, lấy tốt nhất; tất định, 64 việc chậm nhất ~0,5 s.
+//   + 2-opt đảo đoạn) từ nhiều điểm xuất phát; Phase 8 (mặc định rules.large_method = "lns_window"): tiếp đó LNS
+//   phá – dựng lại 1.000 vòng, mỗi tuyến tốt nhất mới được QHĐ cửa sổ trượt (8 phần tử) đánh bóng. Tất định.
 //
 //   Nghỉ trưa = "việc ảo" kBreak: không di chuyển, bắt đầu = max(giờ xong, break_open), dài break_minutes.
 //   Luật chặn: CHƯA nghỉ thì mọi việc phải xong trước break_latest (giờ muộn nhất bắt đầu nghỉ).
@@ -86,7 +87,7 @@ struct Visit {
 enum class Source {
     Optimal,      // QHĐ, tốt nhất theo rules.
     Approximate,  // QHĐ nhưng phải bỏ bớt nhãn (vượt max_labels): gần tốt nhất.
-    Heuristic,    // Quá max_exact_tasks việc: tham lam + or-opt/2-opt (gần đúng).
+    Heuristic,    // Quá max_exact_tasks việc: tham lam + or-opt/2-opt (+ LNS / cửa sổ, Phase 8) — gần đúng.
 };
 inline constexpr const char* kSourceNames[] = {"OPTIMAL", "APPROXIMATE", "HEURISTIC"};
 
@@ -101,6 +102,7 @@ Solution solve(const Problem& p, const Rules& rules);
 
 // 7.24: cải thiện cục bộ (dời / đảo đoạn / chèn – gỡ ca tuỳ chọn) xuất phát từ `start`, chỉ nhận nước làm khóa giảm
 // → không bao giờ tệ hơn start. Dùng khi đã có tuyến tốt (VD QHĐ chính xác) mà còn thêm ca tuỳ chọn ngoài giới hạn.
+// Phase 8: rules.large_method ≠ "improve" → chạy tiếp LNS (mặc định lns_window) từ kết quả đó.
 Solution solve_from(const Problem& p, const Rules& rules, const std::vector<int>& start);
 
 // Mô phỏng một thứ tự có sẵn (kể cả phương án so sánh): từng bước + giờ, dùng đúng luật của solve().

@@ -145,7 +145,7 @@ message IN.
   consumer group **phải** theo `chatbot-ftel-*` (tên khác bị `GROUP_AUTHORIZATION_FAILED`). Topic IN
   `dev-inside-par-assignment-optimal-assign-task-emp-assigned-queue`, 3 partition, **đang rỗng**.
   `isc-queue-dev0x:1x092` là cluster khác (chỉ SCRAM, không có topic của mình).
-- Reoptimize theo mode của KTV là **Phase 8**, riêng; không gộp vào replan.
+- Reoptimize theo mode của KTV là **Phase 9**, riêng; không gộp vào replan.
 
 ---
 
