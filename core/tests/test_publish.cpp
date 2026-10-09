@@ -222,7 +222,7 @@ int main() {
             CHECK(data_of(b)["clusters"] == data_of(a)["clusters"]);
             CHECK(b.out_sent && sent.size() == 1);  // worker: mỗi IN một OUT trả lời
             CHECK(json::parse(*store.get("S2", "2026-10-01"))["run_code"] == "m-a");  // route cache không bị ghi đè
-            // GPS rung ~3 m (cùng làm tròn 4 số) + đảo thứ tự tasks trong mảng → vẫn cache.
+            // GPS rung ~3 m (≤ location_change_m) + đảo thứ tự tasks trong mảng → vẫn cache.
             json c_in = at("m-c", "09:20", base);
             c_in["staff"]["latlng"] = "21.02002,105.80002";
             std::swap(c_in["tasks"]["trien_khai"][0], c_in["tasks"]["trien_khai"][1]);
@@ -253,12 +253,12 @@ int main() {
             const ktv::Published g = go(g_in);
             CHECK(!g.cached && data_of(g)["route_changed"] == "yes");  // so với f2 (1 ca): tuyến f_in có 2 ca
             json g2_in = at("m-g2", "10:06", g_in);
-            g2_in["staff"]["latlng"] = "21.0232,105.8005";  // GPS nhích ~60 m (vượt làm tròn) → tính lại, tuyến như g
+            g2_in["staff"]["latlng"] = "21.0232,105.8005";  // GPS nhích ~75 m (> location_change_m 50) → tính lại, tuyến như g
             const ktv::Published g2 = go(g2_in);
             CHECK(!g2.cached && data_of(g2)["change_id"] == "yes" && data_of(g2)["route_changed"] == "no");
             // Khác ngày → tính lại (ngày nằm trong dấu vân tay).
-            CHECK(ktv::in_fingerprint(base, {21.02, 105.80}, *ktv::parse_datetime("2026-10-01 09:00:00")) !=
-                  ktv::in_fingerprint(base, {21.02, 105.80}, *ktv::parse_datetime("2026-10-02 09:00:00")));
+            CHECK(ktv::in_fingerprint(base, *ktv::parse_datetime("2026-10-01 09:00:00")) !=
+                  ktv::in_fingerprint(base, *ktv::parse_datetime("2026-10-02 09:00:00")));
             // force_recompute_triggers: trigger trong danh sách luôn tính.
             ktv::Rules forced = rules;
             forced.force_recompute_triggers = {"TRAFFIC"};
@@ -272,13 +272,54 @@ int main() {
             // Không Redis: luôn tính, change_id "yes".
             const ktv::Published n = run(base, {1, 1}, nullptr);
             CHECK(!n.cached && ktv::out_data(*n.out)["change_id"] == "yes");
+
+            // 7.30 — ngưỡng dịch chuyển vị trí (rules.location_change_m, mặc định 50 m) thay cho làm tròn tọa độ.
+            json s4 = base;
+            s4["staff"]["staff_id"] = "S4";  // base: KTV ở 21.02,105.80
+            CHECK(!go(at("m-s4a", "09:00", s4)).cached);
+            json near = at("m-s4b", "09:01", s4);
+            near["staff"]["latlng"] = "21.0203,105.8000";  // ~33 m: trước đây vượt ranh làm tròn 4 số → tính lại; nay cache
+            CHECK(go(near).cached);
+            json far = at("m-s4c", "09:02", s4);
+            far["staff"]["latlng"] = "21.0206,105.8000";  // ~67 m > 50 → tính lại
+            CHECK(!go(far).cached);
+            ktv::Rules strict = rules;
+            strict.location_change_m = 0;  // mọi dịch chuyển đều là "đổi"
+            json tiny = at("m-s4d", "09:03", far);
+            tiny["staff"]["latlng"] = "21.02061,105.8000";  // ~1 m
+            CHECK(!ktv::plan_and_store(tiny, ktv::local_envelope(tiny, "t", now), now, {++v, 1}, strict, "", &store, send_out).cached);
+            CHECK(go(at("m-s4e", "09:04", tiny)).cached);  // mặc định 50 m: cùng chỗ → cache
+            CHECK(ktv::rules_from_json(json::parse(R"({"location_change_m": 120})")).location_change_m == 120);
+
+            // 7.30 — route_changed theo PRD v1.4 BR-10: thứ tự ca / ca chèn – gỡ; KHÔNG xét projected_sla.
+            json s5 = base;
+            s5["staff"]["staff_id"] = "S5";
+            const ktv::Published r1 = go(at("m-s5a", "09:00", s5));
+            json tight = at("m-s5b", "09:01", s5);
+            tight["tasks"]["trien_khai"][0]["sla"]["sla_minutes"] = 1;  // ca đầu (hẹn 10:00) hạn B 10:01: ON_TIME → AT_RISK, thứ tự giữ
+            const ktv::Published r2 = go(tight);
+            const auto sla_of = [&](const ktv::Published& r) {
+                const auto data = data_of(r);  // giữ bản sao: lặp trên data_of(r)[…] tạm sẽ treo
+                for (const auto& c : data["clusters"])
+                    for (const auto& row : c["schedule"])
+                        if (row["entry_type"] == "TASK") return row["projected_sla"].get<std::string>();  // ca đầu
+                return std::string();
+            };
+            CHECK(!r2.cached && sla_of(r1) != sla_of(r2) && data_of(r2)["route_changed"] == "no");
+            json moved = at("m-s5c", "09:02", tight);
+            moved["tasks"]["trien_khai"][1]["appointment"] = "2026-10-02 14:00:00";  // ca 2 sang ngày mai → gỡ khỏi tuyến
+            CHECK(data_of(go(moved))["route_changed"] == "yes");
+            json back = at("m-s5d", "09:03", tight);  // ca 2 về lại hôm nay → được chèn lại vào tuyến
+            CHECK(data_of(go(back))["route_changed"] == "yes");
         }
     } catch (const std::exception& error) {
         std::cerr << "FAIL: ngoại lệ " << error.what() << "\n";
         ++failures;
     }
 
-    for (const char* kind : {"state:S2", "route:S2:2026-10-01", "latest:S2", "loc:S2", "dedup:S2", "dedup:S1"})
+    for (const char* kind : {"state:S2", "route:S2:2026-10-01", "latest:S2", "loc:S2", "dedup:S2", "dedup:S1", "state:S4",
+                             "route:S4:2026-10-01", "latest:S4", "dedup:S4", "state:S5", "route:S5:2026-10-01", "latest:S5",
+                             "dedup:S5"})
         freeReplyObject(redisCommand(raw, "DEL %s", (config->prefix + kind).c_str()));
     for (const char* kind : {"state:S1", "route:S1:2026-10-01", "latest:S1", "loc:S1"})
         freeReplyObject(redisCommand(raw, "DEL %s", (config->prefix + kind).c_str()));

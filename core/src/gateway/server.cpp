@@ -91,7 +91,7 @@ void replan(RedisStore& redis, const GatewayOptions& options, const httplib::Req
     envelope.trigger = "MOBIX_REPLAN";
     envelope.planned_at = now;
     envelope.run_code = envelope.message_id + "-r" + std::to_string(stamp(*latlng_at));
-    // 7.20.1b: cùng luật cache với worker (dấu vân tay nội dung + vị trí làm tròn ~11 m + hạn tuổi). Trả cache →
+    // 7.20.1b: cùng luật cache với worker (dấu vân tay nội dung + vị trí lệch ≤ location_change_m + hạn tuổi). Trả cache →
     // HIT, change_id "no", không gửi OUT (Mobix hỏi lại không phải thay đổi để báo OA).
     const Published published = plan_and_store(in, envelope, now, state->version, options.rules, options.osrm_url,
                                                &redis, options.send_out, /*reply_on_cache=*/false);

@@ -679,6 +679,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.26 ✅ | 3 mode theo yêu cầu data: **0 mặc định Kết nối 70/30** (SLA + km chung tầng 1 có trọng số), 1 SLA 100%, 2 Tuyến 100% (km + trễ hẹn trọng số 1 ở tầng 1, thay R2) — chi tiết bên dưới | IN không gửi / 0 → `mix_tiers`, 1 ca trễ ≈ 11,7 km; 2 → km −23% so SLA, trễ hẹn +30% |
 | 7.27 ✅ | Theo workbook (6): `seq` tăng liên tục qua mọi cụm; IN nhận `contract_name` / `bill_number` / `timezone`; OUT thêm `sla_buffer_minutes` (dư tới hạn, âm = trễ) + echo `contract_name`, `timezone`, `appointment`, `complete_date` — chi tiết bên dưới | 2 cụm → seq 1, 2, 3 (không 1, 1, 2); hết cảnh báo `UNKNOWN_FIELD` cho 3 field mới |
 | 7.28 ✅ | Field mới `data[0].route_changed` ("yes" / "no"): tuyến có đổi so với bản mới nhất trong cache không — chi tiết bên dưới | đổi tình trạng ca / GPS mà tuyến giữ nguyên → `change_id` "yes", `route_changed` "no"; OUT vẫn ghi + đẩy Kafka |
+| 7.30 ✅ | Khớp PRD v1.4 BR-10: `route_changed` bỏ `projected_sla` (chỉ thứ tự ca + cụm, DEFERRED; ca Bổ sung chèn / gỡ đã nằm trong thứ tự); vị trí KTV: ngưỡng khoảng cách `rules.json` `location_change_m` (50 m) thay làm tròn tọa độ — chi tiết bên dưới | ca đổi `ON_TIME` → `AT_RISK`, thứ tự giữ → `route_changed` "no"; KTV dịch 33 m → cache, 67 m → tính lại |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1569,7 +1570,7 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 ##### 7.28 — `route_changed`: tuyến có đổi so với lần trước không (người dùng chốt 2026-10-08)
 
 **Yêu cầu (bên nhận OUT):** "thêm trường đánh dấu có sắp xếp lại ca so với lần trước không: 'không' thì bên anh không cần cập nhật dữ liệu, 'có' thì ghi nhận"; làm rõ thêm: "khi nào tuyến có thay đổi thì mới tính là đổi, còn thay đổi tình trạng, GPS… đánh dấu là không thay đổi nhưng vẫn đẩy Kafka như hiện tại". Khác cache 7.20.1b: cache quyết **trước khi tính** theo IN (IN giống → không tính); đây quyết **sau khi tính** theo OUT (IN đổi nhưng tuyến ra y hệt — cache không biết trước được).
-**Người dùng chốt:** **field mới**, không đụng nghĩa `change_id` (vẫn: "yes" tính lại / "no" trả cache); so với **bản OUT mới nhất trong cache** (Redis, cùng bản đã đẩy Kafka); tiêu chí: thứ tự ca + cụm, tập DEFERRED, `projected_sla` từng ca; **không** so `insert_reason`, giờ, km, metrics.
+**Người dùng chốt:** **field mới**, không đụng nghĩa `change_id` (vẫn: "yes" tính lại / "no" trả cache); so với **bản OUT mới nhất trong cache** (Redis, cùng bản đã đẩy Kafka); tiêu chí: thứ tự ca + cụm, tập DEFERRED, `projected_sla` từng ca (7.30: bỏ `projected_sla` theo PRD v1.4); **không** so `insert_reason`, giờ, km, metrics.
 
 **Thiết kế:**
 - `data[0].route_changed` ngay sau `trace_id`: `"yes"` mặc định; `"no"` khi chữ ký tuyến của OUT vừa tính = chữ ký của bản mới nhất trong cache cùng ngày.
@@ -1593,6 +1594,18 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 
 **File:** `envelope.cpp` (`route_changed` trong `wrap_response` / `reuse_response`), `publish.cpp` (`route_signature`, so với `store->get` trước khi ghi). **Test:** `test_adapter` (mặc định "yes", cache "no", thứ tự field); `test_publish` (lần đầu "yes"; cache "no"; tính lại do trần tuổi, tuyến y hệt → "no" mà vẫn ghi + gửi; đổi tình trạng ca 97 → `change_id` "yes" + `route_changed` "no"; bỏ một ca → "yes"; GPS nhích ~60 m vượt làm tròn → "no"). `ctest` 18/18.
 **Hỏi OA:** tên field (`route_changed` do repo đặt, ngoài workbook (6)) — ghi vào sheet 03.
+
+##### 7.30 — Khớp PRD v1.4 BR-10: tiêu chí "kết quả đổi" + ngưỡng dịch chuyển (người dùng chốt 2026-10-09)
+
+**Bối cảnh.** `ISC_MobiX_PRD_AIGoiycavu_v1.4.docx` (09/10) bỏ chạy định kỳ, thay bằng **BR-10**: khi KTV bật AI View / bấm "Tối ưu lại" → (1) input không đổi so với lần tính gần nhất → không chạy lại; (2) input đổi → tính thử, **chỉ cập nhật khi kết quả sắp xếp đổi — "thứ tự ca, hoặc ca 'Bổ sung' được chèn / gỡ"**; không đổi → giữ thứ tự, chỉ làm mới số liệu (km, phút đi, còn X phút). "Ngưỡng coi là có thay đổi (VD mức dịch chuyển vị trí KTV, mức chênh thời gian di chuyển) cấu hình được". (1) ↔ cache theo IN 7.20.1b, (2) ↔ `route_changed` 7.28.
+
+**Sửa (người dùng duyệt):**
+- `route_changed`: chữ ký tuyến **bỏ `projected_sla`** (PRD không xét) → còn thứ tự `task_id` dòng TASK + cụm từng ca + tập DEFERRED. Ca "Bổ sung" (`task_role` inserted, VD `SPARE_TIME`) được chèn / gỡ = thêm / bớt phần tử trong danh sách TASK → chữ ký tự đổi, không cần code riêng.
+- **Ngưỡng dịch chuyển vị trí** `rules.json` `location_change_m` (mặc định **50 m** = bán kính gom cùng địa chỉ, [GIẢ ĐỊNH]) thay cho làm tròn tọa độ 4 chữ số (~11 m — không phải ngưỡng thật: 2 điểm cách 1 m nằm 2 bên ranh làm tròn vẫn "đổi"). Dấu vân tay IN **không gồm** tọa độ KTV; `dedup` lưu `fingerprint|run_code|lat,lng` (vị trí đã dùng để tính, sau vị trí Mobix); dùng cache khi khoảng cách chim bay vị trí mới ↔ vị trí đó ≤ ngưỡng. Bản `dedup` cũ (2 phần) → tính lại một lần.
+- "Mức chênh thời gian di chuyển": **chưa áp dụng** — chưa có dữ liệu giao thông, thời gian đi tất định theo OSRM / chim bay; hạn tuổi cache 30′ + "chưa tới giờ ca đầu" (`cache_max_age_minutes`, đã cấu hình được) thay thế tạm.
+
+**File:** `rules.hpp/.cpp` (`location_change_m`), `publish.hpp/.cpp` (`in_fingerprint(in, planned_at)`, `dedup_meta`, `reuse_cached` so khoảng cách, `route_signature` bỏ `projected_sla`); chú thích gateway. **Test:** `test_publish` — KTV dịch ~33 m → cache (trước đây có thể vượt ranh làm tròn), ~67 m → tính lại, `location_change_m` 0 → 1 m cũng tính lại, đọc từ `rules.json`; ca đầu `ON_TIME` → `AT_RISK` mà thứ tự giữ → `route_changed` "no"; ca 2 sang ngày mai (gỡ) → "yes", về lại hôm nay (chèn) → "yes". `ctest` 18/18.
+**Còn lại từ PRD v1.4 (chưa làm):** mốc B cho Mobix ("Hẹn A – B", "còn X phút" = B − hiện tại); nghĩa "Cách bạn X km" (từ KTV, không phải từ điểm trước); BR-09 "chỉ cập nhật nếu tuyến mới tốt hơn" cho sự kiện vận hành; BR-07 tâm lô / kho vật tư khi chưa có GPS.
 
 ### Phase 8 — Bài lớn (> 12 việc): LNS và LNS + QHĐ cửa sổ trượt (người dùng duyệt 2026-10-08) ✅ đã thực thi
 

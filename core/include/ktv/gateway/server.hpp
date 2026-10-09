@@ -6,7 +6,7 @@
 //       → 200 route (= OUT) / 202 {"retry_after":5} chưa có / 401
 //   - GET /api/v1/staff/{staff_id}/replan?latlng=21.02,105.79&latlng_at=2026-10-01 09:20:00   (cần Redis)
 //       state IN mới nhất + vị trí Mobix → tính lại (adapter/publish) → 200 route, header X-Cache: MISS
-//       IN không đổi nội dung + cùng vị trí (làm tròn 4 số ≈ 11 m) + bản cache còn hạn (chưa tới ca đầu, ≤ 30′)
+//       IN không đổi nội dung + vị trí lệch ≤ rules.location_change_m (7.30, mặc định 50 m) + bản cache còn hạn (chưa tới ca đầu, ≤ 30′)
 //       → 200 route đang cache, data[0].change_id "no", X-Cache: HIT, không gửi OUT (7.20.1b)
 //       → 400 sai tham số / 404 chưa có IN của KTV / 401 / 503 không có Redis hoặc Redis lỗi
 //       Route replan: message_id của IN, run_code "<message_id>-r<latlng_at yyyymmddHHMMSS>",

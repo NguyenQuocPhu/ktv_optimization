@@ -10,7 +10,7 @@
 //        bằng version = Kafka giao lại cùng IN (lần trước chết giữa chừng) → vẫn tính, ghi route lại
 //     3. vị trí Mobix trong Redis còn trong 60 phút → thay vị trí trong IN
 //     3b. (7.20.1b) IN không đổi nội dung so với lần tính trước → trả lại OUT cache (change_id "no"), không gọi plan(),
-//        không ghi route. Đủ 3 vế: dấu vân tay trùng (ngày + staff với GPS làm tròn 4 số + tasks sắp theo task_id;
+//        không ghi route. Đủ 3 vế: dấu vân tay trùng (ngày + staff (không gồm GPS — 7.30: vị trí so theo ngưỡng location_change_m) + tasks sắp theo task_id;
 //        bỏ message_id/trigger/giờ) · giờ chạy mới < giờ đến ca đầu của bản cache · tuổi bản cache ≤
 //        rules.cache_max_age_minutes. Trigger trong rules.force_recompute_triggers luôn tính. Bản cache 424 không dùng lại.
 //     4. plan(); lỗi bất ngờ → 500 (không ghi route, giữ route cũ)
@@ -78,8 +78,9 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
                          const Rules& rules, const std::string& osrm_url, RedisStore* store,
                          const SendOut& send_out = {}, bool reply_on_cache = true);
 
-// 7.20.1b: dấu vân tay nội dung IN (FNV-1a 64, hex). staff_latlng = vị trí thật dùng để tính (sau vị trí Mobix).
-std::string in_fingerprint(const json& in, const Point& staff_latlng, Minutes planned_at);
+// 7.20.1b: dấu vân tay nội dung IN (FNV-1a 64, hex). 7.30: KHÔNG gồm tọa độ KTV — vị trí so riêng theo ngưỡng
+// rules.location_change_m (cache lưu kèm vị trí đã dùng để tính).
+std::string in_fingerprint(const json& in, Minutes planned_at);
 
 // 2026-10-01 09:20 → 20261001092000.
 std::int64_t stamp(Minutes value);

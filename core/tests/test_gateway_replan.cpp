@@ -1,4 +1,4 @@
-// Gateway replan (Phase 7.4) trên Redis thật qua HTTP: 404/400/401, MISS → HIT, GPS rung < 11 m vẫn HIT,
+// Gateway replan (Phase 7.4) trên Redis thật qua HTTP: 404/400/401, MISS → HIT, GPS rung ≤ location_change_m (50 m) vẫn HIT,
 // đổi vị trí / IN mới → MISS, envelope replan, route mới hơn của worker thắng, Redis rớt kết nối thì tự nối lại.
 // Cần env KTV_TEST_REDIS=host:port; không kết nối được thì SKIP.
 #include <cstdlib>
@@ -128,7 +128,7 @@ int main() {
         CHECK(body.value("planned_at", "") == "2026-10-01 09:20:00");  // giờ gọi, không phải 08:00 của IN
         CHECK(sent.size() == 1 && first && sent[0] == first->body);    // OA nhận đúng bản Mobix nhận
 
-        // 7.20.1b: gọi lại cùng vị trí, rồi GPS rung ~1 m (cùng làm tròn 4 số): HIT = cùng tuyến, change_id "no",
+        // 7.20.1b: gọi lại cùng vị trí, rồi GPS rung ~1 m (≤ 50 m): HIT = cùng tuyến, change_id "no",
         // data.trace_id = run_code lần tính thật; GET route vẫn ra bản đã tính (cache không ghi đè route).
         const auto data_of = [](const std::string& text) {
             const json out = json::parse(text, nullptr, false);

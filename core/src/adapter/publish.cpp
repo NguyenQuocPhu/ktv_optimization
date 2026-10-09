@@ -6,6 +6,7 @@
 
 #include "ktv/adapter/file.hpp"
 #include "ktv/plan.hpp"
+#include "ktv/travel.hpp"
 
 namespace ktv {
 
@@ -26,15 +27,29 @@ std::optional<std::int64_t> apply_mobix_loc(const Versioned& loc, Minutes now, S
 }
 
 // 7.20.1b: OUT cache dùng lại được cho lần chạy này không? Có → OUT "no" theo envelope mới.
+// 7.30: dedup = "fingerprint|run_code|lat,lng" (vị trí KTV đã dùng để tính). Bản cũ 2 phần → không dùng cache (tính lại).
+std::string dedup_meta(const std::string& fingerprint, const std::string& run_code, const Point& at) {
+    char point[64];
+    std::snprintf(point, sizeof point, "%.6f,%.6f", at.lat, at.lng);
+    return fingerprint + "|" + run_code + "|" + point;
+}
+
 std::optional<nlohmann::ordered_json> reuse_cached(RedisStore& store, const std::string& staff_id,
-                                                   const std::string& fingerprint, const Envelope& envelope,
-                                                   Minutes now, const Rules& rules) {
+                                                   const std::string& fingerprint, const Point& staff_at,
+                                                   const Envelope& envelope, Minutes now, const Rules& rules) {
     if (rules.cache_max_age_minutes <= 0) return std::nullopt;
     const auto& force = rules.force_recompute_triggers;
     if (std::find(force.begin(), force.end(), envelope.trigger) != force.end()) return std::nullopt;
-    const std::optional<std::string> meta = store.get_dedup(staff_id);  // "fingerprint|run_code" lần tính cuối
+    const std::optional<std::string> meta = store.get_dedup(staff_id);  // "fingerprint|run_code|lat,lng" lần tính cuối
     if (!meta || meta->rfind(fingerprint + "|", 0) != 0) return std::nullopt;
-    const std::string run_code = meta->substr(fingerprint.size() + 1);
+    const std::string rest = meta->substr(fingerprint.size() + 1);
+    const size_t bar = rest.rfind('|');
+    if (bar == std::string::npos) return std::nullopt;
+    const std::string run_code = rest.substr(0, bar);
+    const std::optional<Point> computed_at = parse_latlng(rest.substr(bar + 1));
+    // 7.30 (BR-10): KTV dịch chuyển quá ngưỡng so với vị trí lúc tính → input đổi, tính lại.
+    if (!computed_at || haversine_matrix({*computed_at, staff_at}, 30).km[0][1] * 1000 > rules.location_change_m)
+        return std::nullopt;
     const std::optional<std::string> text = store.get(staff_id, format_datetime(envelope.planned_at).substr(0, 10));
     if (!text) return std::nullopt;
     const nlohmann::ordered_json cached = nlohmann::ordered_json::parse(*text, nullptr, false);
@@ -57,8 +72,9 @@ std::optional<nlohmann::ordered_json> reuse_cached(RedisStore& store, const std:
     return reuse_response(cached, envelope, now);  // không có TASK (422): chỉ xét trần tuổi
 }
 
-// 7.28: "chữ ký" tuyến để biết tuyến có đổi so với bản mới nhất trong cache: thứ tự TASK (task_id) + cụm của từng ca
-// + projected_sla từng ca, và tập DEFERRED (sắp theo task_id). Không xét giờ, km, metrics, insert_reason, IDLE / BREAK.
+// 7.28: "chữ ký" tuyến để biết tuyến có đổi so với bản mới nhất trong cache: thứ tự TASK (task_id) + cụm của từng ca,
+// và tập DEFERRED (sắp theo task_id). 7.30 (PRD v1.4 BR-10 "thứ tự ca, hoặc ca Bổ sung được chèn / gỡ"): bỏ
+// projected_sla; ca Bổ sung chèn / gỡ đã nằm trong danh sách TASK. Không xét giờ, km, metrics, insert_reason, IDLE / BREAK.
 // Không có clusters (lỗi / 422) → không có chữ ký.
 std::optional<std::string> route_signature(const nlohmann::ordered_json& out) {
     const nlohmann::ordered_json& data = out_data(out);
@@ -70,7 +86,7 @@ std::optional<std::string> route_signature(const nlohmann::ordered_json& out) {
             const std::string entry = row.value("entry_type", "");
             const std::string id = row.contains("task_id") ? row["task_id"].dump() : "";
             if (entry == "TASK")
-                tasks += cluster.value("cluster_code", "") + ":" + id + ":" + row.value("projected_sla", "") + ";";
+                tasks += cluster.value("cluster_code", "") + ":" + id + ";";
             else if (entry == "DEFERRED")
                 deferred.push_back(id);
         }
@@ -81,13 +97,12 @@ std::optional<std::string> route_signature(const nlohmann::ordered_json& out) {
 
 }  // namespace
 
-std::string in_fingerprint(const json& in, const Point& staff_latlng, Minutes planned_at) {
+std::string in_fingerprint(const json& in, Minutes planned_at) {
     json canonical = in;  // json (không ordered) = khóa sắp theo tên → chuỗi tất định
     for (const char* key : {"message_id", "trigger", "planned_at", "run_code"}) canonical.erase(key);
     canonical["date"] = format_datetime(planned_at).substr(0, 10);
-    char point[64];
-    std::snprintf(point, sizeof point, "%.4f,%.4f", staff_latlng.lat, staff_latlng.lng);  // ~11 m: GPS rung không đổi
-    if (canonical.contains("staff") && canonical["staff"].is_object()) canonical["staff"]["latlng"] = point;
+    // 7.30: vị trí KTV không băm (so theo ngưỡng location_change_m trong reuse_cached).
+    if (canonical.contains("staff") && canonical["staff"].is_object()) canonical["staff"].erase("latlng");
     if (canonical.contains("tasks") && canonical["tasks"].is_object())
         for (auto& [group, items] : canonical["tasks"].items())
             if (items.is_array())
@@ -141,8 +156,9 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
     // 7.20.1b: IN không đổi nội dung → trả OUT cache (change_id "no"), không tính, không ghi route.
     std::string fingerprint;
     if (store) {
-        fingerprint = in_fingerprint(in, message.staff.latlng, envelope.planned_at);
-        if (std::optional<nlohmann::ordered_json> reused = reuse_cached(*store, staff_id, fingerprint, envelope, now, rules)) {
+        fingerprint = in_fingerprint(in, envelope.planned_at);
+        if (std::optional<nlohmann::ordered_json> reused =
+                reuse_cached(*store, staff_id, fingerprint, message.staff.latlng, envelope, now, rules)) {
             result.cached = true;
             result.stats = normalize_worklist(message).stats;  // log vẫn đủ số đếm task (không gọi plan())
             result.status = (*reused)["statuscode"].get<std::string>();
@@ -189,7 +205,9 @@ Published plan_and_store(const json& in, const Envelope& envelope, Minutes now, 
         result.route_stored = written == Write::Stored;
         current = written != Write::Older;
         // 7.20.1b: nhớ dấu vân tay của bản route vừa thành hiện hành (424 vẫn ghi, reuse_cached tự bỏ qua 424).
-        if (current) store->put_dedup(staff_id, fingerprint + "|" + (envelope.run_code.empty() ? envelope.message_id : envelope.run_code));
+        if (current)
+            store->put_dedup(staff_id, dedup_meta(fingerprint, envelope.run_code.empty() ? envelope.message_id : envelope.run_code,
+                                                  message.staff.latlng));
     }
     if (send_out && current) {
         send_out(staff_id, json_text);

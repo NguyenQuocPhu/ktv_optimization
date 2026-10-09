@@ -89,6 +89,9 @@ struct Rules {
     double break_minutes = 45;         // 0 = không có nghỉ trưa.
     // 7.20.1b — worker/gateway trả OUT cache khi IN không đổi nội dung (change_id "no"). Chỉ dùng khi có Redis.
     int cache_max_age_minutes = 30;                  // Trần tuổi bản cache (giờ chạy mới − giờ tính bản cache). 0 = tắt cache.
+    // 7.30 (PRD v1.4 BR-10): KTV dịch chuyển ≤ ngần này mét so với vị trí của lần tính đang cache → coi là input KHÔNG đổi
+    // (dùng cache). Thay cho làm tròn tọa độ 4 chữ số (~11 m) của 7.20.1b. [GIẢ ĐỊNH: 50 m = bán kính gom cùng địa chỉ]
+    double location_change_m = 50;
     std::vector<std::string> force_recompute_triggers;  // Trigger luôn tính lại dù IN không đổi. Mặc định rỗng.
 };
 
