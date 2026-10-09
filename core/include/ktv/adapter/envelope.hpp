@@ -45,4 +45,10 @@ nlohmann::ordered_json reuse_response(const nlohmann::ordered_json& cached, cons
 // data[0] của OUT đã gói (bản cũ data object cũng nhận); không có → null.
 const nlohmann::ordered_json& out_data(const nlohmann::ordered_json& out);
 
+// 7.29 — response cho Mobix (workbook (6) sheet 09 "In-Out Mobix"): chiếu OUT đầy đủ (sheet 03, bản trong cache) xuống
+// đúng field + thứ tự sheet 09: {success, statuscode, message, data[{staff_id, clusters[{cluster_seg, cluster_code,
+// schedule[]}], metrics{total_distance_km, total_travel_minutes, tasks_total}}]}. Dòng schedule chỉ giữ field sheet 09
+// có mặt (IDLE / BREAK: seq … end_at). Lỗi (data null) → data null. Không đổi bản gốc.
+nlohmann::ordered_json mobix_response(const nlohmann::ordered_json& out);
+
 }  // namespace ktv

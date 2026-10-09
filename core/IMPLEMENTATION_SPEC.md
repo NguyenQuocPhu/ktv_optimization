@@ -679,6 +679,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.26 ✅ | 3 mode theo yêu cầu data: **0 mặc định Kết nối 70/30** (SLA + km chung tầng 1 có trọng số), 1 SLA 100%, 2 Tuyến 100% (km + trễ hẹn trọng số 1 ở tầng 1, thay R2) — chi tiết bên dưới | IN không gửi / 0 → `mix_tiers`, 1 ca trễ ≈ 11,7 km; 2 → km −23% so SLA, trễ hẹn +30% |
 | 7.27 ✅ | Theo workbook (6): `seq` tăng liên tục qua mọi cụm; IN nhận `contract_name` / `bill_number` / `timezone`; OUT thêm `sla_buffer_minutes` (dư tới hạn, âm = trễ) + echo `contract_name`, `timezone`, `appointment`, `complete_date` — chi tiết bên dưới | 2 cụm → seq 1, 2, 3 (không 1, 1, 2); hết cảnh báo `UNKNOWN_FIELD` cho 3 field mới |
 | 7.28 ✅ | Field mới `data[0].route_changed` ("yes" / "no"): tuyến có đổi so với bản mới nhất trong cache không — chi tiết bên dưới | đổi tình trạng ca / GPS mà tuyến giữ nguyên → `change_id` "yes", `route_changed` "no"; OUT vẫn ghi + đẩy Kafka |
+| 7.29 ✅ | API mới cho Mobix theo sheet 09: `GET /api/v1/staff/{id}/suggest?latlng=&action_type=` — như `/replan` + `action_type` (mode lần tính này), trả bản rút gọn sheet 09 (`mobix_response`); `/route`, `/replan`, cache, Kafka OUT giữ nguyên — chi tiết bên dưới | body chỉ `success, statuscode, message, data[{staff_id, clusters[{cluster_seg, cluster_code, schedule}], metrics{3 chỉ số}}]` |
 | 7.30 ✅ | Khớp PRD v1.4 BR-10: `route_changed` bỏ `projected_sla` (chỉ thứ tự ca + cụm, DEFERRED; ca Bổ sung chèn / gỡ đã nằm trong thứ tự); vị trí KTV: ngưỡng khoảng cách `rules.json` `location_change_m` (50 m) thay làm tròn tọa độ — chi tiết bên dưới | ca đổi `ON_TIME` → `AT_RISK`, thứ tự giữ → `route_changed` "no"; KTV dịch 33 m → cache, 67 m → tính lại |
 | sau | JWT thay token tĩnh, rate limit | |
 
@@ -1594,6 +1595,20 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 
 **File:** `envelope.cpp` (`route_changed` trong `wrap_response` / `reuse_response`), `publish.cpp` (`route_signature`, so với `store->get` trước khi ghi). **Test:** `test_adapter` (mặc định "yes", cache "no", thứ tự field); `test_publish` (lần đầu "yes"; cache "no"; tính lại do trần tuổi, tuyến y hệt → "no" mà vẫn ghi + gửi; đổi tình trạng ca 97 → `change_id` "yes" + `route_changed` "no"; bỏ một ca → "yes"; GPS nhích ~60 m vượt làm tròn → "no"). `ctest` 18/18.
 **Hỏi OA:** tên field (`route_changed` do repo đặt, ngoài workbook (6)) — ghi vào sheet 03.
+
+##### 7.29 — API Mobix theo sheet 09: `/suggest` + bản rút gọn (người dùng chốt 2026-10-08)
+
+**Bối cảnh.** Workbook (6) sheet 09 "In-Out Mobix": IN `staff_id`, `latlng`, `action_type` (0 mặc định 70/30 · 1 SLA · 2 Tuyến; "Click AI View, tối ưu tuyến: default"); OUT là **bản rút gọn** của sheet 03. Gateway hiện có `/route` (đọc cache) và `/replan` (tính lại theo vị trí) trả **nguyên OUT đầy đủ**. **Người dùng chốt:** giữ nguyên 2 API cũ (ai cần thì dùng), **thêm 1 API mới** đúng sheet 09; theo đúng field của sheet (không thêm `label` / `duration_minutes` cho IDLE / BREAK — bên Mobix cần thì họ bổ sung).
+
+**API:** `GET /api/v1/staff/{staff_id}/suggest?latlng=lat,lng&action_type=0|1|2[&latlng_at=YYYY-MM-DD HH:mm:ss]` (Bearer token như cũ).
+- Hành vi như `/replan`: lấy IN mới nhất trong cache + vị trí Mobix (luật 60′) → `plan_and_store` (dấu vân tay → HIT cache hoặc tính lại MISS, ghi route, gửi Kafka OUT khi tính lại). Header `X-Cache: HIT|MISS`, `Cache-Control: no-store`.
+- `action_type` **bắt buộc** (sheet 09 ✔): thiếu / ngoài 0–2 → 400. Ghi đè `priority_type` của IN **cho lần tính này** (state trong Redis không đổi; IN mới của OA vẫn quyết mode lần sau). Mode khác → dấu vân tay khác → tính lại; Kafka OUT gửi OA mang `priority_type` = `action_type` (đồng bộ kiểu E-10 "KTV đổi chế độ").
+- `trigger` = `MOBIX_SUGGEST`, `run_code` = `<message_id>-s<giờ vị trí>` (replan: `-r`).
+- Response = `mobix_response(OUT đầy đủ)` (`envelope.cpp`): vỏ `success, statuscode, message, data`; `data[0]` = `staff_id, clusters, metrics`; cụm = `cluster_seg, cluster_code, schedule`; dòng giữ đúng field sheet 09 có mặt, **thứ tự sheet 09** (`… contract_no, contract_name, appointment, complete_date, timezone` — `timezone` cuối, khác sheet 03); IDLE / BREAK chỉ `seq … end_at`; `metrics` = `total_distance_km, total_travel_minutes, tasks_total`. Lỗi tính (data null) → `data: null`. Lỗi request (400 / 401 / 404 / 503, 202 retry) như `/replan`.
+- **Không đổi:** `/route`, `/replan`, cache Redis (vẫn lưu OUT đầy đủ), Kafka OUT (vẫn đầy đủ sheet 03).
+
+**File:** `envelope.hpp/.cpp` (`mobix_response`), `server.cpp` (`replan(..., suggest)` dùng chung + route `/suggest`). **Test:** `test_adapter` (chiếu đúng field / thứ tự, IDLE, lỗi → data null, bản gốc không đổi); `test_gateway_replan` (Redis thật: 400 thiếu / sai `action_type`, 401; 200 MISS đúng khóa từng cấp; Kafka OUT đầy đủ với `priority_type` 2 + `MOBIX_SUGGEST`; `/route` vẫn đầy đủ; gọi lại → HIT vẫn dạng rút gọn). `ctest` 18/18.
+**Hỏi OA / Mobix:** tên path (`/suggest` do repo đặt); GET + query hay POST + body; IDLE / BREAK không có `label` thì app hiển thị gì.
 
 ##### 7.30 — Khớp PRD v1.4 BR-10: tiêu chí "kết quả đổi" + ngưỡng dịch chuyển (người dùng chốt 2026-10-09)
 

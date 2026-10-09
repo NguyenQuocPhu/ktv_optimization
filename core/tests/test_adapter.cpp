@@ -93,6 +93,36 @@ int main() {
         legacy["data"] = out["data"][0];
         CHECK(ktv::reuse_response(legacy, next, now + 10)["data"].is_array());
     }
+    {  // 7.29 mobix_response (sheet 09): chỉ field sheet 09, đúng thứ tự; IDLE giữ seq … end_at; lỗi → data null.
+        nlohmann::ordered_json full = nlohmann::ordered_json::parse(R"({
+          "message_id": "m", "run_code": "m", "trigger": "T", "planned_at": "x", "schema_version": "1", "success": true,
+          "statuscode": "200", "message": "", "trace_id": "m", "server_time": "x",
+          "data": [{"staff_id": "S", "change_id": "yes", "trace_id": "", "route_changed": "yes", "priority_type": 0,
+            "clusters": [{"cluster_seg": 1, "cluster_code": "CL-1", "name": "n", "center": "1,1", "radius_m": 1, "task_count": 1,
+              "travel_km_inbound": 1.0, "travel_km_internal": 0.0, "handle_minutes": 60,
+              "schedule": [{"seq": 1, "entry_type": "IDLE", "at": "08:00", "start_at": "a", "end_at": "b", "duration_minutes": 5, "label": "Chờ"},
+                {"seq": 2, "entry_type": "TASK", "at": "08:05", "start_at": "b", "end_at": "c", "task_id": 7, "location": "L",
+                 "latlng": "1,1", "task_role": "main", "priority": 50.0, "insert_reason": "", "task_group_id": 2,
+                 "task_group_name": "bao_tri", "task_type_id": 1, "task_type_name": "bao_tri_vat_ly", "task_sub_id": 0,
+                 "task_sub_name": "", "checkindate": "", "checkoutdate": "", "travel_minutes_before": 3, "travel_km_before": 1.0,
+                 "handle_minutes": 60, "projected_sla": "ON_TIME", "sla_buffer_minutes": 20, "contract_id": "", "contract_no": "",
+                 "contract_name": "K", "timezone": "+07:00", "appointment": "", "complete_date": ""}]}],
+            "metrics": {"total_distance_km": 1.0, "total_travel_minutes": 3, "total_handle_minutes": 60, "tasks_total": 1}}]})");
+        const nlohmann::ordered_json view = ktv::mobix_response(full);
+        const auto keys = [](const nlohmann::ordered_json& o) {
+            std::vector<std::string> k;
+            for (auto it = o.begin(); it != o.end(); ++it) k.push_back(it.key());
+            return k;
+        };
+        CHECK((keys(view) == std::vector<std::string>{"success", "statuscode", "message", "data"}));
+        const auto& schedule = view["data"][0]["clusters"][0]["schedule"];
+        CHECK((keys(schedule[0]) == std::vector<std::string>{"seq", "entry_type", "at", "start_at", "end_at"}));
+        CHECK(keys(schedule[1]).back() == "timezone" && !schedule[1].contains("priority") && schedule[1]["contract_name"] == "K");
+        CHECK((keys(view["data"][0]["metrics"]) == std::vector<std::string>{"total_distance_km", "total_travel_minutes", "tasks_total"}));
+        CHECK(full["data"][0].contains("change_id"));  // bản gốc không đổi
+        nlohmann::ordered_json failed = {{"success", false}, {"statuscode", "422"}, {"message", "x"}, {"data", nullptr}};
+        CHECK(ktv::mobix_response(failed)["data"].is_null() && ktv::mobix_response(failed)["statuscode"] == "422");
+    }
     {  // Response lỗi không có data → data = null, không vỡ.
         Envelope e{"local-2", "DAY_START", now};
         nlohmann::ordered_json resp = {{"success", false}, {"statuscode", "400"}, {"message", "x"},

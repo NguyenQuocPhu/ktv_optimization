@@ -112,6 +112,13 @@ travel_minutes_before, travel_km_before, handle_minutes, projected_sla, contract
 Route có `data.priority_type` ngay sau `data.staff_id` (workbook API (4) sheet 03): `0` default (Kết nối 70% SLA · 30% tuyến,
 Phase 7.26) · `1` SLA · `2` tuyến. Core echo mode của IN (7.23); API `replan` chưa nhận tham số chọn mode (để sau) nên dùng mode trong state cache.
 
+## 6c. API theo sheet 09 workbook (6): `/suggest` (Phase 7.29, 2026-10-08)
+
+`GET /api/v1/staff/{staff_id}/suggest?latlng=lat,lng&action_type=0|1|2` — như `replan` nhưng có `action_type` (mode cho lần
+tính này: 0 mặc định 70% SLA + 30% tuyến, 1 SLA, 2 tuyến; bắt buộc) và trả **bản rút gọn đúng sheet 09**: `success,
+statuscode, message, data[{staff_id, clusters[{cluster_seg, cluster_code, schedule[]}], metrics{total_distance_km,
+total_travel_minutes, tasks_total}}]`. `replan` / `route` giữ nguyên (OUT đầy đủ). Kafka OUT cho OA vẫn đầy đủ.
+
 ## 7. Giới hạn/bảo mật cần ghi trong ticket
 
 - `replan` là GET có tác dụng phụ: `Cache-Control: no-store`; không log query chứa tọa độ nguyên văn.

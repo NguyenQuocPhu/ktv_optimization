@@ -25,6 +25,7 @@ Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ ga
 | Lõi `plan()`: parse → lọc → SLA → OSRM → QHĐ → cụm → response | ✅ |
 | `ktv_worker` đọc Kafka IN → state + route vào Redis (`--redis`) | ✅ Phase 7.1–7.3 |
 | `ktv_gateway` `GET /staff/{id}/route` + `GET /staff/{id}/replan` (Redis) | ✅ Phase 7.4 |
+| `ktv_gateway` `GET /staff/{id}/suggest?latlng=&action_type=` — API Mobix theo sheet 09 (bản rút gọn) | ✅ Phase 7.29 |
 | Produce Kafka OUT (worker + gateway) | ✅ Phase 7.5 (chờ SYS cấp topic OUT thật) |
 | Compose chạy worker + gateway + Redis + Kafka local | ✅ Phase 7.6 |
 

@@ -97,7 +97,7 @@ int main() {
     options.fixed_now = ktv::parse_datetime("2026-10-01 09:20:00");
     std::vector<std::string> sent;  // OUT đã gửi (value); request tuần tự nên không cần khóa
     options.send_out = [&sent](const std::string& key, const std::string& value) {
-        CHECK(key == "S1");
+        CHECK(key == "S1" || key == "S3");
         sent.push_back(value);
     };
     options.out_failed = [] { return 7LL; };
@@ -178,6 +178,49 @@ int main() {
         auto after = client.Get(replan + "21.0800,105.8800&latlng_at=2026-10-01 09:27:00", auth);
         CHECK(after && after->status == 200);
 
+        // 7.29 /suggest (sheet 09): action_type bắt buộc; trả bản rút gọn; Kafka OUT vẫn bản đầy đủ theo mode đã chọn.
+        json s3 = message("m3");
+        s3["staff"]["staff_id"] = "S3";
+        CHECK(store.put_state("S3", s3.dump(), {400, 1}));
+        const std::string suggest = "/api/v1/staff/S3/suggest?latlng=21.0500,105.8500";
+        CHECK(client.Get(suggest, auth)->status == 400);                    // thiếu action_type
+        CHECK(client.Get(suggest + "&action_type=5", auth)->status == 400);  // sai giá trị
+        CHECK(client.Get(suggest + "&action_type=1")->status == 401);
+        const size_t before = sent.size();
+        auto slim = client.Get(suggest + "&action_type=2", auth);
+        CHECK(slim && slim->status == 200 && slim->get_header_value("X-Cache") == "MISS");
+        const nlohmann::ordered_json view = nlohmann::ordered_json::parse(slim ? slim->body : "{}", nullptr, false);
+        const auto keys = [](const nlohmann::ordered_json& o) {
+            std::vector<std::string> k;
+            for (auto it = o.begin(); it != o.end(); ++it) k.push_back(it.key());
+            return k;
+        };
+        CHECK((keys(view) == std::vector<std::string>{"success", "statuscode", "message", "data"}));
+        if (view.contains("data") && view["data"].is_array() && !view["data"].empty()) {
+            const auto& item = view["data"][0];
+            CHECK((keys(item) == std::vector<std::string>{"staff_id", "clusters", "metrics"}) && item["staff_id"] == "S3");
+            CHECK((keys(item["metrics"]) == std::vector<std::string>{"total_distance_km", "total_travel_minutes", "tasks_total"}));
+            CHECK((keys(item["clusters"][0]) == std::vector<std::string>{"cluster_seg", "cluster_code", "schedule"}));
+            const auto& task = item["clusters"][0]["schedule"][0];
+            CHECK((keys(task) == std::vector<std::string>{
+                "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role", "task_group_id",
+                "task_group_name", "task_type_id", "task_type_name", "task_sub_id", "task_sub_name", "travel_minutes_before",
+                "travel_km_before", "sla_buffer_minutes", "contract_no", "contract_name", "appointment", "complete_date",
+                "timezone"}));
+        } else {
+            CHECK(false);
+        }
+        // Kafka OUT (OA) vẫn là bản đầy đủ, mode = action_type, trigger MOBIX_SUGGEST; /route vẫn trả bản đầy đủ.
+        CHECK(sent.size() == before + 1);
+        const json full = json::parse(sent.empty() ? "{}" : sent.back(), nullptr, false);
+        CHECK(full.value("trigger", "") == "MOBIX_SUGGEST" && data_of(sent.back()).value("priority_type", -1) == 2);
+        CHECK(data_of(sent.back()).contains("change_id") && full.contains("run_code"));
+        auto kept = client.Get("/api/v1/staff/S3/route", auth);
+        CHECK(kept && kept->status == 200 && json::parse(kept->body).contains("run_code"));
+        auto repeat = client.Get(suggest + "&action_type=2", auth);  // cùng vị trí + mode → cache, vẫn dạng rút gọn
+        CHECK(repeat && repeat->get_header_value("X-Cache") == "HIT" &&
+              keys(nlohmann::ordered_json::parse(repeat->body)) == (std::vector<std::string>{"success", "statuscode", "message", "data"}));
+
         // /readyz: PING Redis; bị cắt kết nối thì tự nối lại → vẫn sẵn sàng.
         redis_command(*config, "CLIENT KILL TYPE normal");
         auto ready = client.Get("/readyz");
@@ -187,7 +230,8 @@ int main() {
         ++failures;
     }
 
-    for (const char* kind : {"state:S1", "route:S1:2026-10-01", "latest:S1", "loc:S1", "dedup:S1"})
+    for (const char* kind : {"state:S1", "route:S1:2026-10-01", "latest:S1", "loc:S1", "dedup:S1", "state:S3",
+                             "route:S3:2026-10-01", "latest:S3", "loc:S3", "dedup:S3"})
         redis_command(*config, "DEL " + config->prefix + kind);
 
     if (failures) std::cerr << failures << " lỗi\n";

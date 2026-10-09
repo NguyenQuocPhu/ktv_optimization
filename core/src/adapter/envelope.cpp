@@ -73,4 +73,46 @@ nlohmann::ordered_json reuse_response(const nlohmann::ordered_json& cached, cons
     return out;
 }
 
+nlohmann::ordered_json mobix_response(const nlohmann::ordered_json& out) {
+    // Thứ tự field theo sheet 09 (khác sheet 03: timezone đứng cuối).
+    static const char* const kRowFields[] = {
+        "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role",
+        "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id", "task_sub_name",
+        "travel_minutes_before", "travel_km_before", "sla_buffer_minutes", "contract_no", "contract_name",
+        "appointment", "complete_date", "timezone"};
+    static const char* const kMetrics[] = {"total_distance_km", "total_travel_minutes", "tasks_total"};
+    nlohmann::ordered_json view;
+    view["success"] = out.value("success", false);
+    view["statuscode"] = out.value("statuscode", "");
+    view["message"] = out.value("message", "");
+    const nlohmann::ordered_json& data = out_data(out);
+    if (!data.is_object()) {
+        view["data"] = nullptr;
+        return view;
+    }
+    nlohmann::ordered_json item;
+    item["staff_id"] = data.value("staff_id", "");
+    item["clusters"] = nlohmann::ordered_json::array();
+    for (const auto& cluster : data.value("clusters", nlohmann::ordered_json::array())) {
+        nlohmann::ordered_json slim;
+        slim["cluster_seg"] = cluster.value("cluster_seg", 0);
+        slim["cluster_code"] = cluster.value("cluster_code", "");
+        slim["schedule"] = nlohmann::ordered_json::array();
+        for (const auto& row : cluster.value("schedule", nlohmann::ordered_json::array())) {
+            nlohmann::ordered_json kept = nlohmann::ordered_json::object();
+            for (const char* field : kRowFields)
+                if (row.contains(field)) kept[field] = row[field];
+            slim["schedule"].push_back(std::move(kept));
+        }
+        item["clusters"].push_back(std::move(slim));
+    }
+    nlohmann::ordered_json metrics = nlohmann::ordered_json::object();
+    if (data.contains("metrics") && data["metrics"].is_object())
+        for (const char* field : kMetrics)
+            if (data["metrics"].contains(field)) metrics[field] = data["metrics"][field];
+    item["metrics"] = std::move(metrics);
+    view["data"] = nlohmann::ordered_json::array({std::move(item)});
+    return view;
+}
+
 }  // namespace ktv
