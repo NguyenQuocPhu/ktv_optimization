@@ -29,6 +29,7 @@
 #include <ctime>
 #include <iostream>
 #include <optional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -80,8 +81,12 @@ inline std::string log_now() {
 inline nlohmann::ordered_json log_event(const char* event) { return {{"ts", log_now()}, {"event", event}}; }
 
 // Một dòng; ký tự UTF-8 hỏng trong dữ liệu thay bằng U+FFFD thay vì ném lỗi giữa chừng.
+// Một dòng / lần, khóa chung: gateway (thread pool) và worker nhiều luồng (8.2) không chen dòng của nhau.
 inline void write_log(const nlohmann::ordered_json& line) {
-    std::cerr << line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) << '\n';
+    const std::string text = line.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + '\n';
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    std::cerr << text;
     std::cerr.flush();
 }
 

@@ -35,7 +35,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
-      KAFKA_NUM_PARTITIONS: "3"
+      KAFKA_NUM_PARTITIONS: "4"  # như prod (8.2)
     volumes:
       - kafka-data:/var/lib/kafka/data
 
@@ -50,7 +50,7 @@ services:
     command:
       - |
         for topic in ktv-local-in ktv-local-out; do
-          until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic $$topic --partitions 3; do sleep 2; done
+          until /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --topic $$topic --partitions 4; do sleep 2; done
         done
 
   worker:
@@ -71,7 +71,7 @@ services:
       KAFKA_TOPIC_IN: ktv-local-in
       KAFKA_TOPIC_OUT: ktv-local-out
       KAFKA_AUTO_OFFSET_RESET: earliest
-    command: ["ktv_worker", "--env", "/dev/null", "--health-port", "8081", "--redis", "redis:6379"]
+    command: ["ktv_worker", "--env", "/dev/null", "--health-port", "8081", "--redis", "redis:6379", "--threads", "4"]  # 8.2
     ports:
       - "127.0.0.1:8081:8081"   # /healthz, /readyz
 

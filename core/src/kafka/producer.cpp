@@ -22,8 +22,11 @@ void log_callback(const rd_kafka_t*, int level, const char* facility, const char
 }  // namespace
 
 void KafkaProducer::on_delivery(rd_kafka_t*, const rd_kafka_message_t* message, void* opaque) {
-    if (message->err == RD_KAFKA_RESP_ERR_NO_ERROR) return;
     auto* self = static_cast<KafkaProducer*>(opaque);
+    const bool ok = message->err == RD_KAFKA_RESP_ERR_NO_ERROR;
+    if (message->_private && self->on_delivered)  // 8.2: token = _private − 1 (0 = gửi không kèm token)
+        self->on_delivered(reinterpret_cast<std::uintptr_t>(message->_private) - 1, ok);
+    if (ok) return;
     ++self->failed_;
     nlohmann::ordered_json line = ktv::log_event("out_failed");  // Kafka báo không giao được OUT
     line["topic"] = self->topic_;
@@ -54,11 +57,15 @@ KafkaProducer::~KafkaProducer() {
     rd_kafka_destroy(handle_);
 }
 
-void KafkaProducer::send(const std::string& key, const std::string& value) {
+void KafkaProducer::send(const std::string& key, const std::string& value) { send(key, value, ~std::uint64_t{0}); }
+
+void KafkaProducer::send(const std::string& key, const std::string& value, std::uint64_t token) {
+    void* opaque = reinterpret_cast<void*>(static_cast<std::uintptr_t>(token + 1));  // ~0 + 1 = 0: không token
     const rd_kafka_resp_err_t code = rd_kafka_producev(
         handle_, RD_KAFKA_V_TOPIC(topic_.c_str()), RD_KAFKA_V_KEY(key.data(), key.size()),
         RD_KAFKA_V_VALUE(const_cast<char*>(value.data()), value.size()), RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY),
-        RD_KAFKA_V_END);
+        RD_KAFKA_V_OPAQUE(opaque), RD_KAFKA_V_END);
+    if (code != RD_KAFKA_RESP_ERR_NO_ERROR && opaque && on_delivered) on_delivered(token, false);
     if (code != RD_KAFKA_RESP_ERR_NO_ERROR) {  // không ném: gateway vẫn trả route; worker thấy qua flush()
         ++failed_;
         nlohmann::ordered_json line = ktv::log_event("out_failed");  // không đưa được vào hàng đợi

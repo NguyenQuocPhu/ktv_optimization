@@ -185,6 +185,7 @@ Cấu hình qua `.env` (copy từ `.env.example`; biến môi trường thật �
 core/build/ktv_worker --env .env --max 1          # đọc 1 message → in response
 core/build/ktv_worker --env .env --out responses.jsonl --health-port 8081
 core/build/ktv_worker --env .env --log-payload all        # in payload IN vào mọi dòng log (soi staging)
+core/build/ktv_worker --env .env --threads 4               # 8.2: 4 luồng xử lý (cùng KTV vẫn tuần tự); --queue N = hàng đợi mỗi luồng (20)
 core/build/ktv_worker --env .env --osrm http://127.0.0.1:5000 --rules rules.json
 core/build/ktv_worker --env .env --redis 127.0.0.1:6379   # ghi thêm state + route vào Redis (Phase 7.3)
 ```
@@ -224,7 +225,7 @@ có giây), `event`.
 
 | `event` | Khi nào | Trường chính |
 |---|---|---|
-| `message` (worker) | Mỗi message IN | `topic` `partition` `offset` `key` `headers` `message_id` `run_code` `staff_id` `statuscode` `message` `errors` (đầy đủ, response chỉ ghi 3 lỗi đầu) `warnings` `tasks` (`received`/`routed` = số dòng TASK/`deferred` = số dòng DEFERRED theo lý do, VD `{"NEXT_DAY":1}`/`skipped_status`/`current`/`missing_location`) `change_id` (`"no"` = trả cache) `sent_to` (`"kafka"` khi thật sự đẩy OUT, không thì `null`) `stored` (route ghi Redis) `used_mobix_loc` `generated_in_ms` `total_ms`, `payload` (theo `--log-payload`) |
+| `message` (worker) | Mỗi message IN | `topic` `partition` `offset` `key` `headers` `message_id` `run_code` `staff_id` `statuscode` `message` `errors` (đầy đủ, response chỉ ghi 3 lỗi đầu) `warnings` `tasks` (`received`/`routed` = số dòng TASK/`deferred` = số dòng DEFERRED theo lý do, VD `{"NEXT_DAY":1}`/`skipped_status`/`current`/`missing_location`) `change_id` (`"no"` = trả cache) `sent_to` (`"kafka"` khi thật sự đẩy OUT, không thì `null`) `stored` (route ghi Redis) `used_mobix_loc` `generated_in_ms` `thread` `queue_ms` (chờ trong hàng) `plan_ms` (tính) `total_ms`, `payload` (theo `--log-payload`) |
 | `http` (gateway) | Mỗi request `/api/` (không log `/healthz`, `/readyz`, không log query) | `method` `route` (`route`/`replan`) `staff_id` `http_status` `cache` (HIT/MISS) `statuscode` `message` `total_ms` |
 | `start` / `stop` | Khởi động / dừng | cấu hình (không password) / số message, lý do |
 | `fatal` | Lỗi làm tiến trình thoát | `error`, `exit_code` |

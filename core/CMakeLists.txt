@@ -65,7 +65,7 @@ else()
 endif()
 
 enable_testing()
-foreach(name api dp plan travel normalization sla cluster adapter pipeline)
+foreach(name api dp plan travel normalization sla cluster adapter pipeline offsets)
   add_executable(test_${name} tests/test_${name}.cpp)
   target_link_libraries(test_${name} ktv)
   add_test(NAME ${name} COMMAND test_${name})

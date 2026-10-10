@@ -33,6 +33,8 @@ KafkaConsumer::KafkaConsumer(const KafkaConfig& config) {
             fail(key + ": " + error);
         }
     }
+    rd_kafka_conf_set_rebalance_cb(conf, on_rebalance);
+    rd_kafka_conf_set_opaque(conf, this);
     // rd_kafka_new nhận conf; nhánh lỗi không destroy conf (theo example của librdkafka).
     handle_ = rd_kafka_new(RD_KAFKA_CONSUMER, conf, error, sizeof error);
     if (handle_ == nullptr) fail("không tạo được consumer: " + std::string(error));
@@ -43,6 +45,26 @@ KafkaConsumer::KafkaConsumer(const KafkaConfig& config) {
     const rd_kafka_resp_err_t code = rd_kafka_subscribe(handle_, topics);
     rd_kafka_topic_partition_list_destroy(topics);
     if (code != RD_KAFKA_RESP_ERR_NO_ERROR) fail("subscribe " + config.topic_in + ": " + rd_kafka_err2str(code));
+}
+
+// Nhận / trả partition. Giao thức cooperative (incremental) và eager (mặc định) gọi API khác nhau.
+void KafkaConsumer::on_rebalance(rd_kafka_t* rk, rd_kafka_resp_err_t err, rd_kafka_topic_partition_list_t* parts,
+                                 void* opaque) {
+    auto* self = static_cast<KafkaConsumer*>(opaque);
+    const bool cooperative = std::string(rd_kafka_rebalance_protocol(rk)) == "COOPERATIVE";
+    if (err == RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS) {
+        std::vector<int> partitions;
+        for (int i = 0; i < parts->cnt; ++i) partitions.push_back(parts->elems[i].partition);
+        if (self->on_revoke) self->on_revoke(partitions);
+        if (cooperative) {
+            if (rd_kafka_error_t* e = rd_kafka_incremental_unassign(rk, parts)) rd_kafka_error_destroy(e);
+        }
+        else rd_kafka_assign(rk, nullptr);
+    } else if (cooperative) {
+        if (rd_kafka_error_t* e = rd_kafka_incremental_assign(rk, parts)) rd_kafka_error_destroy(e);
+    } else {
+        rd_kafka_assign(rk, parts);
+    }
 }
 
 KafkaConsumer::~KafkaConsumer() {
@@ -105,9 +127,14 @@ std::optional<KafkaConsumer::Record> KafkaConsumer::poll(int timeout_ms) {
 }
 
 bool KafkaConsumer::commit(const Record& record) {
-    rd_kafka_topic_partition_list_t* offsets = rd_kafka_topic_partition_list_new(1);
-    rd_kafka_topic_partition_t* item = rd_kafka_topic_partition_list_add(offsets, record.topic.c_str(), record.partition);
-    item->offset = record.offset + 1;
+    return commit(record.topic, {{record.partition, record.offset + 1}});
+}
+
+bool KafkaConsumer::commit(const std::string& topic, const std::map<int, long long>& next) {
+    if (next.empty()) return true;
+    rd_kafka_topic_partition_list_t* offsets = rd_kafka_topic_partition_list_new(static_cast<int>(next.size()));
+    for (const auto& [partition, offset] : next)
+        rd_kafka_topic_partition_list_add(offsets, topic.c_str(), partition)->offset = offset;
     const rd_kafka_resp_err_t code = rd_kafka_commit(handle_, offsets, 0 /* đồng bộ */);
     rd_kafka_topic_partition_list_destroy(offsets);
     if (code == RD_KAFKA_RESP_ERR_NO_ERROR) return true;
@@ -118,9 +145,9 @@ bool KafkaConsumer::commit(const Record& record) {
         code == RD_KAFKA_RESP_ERR__STATE) {
         // Đang chia lại partition: message sẽ được giao lại cho consumer nhận partition (at-least-once).
         nlohmann::ordered_json line = ktv::log_event("commit_skipped");
-        line["topic"] = record.topic;
-        line["partition"] = record.partition;
-        line["offset"] = record.offset;
+        line["topic"] = topic;
+        line["offsets"] = nlohmann::ordered_json::object();  // partition → offset kế tiếp
+        for (const auto& [partition, offset] : next) line["offsets"][std::to_string(partition)] = offset;
         line["reason"] = rd_kafka_err2str(code);
         ktv::write_log(line);
         return false;

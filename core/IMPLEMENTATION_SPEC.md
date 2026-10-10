@@ -1734,6 +1734,32 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 **Đọc (so cùng thời gian):** không phương án nào thắng mọi ô. **SLA ≤ 45 việc: `lns_window` tốt hơn** (cửa sổ đánh bóng đã đủ, các cách mới tốn vòng). **Kết nối: `alns_dp` tốt hơn vừa phải** (13–15 việc lệch 0,78 → 0,57 cùng 47 ms; 20 việc 4,1 → 3,1; 45 việc 11,7 → 6,9) — tầng 1 gồ ghề nên "kéo cụm + QHĐ" có ích. 63 việc `alns_dp` tốt hơn rõ ở cả 2 mode nhưng chậm hơn. Bộ bài nhỏ (4–14 bài với bài lớn) → chênh lệch nhỏ có thể là nhiễu.
 **Trạng thái:** có trong code, chọn được qua `rules.json`; **mặc định giữ `lns_window` 1.000** cho tới khi người dùng chốt. **Test:** `test_dp` — `alns_dp` cùng bộ kiểm tất định / không tệ hơn `improve` / hợp lệ (tốt hơn `improve` ở 63/72 lần chạy cả 3 cách).
 
+### Phase 8.2 — Worker nhiều luồng (người dùng duyệt 2026-10-10) ✅ đã thực thi
+
+**Bối cảnh.** Worker cũ 1 luồng: `poll → plan_and_store → flush OUT → commit` tuần tự từng message; một message chậm (LNS, OSRM timeout) chặn mọi message sau; ~một nửa thời gian ngồi chờ OSRM. **Người dùng chốt bối cảnh prod:** OA đẩy **dồn một lúc lúc 6h**; topic IN **4 partition**; **2 replica × 4 luồng**. Scale tiếp = tăng partition (chỉ tăng được, không giảm — nên đặt dư) + thêm replica; OUT: worker chỉ ghi (key = `staff_id`, idempotence) nên số partition OUT do bên đọc (OA) quyết.
+
+**Đã làm (`ktv_worker --threads N --queue M`, mặc định 1 / 20):**
+- **Luồng chính:** `poll(100 ms)` → ghi sổ "đang chạy" → luồng = `hash(key Kafka)` % N (key trống: `staff.staff_id` trong payload, rồi partition) → đẩy vào hàng FIFO của luồng. Hàng đầy → luồng chính chờ (không poll) — hàng nhỏ (20) giữ dưới `max.poll.interval.ms` [ponytail: chưa dùng pause / resume partition]. Mỗi giây gom message xong → `OffsetTracker` (`kafka/offsets.hpp`) → commit tới chỗ hổng đầu tiên mỗi partition.
+- **N luồng xử lý:** mỗi luồng kết nối Redis riêng; `plan_and_store` như cũ; ghi `--out` dưới khóa. **Xong** = OUT được Kafka xác nhận (producer `send(key, value, token)` + `on_delivered`, thay `flush()` mỗi message) hoặc không có OUT (STALE). OUT Kafka từ chối → dừng worker, không commit message đó.
+- **Log:** `write_log` ghi mỗi dòng một lần dưới khóa chung (sửa luôn cho gateway thread pool); dòng `message` thêm `thread`, `queue_ms` (chờ trong hàng — cao = thiếu luồng / replica), `plan_ms` (tính — cao = bài khó / OSRM).
+- **Rebalance:** consumer có `on_revoke` (gọi trong poll trước khi trả partition): chờ message dở của partition bị thu hồi (≤ 10 s), commit, quên sổ; hỗ trợ cả giao thức eager và cooperative. [ponytail: message của partition đó còn trong hàng vẫn được xử lý → worker mới làm lại, at-least-once.]
+- **Tắt / lỗi:** ngừng poll → luồng xử lý làm hết hàng (lỗi: bỏ) → `flush` chờ OUT xác nhận → commit phần đã xong → tháo `on_revoke` rồi đóng consumer (sửa segfault: consumer đóng gọi revoke khi sổ đã bị hủy).
+- Đổi so với thiết kế ban đầu: không có biến môi trường `KTV_WORKER_*` / `KTV_COMMIT_INTERVAL_MS` (chỉ cờ `--threads`, `--queue`; commit cố định 1 s); hàng mặc định 20 (không 100).
+
+**Đo (2026-10-10, máy dev 16 nhân, Kafka dev `ktv-kafka-dev` 127.0.0.1:19092 topic 4 partition, OSRM :15000, 2.000 KTV giả kiểu batch 6h — số ca / KTV theo phân bố thật, 5% KTV có 2 IN = 2.107 message, dồn một lúc):**
+
+| Cấu hình | Thời gian xả hết (`--max`, 1 tiến trình) | CPU |
+|---|---|---|
+| 1 luồng | 19,6 s | 45% (một nửa chờ OSRM) |
+| 2 luồng | 11,5 s | 82% |
+| **4 luồng** | **6,8 s** (~310 message/s) | 135% |
+| 8 luồng | 3,9 s | 238% |
+
+`plan_ms` p50 ~6 ms, p95 ~35 ms, max ~250 ms. 2 replica × 4 luồng (đo bằng lag, có trễ kiểm lag ~1 s): 8,1 s so 1×4 10,9 s, 1×1 23,8 s. Ước 5.000 KTV với 2 × 4: ~10 s.
+**Kiểm đúng:** 1×4, 2×4: đủ 2.107 / 2.107 OUT, 0 trùng, **nội dung OUT giống hệt bản 1 luồng** (bỏ `server_time`, `generated_in_ms`); 107 KTV có 2 IN — OUT đúng thứ tự, cùng partition. **`kill -9`** sau 3 s (1.033 OUT đã ghi) rồi bật lại: 0 thiếu, 399 làm lại (phần chưa commit, at-least-once). **Replica thứ 2 vào giữa chừng:** revoke 4 partition → chia lại, 0 thiếu, 0 trùng.
+**Test:** `test_offsets` (chỗ hổng, nhiều partition, thu hồi); `ctest` 19/19. Load test chạy tay bằng script scratch (sinh tải + chạy N replica × M luồng + đo lag) — [ponytail: chưa đưa vào repo; thêm khi cần chạy lại trên staging].
+**Còn lại:** NFR-01 "≤ 5 s" — hỏi PO nghĩa (mỗi KTV kể cả xếp hàng hay thời gian tính); số KTV thật lúc 6h; deploy Compose hay k8s (`compose.yaml` local chưa thêm `--threads`).
+
 ### Phase 9 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.

@@ -15,7 +15,8 @@
 //
 // Trong file này có:
 //   KafkaConsumer::Record – một message đọc được
-//   poll, commit          – lấy một message / xác nhận đã xử lý xong
+//   poll, commit          – lấy một message / xác nhận đã xử lý xong (một record, hoặc nhiều partition)
+//   on_revoke             – 8.2: báo trước khi Kafka thu hồi partition
 //   reachable             – broker có trả lời không (cho /readyz)
 //
 // Ẩn trong consumer.cpp: dựng cấu hình librdkafka, log lỗi, phân loại lỗi tạm thời / lỗi nặng.
@@ -25,6 +26,8 @@
 // ============================================================================
 #pragma once
 
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -61,12 +64,19 @@ public:
     // (rebalance/generation cũ, đã log): message sẽ được giao lại, bình thường — không dừng worker.
     // Lỗi khác → ném.
     bool commit(const Record& record);
+    // 8.2: commit nhiều partition một lần — partition → offset KẾ TIẾP cần đọc (đã +1). Cùng luật lỗi như trên.
+    bool commit(const std::string& topic, const std::map<int, long long>& next);
+
+    // 8.2: Kafka sắp thu hồi các partition này (rebalance). Gọi TRONG poll() trước khi trả partition — worker
+    // chờ message đang chạy của chúng xong + commit. Không đặt → trả luôn (message dở được giao lại: at-least-once).
+    std::function<void(const std::vector<int>& partitions)> on_revoke;
 
     // Hỏi broker (metadata) xem có nối được không. Dùng cho /readyz: poll() không phân biệt được
     // "đang chờ message" với "chưa bao giờ nối được broker".
     bool reachable(int timeout_ms);
 
 private:
+    static void on_rebalance(rd_kafka_t*, rd_kafka_resp_err_t, rd_kafka_topic_partition_list_t*, void* opaque);
     rd_kafka_t* handle_ = nullptr;
 };
 

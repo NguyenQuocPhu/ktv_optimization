@@ -7,6 +7,12 @@
 //   ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"]
 //              [--out responses.jsonl] [--max N] [--health-port N]
 //              [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]] [--log-payload none|error|all]
+//              [--threads N] [--queue N]
+//
+// 8.2 nhiều luồng: luồng chính poll + chia message theo staff_id → N luồng xử lý (mặc định 1), mỗi luồng một hàng
+// đợi FIFO (--queue, mặc định 20) và kết nối Redis riêng → cùng KTV tuần tự đúng thứ tự Kafka, KTV khác song song.
+// Message xong = OUT được Kafka xác nhận (hoặc không có OUT); commit mỗi giây tới chỗ hổng đầu tiên mỗi partition
+// (kafka/offsets.hpp). Kafka thu hồi partition → chờ message dở của nó (≤ 10 s) rồi commit + trả.
 //
 // Log: mỗi sự kiện MỘT dòng JSON trên stderr (adapter/log.hpp). Mỗi message IN một dòng event "message": vị trí Kafka,
 // staff_id, statuscode, message, errors (đầy đủ), warnings, đếm task, có/không đẩy OUT, thời gian; payload IN theo
@@ -23,6 +29,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
 #include <cctype>
 #include <csignal>
 #include <cstdlib>
@@ -44,6 +52,7 @@
 #include "ktv/adapter/publish.hpp"
 #include "ktv/kafka/config.hpp"
 #include "ktv/kafka/consumer.hpp"
+#include "ktv/kafka/offsets.hpp"
 #include "ktv/kafka/producer.hpp"
 #include "ktv/plan.hpp"
 
@@ -58,7 +67,7 @@ int usage() {
                  "  ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"]\n"
                  "             [--out responses.jsonl] [--max N] [--health-port N]\n"
                  "             [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]\n"
-                 "             [--log-payload none|error|all]\n";
+                 "             [--log-payload none|error|all] [--threads N] [--queue N]\n";
     return 2;
 }
 
@@ -159,6 +168,7 @@ std::unique_ptr<HealthServer> start_health(Health& health, int port) {
 int main(int argc, char** argv) {
     std::string env_path = ".env", rules_path, out_path, osrm_url, at, max_text, port_text, payload_text = "error";
     std::string redis_addr, redis_password, redis_prefix = "ktv:";
+    std::string threads_text = "1", queue_text = "20";
     long long max_messages = 0;
     int health_port = 0;
     for (int i = 1; i < argc; ++i) {
@@ -174,6 +184,8 @@ int main(int argc, char** argv) {
         else if (arg == "--redis-password" && i + 1 < argc) redis_password = argv[++i];
         else if (arg == "--redis-prefix" && i + 1 < argc) redis_prefix = argv[++i];
         else if (arg == "--log-payload" && i + 1 < argc) payload_text = argv[++i];
+        else if (arg == "--threads" && i + 1 < argc) threads_text = argv[++i];
+        else if (arg == "--queue" && i + 1 < argc) queue_text = argv[++i];
         else return usage();
     }
     // Gõ nhầm (VD "8O81") không được âm thầm thành 0 = tắt health / chạy vô hạn.
@@ -191,6 +203,11 @@ int main(int argc, char** argv) {
         }
         health_port = static_cast<int>(*value);
     }
+    const auto threads_value = whole(threads_text, 1, 64), queue_value = whole(queue_text, 1, 10'000);
+    if (!threads_value) return fatal("--threads cần số nguyên 1–64: " + threads_text, 2);
+    if (!queue_value) return fatal("--queue cần số nguyên 1–10000: " + queue_text, 2);
+    const int threads = static_cast<int>(*threads_value);
+    const size_t queue_cap = static_cast<size_t>(*queue_value);
     const std::optional<ktv::PayloadLog> payload_log = ktv::payload_log_from(payload_text);
     if (!payload_log) return fatal("--log-payload cần none, error hoặc all: " + payload_text, 2);
 
@@ -225,10 +242,8 @@ int main(int argc, char** argv) {
             return fatal(error.what(), 2);
         }
     }
-    ktv::SendOut send_out;
-    if (producer) send_out = [&producer](const std::string& key, const std::string& value) { producer->send(key, value); };
 
-    std::unique_ptr<ktv::RedisStore> store;
+    std::vector<std::unique_ptr<ktv::RedisStore>> stores(threads);  // 8.2: mỗi luồng một kết nối (hiredis không chia sẻ được)
     if (!redis_addr.empty()) {
         std::optional<ktv::RedisStore::Config> redis = ktv::redis_config(redis_addr);
         if (!redis) {
@@ -237,7 +252,7 @@ int main(int argc, char** argv) {
         redis->password = redis_password;
         redis->prefix = redis_prefix;
         try {
-            store = std::make_unique<ktv::RedisStore>(*redis);
+            for (auto& store : stores) store = std::make_unique<ktv::RedisStore>(*redis);
         } catch (const std::exception& error) {
             return fatal(error.what(), 2);
         }
@@ -263,7 +278,6 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, request_stop);
     std::signal(SIGTERM, request_stop);
 
-    long long processed = 0;
     {
         nlohmann::ordered_json line = ktv::log_event("start");
         line["kafka"] = ktv::describe(config);  // không chứa password
@@ -274,113 +288,270 @@ int main(int argc, char** argv) {
         line["rules"] = rules_path.empty() ? "mặc định" : rules_path;
         line["health_port"] = health_port > 0 ? nlohmann::ordered_json(health_port) : nlohmann::ordered_json(nullptr);
         line["log_payload"] = payload_text;
+        line["threads"] = threads;
+        line["queue"] = queue_cap;
         line["out"] = out_path.empty() ? "stdout" : out_path;
         ktv::write_log(line);
     }
+    // ---- 8.2: luồng chính (poll, chia việc, commit) + N luồng xử lý ----
+    struct Job {
+        ktv::KafkaConsumer::Record record;
+        std::uint64_t token;
+        std::chrono::steady_clock::time_point queued;
+    };
+    struct Lane {
+        std::mutex mutex;
+        std::condition_variable ready;
+        std::deque<Job> jobs;
+    };
+    std::vector<std::unique_ptr<Lane>> lanes;
+    for (int i = 0; i < threads; ++i) lanes.push_back(std::make_unique<Lane>());
+    std::mutex finished_mutex;  // message xong: (token, OUT tới nơi?) — luồng xử lý / callback producer ghi, luồng chính đọc
+    std::vector<std::pair<std::uint64_t, bool>> finished;
+    std::atomic<bool> stopping{false}, failed{false};
+    std::mutex failure_mutex, out_mutex;
+    std::string failure;
+    const auto fail = [&](const std::string& text) {
+        std::lock_guard<std::mutex> lock(failure_mutex);
+        if (!failed.exchange(true)) failure = text;
+        for (auto& lane : lanes) lane->ready.notify_all();
+    };
+    const auto finish = [&](std::uint64_t token, bool ok) {
+        std::lock_guard<std::mutex> lock(finished_mutex);
+        finished.emplace_back(token, ok);
+    };
+    if (producer) producer->on_delivered = finish;
+
+    // Một message, ở luồng xử lý `index`. Ném = lỗi nặng (Redis, ghi file) → dừng worker, message không commit.
+    const auto handle = [&](int index, Job& job) {
+        const auto started = std::chrono::steady_clock::now();
+        const ktv::KafkaConsumer::Record& record = job.record;
+        const ktv::Minutes now = fixed_now.value_or(ktv::vietnam_now());
+        // Thiếu message_id: lấy vị trí Kafka làm ID — không trùng giữa các lần chạy / replica.
+        const std::string position =
+            record.topic + "-" + std::to_string(record.partition) + "-" + std::to_string(record.offset);
+        const ktv::json in = ktv::json::parse(record.payload, nullptr, false);
+        const ktv::Envelope envelope = ktv::local_envelope(in, position, now);
+        ktv::SendOut send_out;
+        if (producer)
+            send_out = [&](const std::string& key, const std::string& value) { producer->send(key, value, job.token); };
+        const ktv::Published published = ktv::plan_and_store(in, envelope, now, {record.timestamp_ms, record.offset},
+                                                             rules, osrm_url, stores[index].get(), send_out);
+        const double plan_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        const std::string& status = published.status;
+        const std::vector<ktv::Error>& warnings = published.warnings;
+        if (published.out) {  // IN cũ (STALE): không có response
+            std::lock_guard<std::mutex> lock(out_mutex);
+            *out << published.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) << "\n";
+            out->flush();
+            if (!*out) throw std::runtime_error("ghi response thất bại, không commit " + position);
+        }
+        // Xong = OUT được Kafka xác nhận (callback producer gọi finish) hoặc không có OUT.
+        if (!published.out_sent) finish(job.token, true);
+        {
+            std::lock_guard<std::mutex> lock(health.mutex);
+            ++health.processed;
+            ++health.by_status[status];
+            health.last_message_at = ktv::format_datetime(ktv::vietnam_now());
+        }
+
+        // Một dòng JSON / message: đủ để biết vì sao ra statuscode này mà không phải lục Kafka OUT.
+        nlohmann::ordered_json log = ktv::log_event("message");
+        log["topic"] = record.topic;
+        log["partition"] = record.partition;
+        log["offset"] = record.offset;
+        log["key"] = record.key;
+        log["headers"] = nlohmann::ordered_json::object();
+        for (const auto& [name, value_text] : record.headers) log["headers"][name] = value_text;
+        log["message_id"] = published.message_id;
+        log["run_code"] = envelope.run_code.empty() ? envelope.message_id : envelope.run_code;
+        log["staff_id"] = published.staff_id;
+        log["statuscode"] = status;  // "STALE" = IN cũ hơn state đang có, bỏ qua (không response, không OUT)
+        log["message"] = published.out ? (*published.out)["message"] : nlohmann::ordered_json(nullptr);
+        log["errors"] = ktv::errors_json(published.errors);
+        log["warnings"] = nlohmann::ordered_json::array();
+        for (const ktv::Error& warning : warnings) log["warnings"].push_back(ktv::issue_key(warning));
+        // 7.20.5: routed = số dòng TASK thật sự xếp (trước: candidates, chưa trừ ca hẹn ngày sau / lọc K);
+        // deferred = số dòng DEFERRED theo lý do (VD {"NEXT_DAY":1,"BEYOND_K":2}) — ca không xếp nhìn được trên log.
+        long long routed = 0;
+        nlohmann::ordered_json deferred = nlohmann::ordered_json::object();
+        if (published.out) {
+            const nlohmann::ordered_json& body = ktv::out_data(*published.out);
+            if (body.is_object() && body.contains("clusters"))
+                for (const auto& cluster : body["clusters"])
+                    for (const auto& row : cluster["schedule"]) {
+                        const std::string entry = row.value("entry_type", "");
+                        if (entry == "TASK") ++routed;
+                        if (entry == "DEFERRED") {
+                            const std::string reason = row.value("insert_reason", "");
+                            deferred[reason] = deferred.value(reason, 0) + 1;
+                        }
+                    }
+        }
+        log["tasks"] = {{"received", published.stats.tasks},
+                        {"routed", routed},
+                        {"deferred", deferred},
+                        {"skipped_status", published.stats.excluded_status},
+                        {"current", published.stats.excluded_current},
+                        {"missing_location", published.stats.excluded_missing_location}};
+        log["sent_to"] = published.out_sent ? nlohmann::ordered_json("kafka") : nlohmann::ordered_json(nullptr);
+        log["stored"] = published.route_stored;
+        log["used_mobix_loc"] = published.used_mobix_loc;
+        const nlohmann::ordered_json data = published.out ? ktv::out_data(*published.out) : nlohmann::ordered_json(nullptr);
+        log["change_id"] = data.is_object() ? data["change_id"] : nlohmann::ordered_json(nullptr);  // "no" = trả cache
+        log["generated_in_ms"] = data.is_object() ? data["metrics"]["generated_in_ms"] : nlohmann::ordered_json(nullptr);
+        // 8.2: luồng nào, chờ trong hàng bao lâu, tính bao lâu — queue_ms cao = thiếu luồng / replica; plan_ms cao = bài khó.
+        log["thread"] = index;
+        log["queue_ms"] = std::round(std::chrono::duration<double, std::milli>(started - job.queued).count() * 10) / 10;
+        log["plan_ms"] = std::round(plan_ms * 10) / 10;
+        log["total_ms"] = std::round(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count() * 10) / 10;
+        if (ktv::payload_wanted(*payload_log, status)) log["payload"] = ktv::payload_json(in, record.payload);
+        ktv::write_log(log);
+        for (const std::string& key : record_issues(health, warnings)) {  // loại cảnh báo mới: một dòng; đếm ở /healthz
+            nlohmann::ordered_json fresh = ktv::log_event("data_issue_new");
+            fresh["issue"] = key;
+            fresh["message_id"] = published.message_id;
+            ktv::write_log(fresh);
+        }
+    };
+
+    std::vector<std::thread> pool;
+    for (int index = 0; index < threads; ++index)
+        pool.emplace_back([&, index] {
+            Lane& lane = *lanes[index];
+            while (true) {
+                Job job;
+                {
+                    std::unique_lock<std::mutex> lock(lane.mutex);
+                    lane.ready.wait(lock, [&] { return failed || !lane.jobs.empty() || stopping; });
+                    if (failed || lane.jobs.empty()) return;  // lỗi, hoặc đang tắt và đã làm hết hàng
+                    job = std::move(lane.jobs.front());
+                    lane.jobs.pop_front();
+                }
+                lane.ready.notify_all();  // luồng chính có thể đang chờ chỗ trống
+                try {
+                    handle(index, job);
+                } catch (const std::exception& error) {
+                    fail(error.what());
+                    return;
+                }
+            }
+        });
+
+    long long processed = 0;
+    std::string topic = config.topic_in;
+    // Sổ + consumer khai ngoài try: consumer đóng (gọi on_revoke) phải trước khi sổ / lambda bị hủy — đóng tay ở dưới.
+    ktv::OffsetTracker tracker;
+    std::map<std::uint64_t, std::pair<int, long long>> inflight;  // token → (partition, offset)
+    std::uint64_t next_token = 0;
+    std::unique_ptr<ktv::KafkaConsumer> owned;
     try {
-        ktv::KafkaConsumer consumer(config);
+        owned = std::make_unique<ktv::KafkaConsumer>(config);
+        ktv::KafkaConsumer& consumer = *owned;
+        // Gom message đã xong vào sổ. OUT Kafka từ chối → dừng (không commit message đó).
+        const auto collect = [&] {
+            if (producer) producer->poll(0);
+            std::vector<std::pair<std::uint64_t, bool>> batch;
+            {
+                std::lock_guard<std::mutex> lock(finished_mutex);
+                batch.swap(finished);
+            }
+            for (const auto& [token, ok] : batch) {
+                const auto it = inflight.find(token);
+                if (it == inflight.end()) continue;
+                if (!ok) fail("OUT không được Kafka xác nhận, không commit " + topic + "-" + std::to_string(it->second.first) +
+                              "-" + std::to_string(it->second.second));
+                else tracker.done(it->second.first, it->second.second);
+                inflight.erase(it);
+            }
+        };
+        const auto commit = [&] { consumer.commit(topic, tracker.advance()); };
+        // Rebalance: chờ message dở của partition bị thu hồi (≤ 10 s) rồi commit, quên sổ của chúng.
+        // ponytail: message của partition đó còn trong hàng đợi vẫn được xử lý → worker mới làm lại (at-least-once).
+        consumer.on_revoke = [&](const std::vector<int>& partitions) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            const auto busy = [&] {
+                for (int p : partitions)
+                    if (tracker.pending(p) > 0) return true;
+                return false;
+            };
+            for (collect(), commit(); busy() && !failed && std::chrono::steady_clock::now() < deadline; collect(), commit())
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            for (int p : partitions) tracker.drop(p);
+            nlohmann::ordered_json line = ktv::log_event("partitions_revoked");
+            line["partitions"] = partitions;
+            ktv::write_log(line);
+        };
+
+        std::optional<ktv::KafkaConsumer::Record> stash;  // message chờ chỗ trống trong hàng của luồng nó
+        auto last_commit = std::chrono::steady_clock::now();
         long long last_check = 0;
-        while (!g_stop && (max_messages == 0 || processed < max_messages)) {
+        while (!failed) {
+            collect();
+            if (std::chrono::steady_clock::now() - last_commit >= std::chrono::seconds(1)) {
+                commit();
+                last_commit = std::chrono::steady_clock::now();
+            }
             const long long tick = std::time(nullptr);
             if (health_server && tick - last_check >= kBrokerCheckEvery) {  // chỉ cần khi có /readyz
                 last_check = tick;
                 if (consumer.reachable(2000)) health.last_broker_ok = std::time(nullptr);
             }
-            std::optional<ktv::KafkaConsumer::Record> record = consumer.poll(1000);
-            health.last_poll = std::time(nullptr);
-            if (!record) continue;
-            health.last_broker_ok = health.last_poll.load();  // nhận được message = broker đang nối
-            ++processed;
-            const auto started = std::chrono::steady_clock::now();
-
-            const ktv::Minutes now = fixed_now.value_or(ktv::vietnam_now());
-            // Thiếu message_id: lấy vị trí Kafka làm ID — không trùng giữa các lần chạy / replica.
-            const std::string position =
-                record->topic + "-" + std::to_string(record->partition) + "-" + std::to_string(record->offset);
-            // Lỗi Redis ném ra vòng ngoài: thoát, KHÔNG commit. Lỗi tính tuyến đã thành 500 bên trong.
-            const ktv::json in = ktv::json::parse(record->payload, nullptr, false);
-            const ktv::Envelope envelope = ktv::local_envelope(in, position, now);
-            const ktv::Published published = ktv::plan_and_store(in, envelope, now, {record->timestamp_ms, record->offset},
-                                                                 rules, osrm_url, store.get(), send_out);
-            // OUT phải tới nơi trước khi commit IN; không thì thoát (ném ra vòng ngoài), restart đọc lại và gửi lại.
-            if (published.out_sent && !producer->flush(10'000))
-                throw std::runtime_error("OUT không được Kafka xác nhận, không commit " + position);
-            const std::string& status = published.status;
-            const std::vector<ktv::Error>& warnings = published.warnings;
-            const std::string line =
-                published.out ? published.out->dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) : "";
-
-            if (published.out) *out << line << "\n";  // IN cũ (STALE): không có response, chỉ commit
-            out->flush();
-            if (!*out) throw std::runtime_error("ghi response thất bại, không commit " + position);
-            // Chỉ commit sau khi đã ghi xong response. false = đang rebalance (đã log): message sẽ được giao
-            // lại cho consumer nhận partition, response có thể ghi hai lần — đúng at-least-once, không dừng worker.
-            consumer.commit(*record);
+            if (!stash) {
+                if (g_stop || (max_messages > 0 && processed >= max_messages)) break;
+                stash = consumer.poll(100);
+                health.last_poll = std::time(nullptr);
+                if (!stash) continue;
+                health.last_broker_ok = health.last_poll.load();  // nhận được message = broker đang nối
+                topic = stash->topic;
+            }
+            // Cùng KTV → cùng luồng (đúng thứ tự). Khóa Kafka (OA đặt = staff_id); trống thì đọc staff_id trong payload.
+            std::string who = stash->key;
+            if (who.empty()) {
+                const ktv::json in = ktv::json::parse(stash->payload, nullptr, false);
+                if (in.is_object() && in.contains("staff") && in["staff"].is_object() && in["staff"].contains("staff_id"))
+                    who = in["staff"]["staff_id"].dump();
+                else who = std::to_string(stash->partition);
+            }
+            Lane& lane = *lanes[std::hash<std::string>{}(who) % lanes.size()];
             {
-                std::lock_guard<std::mutex> lock(health.mutex);
-                ++health.processed;
-                ++health.by_status[status];
-                health.last_message_at = ktv::format_datetime(ktv::vietnam_now());
+                // ponytail: hàng đầy → luồng chính chờ (không poll); hàng nhỏ (--queue 20) giữ dưới max.poll.interval.ms.
+                std::unique_lock<std::mutex> lock(lane.mutex);
+                if (lane.jobs.size() >= queue_cap) {
+                    lane.ready.wait_for(lock, std::chrono::milliseconds(10));
+                    continue;  // quay lại gom / commit rồi thử tiếp
+                }
+                const std::uint64_t token = next_token++;
+                inflight[token] = {stash->partition, stash->offset};
+                tracker.start(stash->partition, stash->offset);
+                lane.jobs.push_back({std::move(*stash), token, std::chrono::steady_clock::now()});
             }
-
-            // Một dòng JSON / message: đủ để biết vì sao ra statuscode này mà không phải lục Kafka OUT.
-            nlohmann::ordered_json log = ktv::log_event("message");
-            log["topic"] = record->topic;
-            log["partition"] = record->partition;
-            log["offset"] = record->offset;
-            log["key"] = record->key;
-            log["headers"] = nlohmann::ordered_json::object();
-            for (const auto& [name, value_text] : record->headers) log["headers"][name] = value_text;
-            log["message_id"] = published.message_id;
-            log["run_code"] = envelope.run_code.empty() ? envelope.message_id : envelope.run_code;
-            log["staff_id"] = published.staff_id;
-            log["statuscode"] = status;  // "STALE" = IN cũ hơn state đang có, bỏ qua (không response, không OUT)
-            log["message"] = published.out ? (*published.out)["message"] : nlohmann::ordered_json(nullptr);
-            log["errors"] = ktv::errors_json(published.errors);
-            log["warnings"] = nlohmann::ordered_json::array();
-            for (const ktv::Error& warning : warnings) log["warnings"].push_back(ktv::issue_key(warning));
-            // 7.20.5: routed = số dòng TASK thật sự xếp (trước: candidates, chưa trừ ca hẹn ngày sau / lọc K);
-            // deferred = số dòng DEFERRED theo lý do (VD {"NEXT_DAY":1,"BEYOND_K":2}) — ca không xếp nhìn được trên log.
-            long long routed = 0;
-            nlohmann::ordered_json deferred = nlohmann::ordered_json::object();
-            if (published.out) {
-                const nlohmann::ordered_json& body = ktv::out_data(*published.out);
-                if (body.is_object() && body.contains("clusters"))
-                    for (const auto& cluster : body["clusters"])
-                        for (const auto& row : cluster["schedule"]) {
-                            const std::string entry = row.value("entry_type", "");
-                            if (entry == "TASK") ++routed;
-                            if (entry == "DEFERRED") {
-                                const std::string reason = row.value("insert_reason", "");
-                                deferred[reason] = deferred.value(reason, 0) + 1;
-                            }
-                        }
-            }
-            log["tasks"] = {{"received", published.stats.tasks},
-                            {"routed", routed},
-                            {"deferred", deferred},
-                            {"skipped_status", published.stats.excluded_status},
-                            {"current", published.stats.excluded_current},
-                            {"missing_location", published.stats.excluded_missing_location}};
-            log["sent_to"] = published.out_sent ? nlohmann::ordered_json("kafka") : nlohmann::ordered_json(nullptr);
-            log["stored"] = published.route_stored;
-            log["used_mobix_loc"] = published.used_mobix_loc;
-            const nlohmann::ordered_json data = published.out ? ktv::out_data(*published.out) : nlohmann::ordered_json(nullptr);
-            log["change_id"] = data.is_object() ? data["change_id"] : nlohmann::ordered_json(nullptr);  // "no" = trả cache
-            log["generated_in_ms"] = data.is_object() ? data["metrics"]["generated_in_ms"] : nlohmann::ordered_json(nullptr);
-            log["total_ms"] = std::round(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count() * 10) / 10;
-            if (ktv::payload_wanted(*payload_log, status)) log["payload"] = ktv::payload_json(in, record->payload);
-            ktv::write_log(log);
-            for (const std::string& key : record_issues(health, warnings)) {  // loại cảnh báo mới: một dòng; đếm ở /healthz
-                nlohmann::ordered_json fresh = ktv::log_event("data_issue_new");
-                fresh["issue"] = key;
-                fresh["message_id"] = published.message_id;
-                ktv::write_log(fresh);
-            }
+            lane.ready.notify_all();
+            stash.reset();
+            ++processed;
         }
+
+        // Tắt / lỗi: luồng xử lý làm hết hàng (lỗi thì bỏ), chờ OUT xác nhận, commit phần đã xong.
+        stopping = true;
+        for (auto& lane : lanes) lane->ready.notify_all();
+        for (auto& thread : pool) thread.join();
+        pool.clear();
+        if (producer) producer->flush(10'000);
+        collect();
+        commit();
     } catch (const std::exception& error) {
-        return fatal(error.what(), 1);
+        fail(error.what());
     }
+    if (owned) {  // trả partition không gọi on_revoke (lambda của nó sắp hết hạn); phần đã xong đã commit ở trên
+        owned->on_revoke = nullptr;
+        owned.reset();
+    }
+    if (!pool.empty()) {  // consumer lỗi khi khởi tạo / giữa chừng: dừng luồng xử lý trước khi thoát
+        stopping = true;
+        for (auto& lane : lanes) lane->ready.notify_all();
+        for (auto& thread : pool) thread.join();
+    }
+    if (failed) return fatal(failure, 1);
 
     nlohmann::ordered_json stop = ktv::log_event("stop");
     stop["processed"] = processed;
