@@ -92,6 +92,9 @@ struct Rules {
     // 7.30 (PRD v1.4 BR-10): KTV dịch chuyển ≤ ngần này mét so với vị trí của lần tính đang cache → coi là input KHÔNG đổi
     // (dùng cache). Thay cho làm tròn tọa độ 4 chữ số (~11 m) của 7.20.1b. [GIẢ ĐỊNH: 50 m = bán kính gom cùng địa chỉ]
     double location_change_m = 50;
+    // 7.24 gate 1 (lọc thô ca tuỳ chọn trước QHĐ): km đi thêm khi chèn rẻ nhất ≥ ngần này → gạt. Rộng hơn trọng số
+    // SKIP_OPTIONAL (gate 2, QHĐ quyết thật) để chừa lề cho cận dưới không chặt (OSRM, tuyến chọn theo SLA). 0 = gạt hết.
+    double optional_filter_km = 4;
     std::vector<std::string> force_recompute_triggers;  // Trigger luôn tính lại dù IN không đổi. Mặc định rỗng.
 };
 

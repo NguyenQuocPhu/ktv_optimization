@@ -496,10 +496,10 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
 
     // 7.24 — chọn ca tuỳ chọn mà không đưa hết vào QHĐ:
     //   1. giải ca BẮT BUỘC như trước (≤ max_exact_tasks: chính xác; nhiều hơn: tham lam)
-    //   2. lọc ca tuỳ chọn theo tuyến đó: km đi thêm khi chèn rẻ nhất (giữa 2 điểm liền nhau hoặc gắn cuối) ≥ trọng số
-    //      SKIP_OPTIONAL → gạt (gần như không bao giờ có lợi). ponytail: chỉ là cận dưới khi khoảng cách thỏa bất đẳng
-    //      thức tam giác và tuyến bắt buộc ngắn nhất về km — OSRM / tuyến chọn theo SLA có thể gạt nhầm ca sát ngưỡng;
-    //      cần thì nới (VD ≥ 1,5 × trọng số).
+    //   2. gate 1 — lọc ca tuỳ chọn theo tuyến đó: km đi thêm khi chèn rẻ nhất (giữa 2 điểm liền nhau hoặc gắn cuối)
+    //      ≥ optional_filter_km (4) → gạt. Gate 2 (QHĐ, trọng số SKIP_OPTIONAL 3) mới quyết chèn hay không. Lề 4 > 3 vì
+    //      km chèn rẻ nhất chỉ là cận dưới khi khoảng cách thỏa bất đẳng thức tam giác và tuyến bắt buộc ngắn nhất về km
+    //      (OSRM / tuyến chọn theo SLA có thể lệch).
     //   3. ca bắt buộc ≤ max_exact_tasks: giải lại QHĐ chính xác với bắt buộc + ca tuỳ chọn tốt nhất tới đủ max_exact_tasks
     //      (QHĐ tự chọn tập con tối ưu); còn thừa / bắt buộc quá nhiều → 4. cải thiện cục bộ chèn / gỡ từ tuyến hiện có.
     //   Không bước nào làm tuyến ca bắt buộc tệ đi (khóa chỉ giảm). Không có ca ngoài K → chỉ chạy bước 1, như cũ.
@@ -552,7 +552,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             double bound = km[route.back()][k + 1];  // gắn cuối tuyến
             for (size_t r = 0; r + 1 < route.size(); ++r)
                 bound = std::min(bound, km[route[r]][k + 1] + km[k + 1][route[r + 1]] - km[route[r]][route[r + 1]]);
-            if (bound < skip_km) candidates.push_back({bound, k});
+            if (bound < rules.optional_filter_km) candidates.push_back({bound, k});
         }
         std::stable_sort(candidates.begin(), candidates.end(), [&](const auto& a, const auto& b) {
             return std::make_pair(spare_rank(all_stops[a.second]), a.first) < std::make_pair(spare_rank(all_stops[b.second]), b.first);

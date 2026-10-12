@@ -120,6 +120,7 @@ Rules rules_from_json(const nlohmann::json& data) {
     rules.k_month_days = static_cast<int>(k_month);
     number("stop_group_radius_m", rules.stop_group_radius_m, 0);
     number("location_change_m", rules.location_change_m, 0);  // 7.30
+    number("optional_filter_km", rules.optional_filter_km, 0);
     double group_wait = rules.stop_group_max_wait_minutes;
     number("stop_group_max_wait_minutes", group_wait, 0);
     rules.stop_group_max_wait_minutes = static_cast<int>(group_wait);
@@ -188,6 +189,7 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"k_month_days", rules.k_month_days},
         {"stop_group_radius_m", rules.stop_group_radius_m},
         {"location_change_m", rules.location_change_m},
+        {"optional_filter_km", rules.optional_filter_km},
         {"stop_group_max_wait_minutes", rules.stop_group_max_wait_minutes},
         {"current_task_minutes", rules.current_task_minutes},
         {"average_speed_kmh", rules.average_speed_kmh},

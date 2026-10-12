@@ -190,6 +190,11 @@ int main() {
                     if (rule == ktv::SKIP_OPTIONAL) weight = 0;
         errors.clear();
         CHECK(ktv::plan(ktv::parse_message(near, errors), off, server_now, "").unplaced.size() == 1);
+        // Gate 1 = 0 (gạt mọi ca tuỳ chọn trước QHĐ) → DEFERRED dù gate 2 vẫn bật; đọc được từ rules.json.
+        ktv::Rules gate = ktv::rules_from_json(json{{"optional_filter_km", 0}});
+        CHECK(gate.optional_filter_km == 0 && ktv::default_rules().optional_filter_km == 4);
+        errors.clear();
+        CHECK(ktv::plan(ktv::parse_message(near, errors), gate, server_now, "").unplaced.size() == 1);
         // Ca gần nhưng không kịp xong trong ca (ca hết 10:00) → không chèn (ràng buộc cứng của ca tuỳ chọn).
         json late = near;
         late["staff"]["available"] = "08:00-09:35";
