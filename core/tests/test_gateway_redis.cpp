@@ -132,8 +132,9 @@ int main() {
         CHECK(store.put_route("S", "2026-10-01", "route-tu-in-0810", {20261001081000, 0, 0}) == ktv::Write::Stored);
         CHECK(store.put_route("S", "2026-10-01", "route-cham-in-0805", {20261001080500, 7, 20261001092000}) ==
               ktv::Write::Older);
-        CHECK(store.put_route("S", "2026-10-01", "lai-ban-cu", {20261001081000, 0, 0}) == ktv::Write::Same);
-        CHECK(store.get("S", "2026-10-01") == std::optional<std::string>("route-tu-in-0810"));
+        // Bằng version (cùng IN + cùng phút vị trí, VD đổi action_type) → bản tính sau ghi đè.
+        CHECK(store.put_route("S", "2026-10-01", "tinh-lai-cung-phut", {20261001081000, 0, 0}) == ktv::Write::Stored);
+        CHECK(store.get("S", "2026-10-01") == std::optional<std::string>("tinh-lai-cung-phut"));
         CHECK(store.put_route("S", "2026-10-01", "route-replan-0920", {20261001081000, 0, 20261001092000}) ==
               ktv::Write::Stored);
         CHECK(store.get_latest("S") == std::optional<std::string>("route-replan-0920"));

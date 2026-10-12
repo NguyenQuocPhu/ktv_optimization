@@ -220,6 +220,13 @@ int main() {
         auto repeat = client.Get(suggest + "&action_type=2", auth);  // cùng vị trí + mode → cache, vẫn dạng rút gọn
         CHECK(repeat && repeat->get_header_value("X-Cache") == "HIT" &&
               keys(nlohmann::ordered_json::parse(repeat->body)) == (std::vector<std::string>{"success", "statuscode", "message", "data"}));
+        // Đổi action_type trong cùng phút (cùng version route) → tính lại theo mode mới, không trả bản mode cũ;
+        // API, Redis (/route) và Kafka OUT cùng một bản.
+        auto other = client.Get(suggest + "&action_type=1", auth);
+        CHECK(other && other->get_header_value("X-Cache") == "MISS");
+        CHECK(sent.size() == before + 2 && data_of(sent.back()).value("priority_type", -1) == 1);
+        auto stored = client.Get("/api/v1/staff/S3/route", auth);
+        CHECK(stored && data_of(stored->body).value("priority_type", -1) == 1);
 
         // /readyz: PING Redis; bị cắt kết nối thì tự nối lại → vẫn sẵn sàng.
         redis_command(*config, "CLIENT KILL TYPE normal");

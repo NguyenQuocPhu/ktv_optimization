@@ -49,7 +49,7 @@ if ARGV[3] == '1' then
       local x, y = a[i] or 0, b[i] or 0
       if x ~= y then order = x > y and 1 or -1 break end
     end
-    if order <= 0 then return order end
+    if order < 0 or (order == 0 and ARGV[6] ~= '1') then return order end  -- ARGV[6] = '1': bằng vẫn ghi
   end
 end
 redis.call('HSET', KEYS[1], 'json', ARGV[2], 'v', ARGV[4])
@@ -140,11 +140,11 @@ std::string RedisStore::key(const std::string& kind, const std::string& staff_id
 
 int RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, const std::string& json,
                               const std::optional<Version>& version, const std::string& latest_key,
-                              const std::string& date) {
+                              const std::string& date, bool replace_equal) {
     std::vector<std::string> arguments{"EVAL", kSetIfNewer, latest_key.empty() ? "1" : "2", hash_key};
     if (!latest_key.empty()) arguments.push_back(latest_key);
     arguments.insert(arguments.end(), {std::to_string(ttl_seconds), json, version ? "1" : "0",
-                                       version ? join(*version) : "", date});
+                                       version ? join(*version) : "", date, replace_equal ? "1" : "0"});
     std::lock_guard<std::mutex> lock(mutex_);
     Reply reply(live(), arguments);
     if (!reply.ok() || reply.value->type != REDIS_REPLY_INTEGER)
@@ -184,9 +184,11 @@ std::optional<Versioned> RedisStore::get_state(const std::string& staff_id) cons
 
 Write RedisStore::put_route(const std::string& staff_id, const std::string& date, const std::string& json,
                             const Version& based_on) {
+    // Bằng version (cùng IN, cùng phút vị trí — VD /suggest đổi action_type trong 1 phút) vẫn ghi: bản tính sau cùng
+    // là bản đúng, để API trả, Redis và Kafka OUT cùng một bản.
     const int order = set_if_newer(key("route", staff_id + ":" + date), config_.route_ttl_seconds, json, based_on,
-                        key("latest", staff_id), date);
-    return order > 0 ? Write::Stored : order == 0 ? Write::Same : Write::Older;
+                                   key("latest", staff_id), date, /*replace_equal=*/true);
+    return order > 0 ? Write::Stored : Write::Older;
 }
 
 void RedisStore::put(const std::string& staff_id, const std::string& date, std::string json) {

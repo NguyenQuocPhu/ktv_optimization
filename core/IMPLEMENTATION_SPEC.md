@@ -1608,6 +1608,8 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 - **Không đổi:** `/route`, `/replan`, cache Redis (vẫn lưu OUT đầy đủ), Kafka OUT (vẫn đầy đủ sheet 03).
 
 **File:** `envelope.hpp/.cpp` (`mobix_response`), `server.cpp` (`replan(..., suggest)` dùng chung + route `/suggest`). **Test:** `test_adapter` (chiếu đúng field / thứ tự, IDLE, lỗi → data null, bản gốc không đổi); `test_gateway_replan` (Redis thật: 400 thiếu / sai `action_type`, 401; 200 MISS đúng khóa từng cấp; Kafka OUT đầy đủ với `priority_type` 2 + `MOBIX_SUGGEST`; `/route` vẫn đầy đủ; gọi lại → HIT vẫn dạng rút gọn). `ctest` 18/18.
+
+**Sửa 2026-10-12 — đổi `action_type` trong cùng phút trả nhầm bản mode cũ.** Mốc vị trí (`latlng_at`, mặc định = bây giờ) tính theo **phút** → hai lần gọi trong 1 phút có cùng version route → `put_route` trả `Same`, không ghi → gateway rơi nhánh "trả bản mới nhất" = bản mode trước (X-Cache HIT), trong khi Kafka OUT vẫn gửi bản mode mới → API và OA lệch nhau. Sửa: `put_route` **bằng version vẫn ghi** (Lua `set_if_newer` thêm cờ `replace_equal`; `put_state` giữ "chỉ mới hơn hẳn" để IN giao lại không ghi đè), bỏ `Write::Same`. Bằng version = cùng IN + cùng phút vị trí → bản tính sau cùng là bản đúng; API, Redis và Kafka OUT cùng một bản. **Test:** `test_gateway_redis` (bằng version → `Stored`, ghi đè); `test_gateway_replan` (cùng phút `action_type` 2 → 1: MISS, OUT + `/route` mode 1). Còn: `run_code` cũng theo phút → 3 lần gọi trong 1 phút ra 3 OUT cùng `run_code` khác mode (chưa sửa).
 **Hỏi OA / Mobix:** tên path (`/suggest` do repo đặt); GET + query hay POST + body; IDLE / BREAK không có `label` thì app hiển thị gì.
 
 ##### 7.30 — Khớp PRD v1.4 BR-10: tiêu chí "kết quả đổi" + ngưỡng dịch chuyển (người dùng chốt 2026-10-09)
