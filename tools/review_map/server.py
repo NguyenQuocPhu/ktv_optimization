@@ -5,6 +5,11 @@ Chạy:
   python3 tools/review_map/server.py [--port 8090] [--osrm http://127.0.0.1:5000] [--binary core/build/ktv_core]
   rồi mở http://127.0.0.1:8090
 
+Chế độ Pipeline (thêm --topic-in): IN gửi vào Kafka thật → worker → Redis → Kafka OUT; trang nghe topic OUT và vẽ lại
+mỗi khi có OUT mới (cả OUT do gateway /replan, /suggest đẩy ra). Kafka dev gọi qua `docker exec` (không SASL).
+  python3 tools/review_map/server.py --osrm http://127.0.0.1:15000 --kafka-container ktv-kafka-dev \
+      --topic-in in-api --topic-out out-api --gateway http://127.0.0.1:18090 --token dev-token
+
 Chỉ dùng thư viện chuẩn + binary có sẵn trong repo (không thêm dependency).
 """
 import argparse
@@ -14,8 +19,10 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -26,7 +33,74 @@ SETTINGS = {
     "binary": str(REPO / "core" / "build" / "ktv_core"),
     "osrm": "",  # trống = chim bay; UI có checkbox "dùng OSRM" (chỉ khi server có --osrm)
     "revision": "",
+    "kafka_container": "", "kafka_bootstrap": "localhost:9094", "topic_in": "", "topic_out": "",
+    "gateway": "", "token": "",
 }
+VN = timezone(timedelta(hours=7))
+OUTS: list = []  # OUT nhận từ topic OUT: {id, at, key, out}; giữ 50 bản gần nhất
+OUTS_LOCK = threading.Lock()
+
+
+def kafka_tool(name):
+    return ["docker", "exec", "-i", SETTINGS["kafka_container"], f"/opt/kafka/bin/{name}",
+            "--bootstrap-server", SETTINGS["kafka_bootstrap"]]
+
+
+def send_in(text: str, keep_planned: bool):
+    """Gửi 1 IN vào topic IN, key = staff_id. Mặc định đặt message_id mới + planned_at = bây giờ (như Mobix gửi event)."""
+    message = json.loads(text)
+    staff_id = str((message.get("staff") or {}).get("staff_id") or "")
+    if not staff_id:
+        return {"ok": False, "error": "thiếu staff.staff_id (key Kafka)"}
+    now = datetime.now(VN)
+    if not keep_planned:
+        message["planned_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        message["message_id"] = f"{staff_id}-ui-{now.strftime('%H%M%S')}"
+    line = staff_id + "\t" + json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n"
+    done = subprocess.run(kafka_tool("kafka-console-producer.sh") + [
+        "--topic", SETTINGS["topic_in"], "--property", "parse.key=true", "--property", "key.separator=\t"],
+        input=line.encode(), capture_output=True, timeout=60)
+    if done.returncode != 0:
+        return {"ok": False, "error": done.stderr.decode(errors="replace")[-500:]}
+    return {"ok": True, "message_id": message.get("message_id"), "planned_at": message.get("planned_at"), "in": message}
+
+
+def follow_out():
+    """Luồng nền: console consumer trên topic OUT (chỉ bản mới), chết thì chạy lại."""
+    while True:
+        process = subprocess.Popen(kafka_tool("kafka-console-consumer.sh") + [
+            "--topic", SETTINGS["topic_out"], "--property", "print.key=true", "--property", "key.separator=\t"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        for line in process.stdout:
+            key, _, body = line.rstrip("\n").partition("\t")
+            try:
+                out = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            with OUTS_LOCK:
+                OUTS.append({"id": (OUTS[-1]["id"] + 1) if OUTS else 1, "key": key,
+                             "at": datetime.now(VN).strftime("%H:%M:%S"), "out": out})
+                del OUTS[:-50]
+        process.wait()
+        time.sleep(2)
+
+
+def gateway_get(path: str):
+    """Chuyển tiếp GET sang gateway kèm token (trình duyệt không vướng CORS, một tunnel là đủ)."""
+    if not path.startswith(("/api/v1/", "/healthz", "/readyz", "/metrics")):
+        return {"ok": False, "error": "chỉ cho /api/v1/…, /healthz, /readyz, /metrics"}
+    request = urllib.request.Request(SETTINGS["gateway"].rstrip("/") + path,
+                                     headers={"Authorization": "Bearer " + SETTINGS["token"]} if SETTINGS["token"] else {})
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            status, headers, body = response.status, response.headers, response.read()
+    except urllib.error.HTTPError as error:
+        status, headers, body = error.code, error.headers, error.read()
+    except Exception as error:  # noqa: BLE001 — gateway tắt / sai URL
+        return {"ok": False, "error": str(error)}
+    return {"ok": True, "status": status, "cache": headers.get("X-Cache", ""),
+            "ms": round((time.monotonic() - started) * 1000), "body": body.decode("utf-8", "replace")}
 
 
 def git_revision():
@@ -127,9 +201,19 @@ class Handler(BaseHTTPRequestHandler):
         }
         if path == "/health":
             return self.send(200, b'{"ok":true}', "application/json")
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        if path == "/pipeline":  # trang hỏi: có bật chế độ Pipeline không
+            config = {k: SETTINGS[k] for k in ("topic_in", "topic_out", "gateway")}
+            return self.send(200, json.dumps({"enabled": bool(SETTINGS["topic_in"]), **config}).encode(), "application/json")
+        if path == "/kafka/out":  # /kafka/out?after=N → các OUT có id > N
+            after = int((query.get("after") or ["0"])[0] or 0)
+            with OUTS_LOCK:
+                items = [item for item in OUTS if item["id"] > after]
+            return self.send(200, json.dumps(items, ensure_ascii=False).encode(), "application/json; charset=utf-8")
+        if path == "/gw":  # /gw?path=/api/v1/staff/X/suggest?latlng=…
+            result = gateway_get((query.get("path") or [""])[0])
+            return self.send(200, json.dumps(result, ensure_ascii=False).encode(), "application/json; charset=utf-8")
         if path == "/road":  # hình học đường bộ cho map: /road?from=lat,lng&to=lat,lng
-            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-
             def point(name):
                 parts = (query.get(name) or [""])[0].split(",")
                 try:
@@ -152,7 +236,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send(200, file.read_bytes(), content_type)
 
     def do_POST(self):  # noqa: N802
-        if self.path.split("?", 1)[0] != "/plan":
+        path = self.path.split("?", 1)[0]
+        if path not in ("/plan", "/kafka/in"):
             return self.send(404, b"not found", "text/plain")
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8", "replace")
@@ -163,6 +248,11 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as error:
             return self.send(400, json.dumps({"ok": False, "error": f"JSON hỏng: {error}"}).encode(),
                              "application/json; charset=utf-8")
+        if path == "/kafka/in":
+            if not SETTINGS["topic_in"]:
+                return self.send(400, b'{"ok":false,"error":"server chua bat Pipeline (--topic-in)"}', "application/json")
+            result = send_in(body, self.headers.get("X-Keep-Planned", "0") == "1")
+            return self.send(200, json.dumps(result, ensure_ascii=False).encode(), "application/json; charset=utf-8")
         result = run_plan(body, use_osrm, use_explain)
         self.send(200, json.dumps(result, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
@@ -175,7 +265,17 @@ def main():
     parser.add_argument("--port", type=int, default=8090)
     parser.add_argument("--osrm", default="", help="URL OSRM, VD http://127.0.0.1:5000 (trống = chim bay)")
     parser.add_argument("--binary", default=SETTINGS["binary"])
+    parser.add_argument("--kafka-container", default="ktv-kafka-dev", help="container Kafka dev (gọi console producer/consumer)")
+    parser.add_argument("--kafka-bootstrap", default=SETTINGS["kafka_bootstrap"], help="bootstrap NHÌN TỪ TRONG container")
+    parser.add_argument("--topic-in", default="", help="bật Pipeline: topic IN của worker")
+    parser.add_argument("--topic-out", default="", help="topic OUT để nghe")
+    parser.add_argument("--gateway", default="", help="URL gateway, VD http://127.0.0.1:18090")
+    parser.add_argument("--token", default="", help="token gateway")
     args = parser.parse_args()
+    for key in ("kafka_container", "kafka_bootstrap", "topic_in", "topic_out", "gateway", "token"):
+        SETTINGS[key] = getattr(args, key)
+    if args.topic_out:
+        threading.Thread(target=follow_out, daemon=True).start()
     SETTINGS["binary"] = args.binary
     SETTINGS["osrm"] = args.osrm
     SETTINGS["revision"] = git_revision()

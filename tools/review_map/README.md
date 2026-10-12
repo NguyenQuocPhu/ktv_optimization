@@ -17,6 +17,22 @@ python3 tools/review_map/server.py --port 8090 --osrm http://127.0.0.1:5000
 - Leaflet đã vendor ở `vendor/` (không cần mạng); tile bản đồ lấy từ OpenStreetMap (cần mạng/proxy của máy).
 - Server chỉ dùng thư viện chuẩn Python + binary trong `core/build/`.
 
+## Chế độ Pipeline — chạy đúng quy trình Kafka IN → worker → Redis → Kafka OUT
+
+Cần Kafka dev (`ktv-kafka-dev`), 1 worker + 1 gateway dùng chung Redis. Ví dụ bộ đang dùng khi test:
+
+```bash
+python3 tools/review_map/server.py --port 8090 --osrm http://127.0.0.1:15000 \
+    --topic-in in-api --topic-out out-api --gateway http://127.0.0.1:18090 --token dev-token
+#   --kafka-container ktv-kafka-dev (mặc định) · --kafka-bootstrap localhost:9094 (nhìn từ TRONG container)
+```
+
+Có `--topic-in` thì trang hiện thêm thẻ **Pipeline**, và bản đồ **chỉ hiện OUT thật từ Kafka** (mở trang không tính tại chỗ, ẩn nút *Tính tuyến*; ô mode ghi `priority_type` vào input + `action_type` vào ô API):
+- **Gửi IN vào Kafka**: gửi nội dung ô input (key = `staff_id`). Mặc định tự đặt `message_id` mới + `planned_at` = bây giờ như một event Mobix; tick *Giữ planned_at* để gửi nguyên văn. Sửa JSON (thêm task, đổi `task_status_id` sang mã "xong"…) rồi gửi lại = một event.
+- **Kafka OUT nhận được**: server nghe topic OUT (chỉ bản mới từ lúc bật), trang hỏi mỗi giây; có OUT mới của KTV đang sửa thì vẽ lại (bỏ tick *Tự hiện OUT mới* để giữ bản đang xem). Click một dòng để xem lại bản cũ; dòng ghi trigger, statuscode, `route_changed`, mode, số việc.
+- **Gọi API gateway**: ô URL (mặc định `/suggest` của KTV trong input), server chuyển tiếp kèm token (chỉ `/api/v1/…`, `/healthz`, `/readyz`, `/metrics`). Click bản đồ = điền `latlng`. Phản hồi hiện ngay dưới ô (HTTP, `X-Cache`); bản đồ đổi theo **Kafka OUT** gateway đẩy ra (bản đầy đủ), KTV vẽ ở `latlng` của lời gọi. Cache HIT thì gateway không đẩy OUT → bản đồ không đổi.
+- Kafka qua `docker exec` console producer / consumer: chỉ cho Kafka dev (không SASL), mỗi lần gửi ~2–3 s (JVM khởi động).
+
 ## `sample_in.json` — mẫu mặc định
 
 Lấy từ **message thật của staging** (`~/Downloads/all_errors.jsonl`, KTV `00061718`, 1 việc `trien_khai_net`) rồi vá cho hợp lệ và đủ tình huống:

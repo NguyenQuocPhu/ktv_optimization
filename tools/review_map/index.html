@@ -81,6 +81,14 @@
   .legend { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255, 255, 255, .96);
             box-shadow: var(--shadow); font: 12px/1.5 system-ui, sans-serif; }
   .legend b { display: block; margin-bottom: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .api { display: flex; gap: 6px; margin-top: 8px; }
+  .api input { flex: 1; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; font: 12px ui-monospace, Menlo, Consolas, monospace; }
+  #apiresult { max-height: 140px; overflow: auto; margin: 6px 0 0; font: 11px/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
+  #timeline { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; font-size: 12px; }
+  #timeline li { display: flex; gap: 6px; align-items: center; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  #timeline li:hover { background: #eef1f6; }
+  #timeline li.active { background: #dbeafe; }
+  #timeline .t { color: var(--muted); font-variant-numeric: tabular-nums; }
   @media (max-width: 1000px) { main { grid-template-columns: 1fr; height: auto; } .content { grid-template-rows: 60vh auto; } }
 </style>
 </head>
@@ -109,6 +117,23 @@
       </div>
       <p class="note" id="stale" hidden style="color:var(--warn);font-weight:600">⚠ Input đã đổi — bấm “Tính tuyến” để cập nhật OUT.</p>
       <p class="note" id="note">Mẫu lấy từ message thật staging (all_errors) đã vá staff.latlng/available/status/plots + thêm việc cho đủ nhóm.</p>
+    </section>
+    <section class="card" id="pipecard" hidden>
+      <h2>Pipeline — Kafka IN → worker → Kafka OUT</h2>
+      <div class="row" style="margin-top:0">
+        <button class="primary" id="sendin">Gửi IN vào Kafka</button>
+        <label class="check" title="Bỏ tick: tự đặt message_id mới + planned_at = bây giờ (như event Mobix)"><input type="checkbox" id="keep"> Giữ planned_at</label>
+        <label class="check"><input type="checkbox" id="follow" checked> Tự hiện OUT mới</label>
+      </div>
+      <p class="note" id="pipenote"></p>
+      <h2 style="margin-top:12px">Gọi API gateway <span style="text-transform:none;letter-spacing:0">(click bản đồ = điền latlng)</span></h2>
+      <div class="api">
+        <input id="apiurl" spellcheck="false">
+        <button id="apigo">Gọi</button>
+      </div>
+      <pre id="apiresult"></pre>
+      <h2 style="margin-top:12px">Kafka OUT nhận được (KTV đang sửa)</h2>
+      <ul id="timeline"><li class="t">chưa có — gửi IN hoặc gọi API</li></ul>
     </section>
     <section class="card">
       <h2>Số liệu</h2>
@@ -168,7 +193,9 @@ function applyMode() {  // ghi mode vào input (thấy gì gửi nấy) rồi t�
   try { message = JSON.parse(input.value); } catch { return showError("input không phải JSON — không đổi được mode"); }
   message.priority_type = Number($("mode").value);
   input.value = JSON.stringify(message, null, 2);
-  run();
+  if (!pipe.enabled) return run();
+  // Pipeline: không tính tại chỗ — mode đi theo IN gửi Kafka (priority_type) và action_type của ô API.
+  $("apiurl").value = $("apiurl").value.replace(/action_type=[^&]*/, `action_type=${$("mode").value}`);
 }
 
 async function loadSample() {
@@ -268,7 +295,7 @@ function render(result) {
   const tasks = flattenTasks(message);
   $("json").textContent = JSON.stringify(out, null, 2);
   if (out && Array.isArray(out.data)) out.data = out.data[0] ?? null;  // 7.20.1: data là array 1 phần tử
-  $("log").textContent = `core ${result.revision || "?"} · binary ${result.binary}\nchạy ${result.ms} ms · exit ${result.exit} · OSRM: ${result.osrm ? "có" : "không"}\n\n${result.stdout || ""}${result.stderr || ""}`;
+  $("log").textContent = result.source || `core ${result.revision || "?"} · binary ${result.binary}\nchạy ${result.ms} ms · exit ${result.exit} · OSRM: ${result.osrm ? "có" : "không"}\n\n${result.stdout || ""}${result.stderr || ""}`;
 
   routeLayer.clearLayers();
   roadLayer.clearLayers();
@@ -281,7 +308,7 @@ function render(result) {
     out.data?.metrics ? `<span class="pill blue">${out.data.metrics.tasks_total} việc · ${out.data.metrics.total_distance_km} km</span>` : "",
     out.data?.metrics ? `<span class="pill">${out.data.metrics.cluster_count} cụm</span>` : "",
     out.data ? `<span class="pill">mode ${esc(out.data.priority_type)} · ${esc(MODE_NAMES[out.data.priority_type] ?? "?")}</span>` : "",
-    `<span class="pill">${result.ms} ms</span>`,
+    result.source ? `<span class="pill">${esc(result.badge)}</span>` : `<span class="pill">${result.ms} ms</span>`,
   ].join("");
 
   if (!out.data) {
@@ -340,7 +367,8 @@ function render(result) {
   // ---- bản đồ
   const points = [];
   const legs = [];
-  const staff = message?.staff?.latlng ? message.staff.latlng.split(",").map(Number) : null;
+  const staffText = result.staff || message?.staff?.latlng;
+  const staff = staffText ? staffText.split(",").map(Number) : null;
   let previous = staff;
   let routeOrder = 0;
   for (const [index, cluster] of clusters.entries()) {
@@ -458,7 +486,111 @@ input.addEventListener("keydown", (event) => { if ((event.ctrlKey || event.metaK
 input.addEventListener("input", () => { $("stale").hidden = lastRunText === null || input.value === lastRunText; syncMode(); });
 $("mode").onchange = applyMode;
 
-loadSample().then(run);
+// ---- Pipeline: IN → Kafka → worker → Kafka OUT (trang nghe OUT, vẽ lại); gọi API gateway → OUT cũng ra Kafka.
+const pipe = { enabled: false, after: 0, items: [], shown: null, lastApiLatlng: null };
+const staffOf = () => { try { return String(JSON.parse(input.value).staff.staff_id); } catch { return ""; } };
+function apiDefault() {
+  let staff = staffOf(), latlng = "10.7550,106.6600";
+  try { latlng = JSON.parse(input.value).staff.latlng || latlng; } catch { /* giữ mặc định */ }
+  return `/api/v1/staff/${staff}/suggest?latlng=${latlng}&action_type=${$("mode").value}`;
+}
+function showOut(item) {
+  pipe.shown = item.id;
+  const out = structuredClone(item.out);
+  const data = Array.isArray(out.data) ? out.data[0] : out.data;
+  render({ out, staff: item.staff, badge: `Kafka OUT ${item.at}`,
+           source: `Kafka OUT #${item.id} · nhận ${item.at} · key ${item.key}\ntrigger ${out.trigger} · run_code ${out.run_code}\nchange_id ${data?.change_id ?? "—"} · route_changed ${data?.route_changed ?? "—"}` });
+  drawTimeline();
+}
+function drawTimeline() {
+  const staff = staffOf();
+  const mine = pipe.items.filter((item) => item.key === staff).reverse();
+  $("timeline").innerHTML = mine.length ? mine.map((item) => {
+    const data = Array.isArray(item.out.data) ? item.out.data[0] : item.out.data;
+    const changed = data?.route_changed;
+    return `<li data-id="${item.id}" class="${item.id === pipe.shown ? "active" : ""}"><span class="t">${item.at}</span>
+      <b>${esc(item.out.trigger)}</b> <span class="badge ${item.out.statuscode === "200" ? "ok" : "late"}">${esc(item.out.statuscode)}</span>
+      ${changed ? `<span class="badge ${changed === "yes" ? "warn" : ""}">đổi tuyến: ${esc(changed)}</span>` : ""}
+      <span class="t">mode ${esc(data?.priority_type ?? "—")} · ${data?.metrics?.tasks_total ?? 0} việc</span></li>`;
+  }).join("") : `<li class="t">chưa có OUT của KTV ${esc(staff)} — gửi IN hoặc gọi API</li>`;
+}
+$("timeline").onclick = (event) => {
+  const li = event.target.closest("li[data-id]");
+  if (li) showOut(pipe.items.find((item) => item.id === Number(li.dataset.id)));
+};
+async function poll() {
+  try {
+    const items = await (await fetch(`/kafka/out?after=${pipe.after}`)).json();
+    if (items.length) {
+      // OUT do gateway tính (/replan, /suggest): KTV ở latlng của lời gọi API gần nhất (bản rút gọn không có run_code để khớp).
+      for (const item of items) if (item.out.trigger?.startsWith("MOBIX_")) item.staff = pipe.lastApiLatlng;
+      pipe.items.push(...items);
+      pipe.items = pipe.items.slice(-50);
+      pipe.after = items[items.length - 1].id;
+      const mine = items.filter((item) => item.key === staffOf());
+      if (mine.length && $("follow").checked) showOut(mine[mine.length - 1]);
+      else drawTimeline();
+    }
+  } catch { /* server tắt: thử lại lượt sau */ }
+  setTimeout(poll, 1000);
+}
+$("sendin").onclick = async () => {
+  $("sendin").disabled = true;
+  $("pipenote").textContent = "đang gửi…";
+  try {
+    const result = await (await fetch("/kafka/in", { method: "POST", body: input.value,
+                                                       headers: { "X-Keep-Planned": $("keep").checked ? "1" : "0" } })).json();
+    $("pipenote").textContent = result.ok ? `đã gửi ${result.message_id} · planned_at ${result.planned_at} — chờ worker trả OUT…` : `lỗi: ${result.error}`;
+    if (result.ok) { lastRunText = input.value; $("stale").hidden = true; }
+  } catch (error) {
+    $("pipenote").textContent = String(error);
+  } finally {
+    $("sendin").disabled = false;
+  }
+};
+$("apigo").onclick = async () => {
+  const path = $("apiurl").value.trim();
+  const latlng = new URLSearchParams(path.split("?")[1] || "").get("latlng");
+  $("apiresult").textContent = "đang gọi…";
+  pipe.lastApiLatlng = latlng;
+  const result = await (await fetch(`/gw?path=${encodeURIComponent(path)}`)).json();
+  if (!result.ok) return void ($("apiresult").textContent = `lỗi: ${result.error}`);
+  let body = result.body;
+  try {
+    const parsed = JSON.parse(body);
+    body = JSON.stringify(parsed, null, 2);
+  } catch { /* không phải JSON */ }
+  $("apiresult").textContent = `HTTP ${result.status} · X-Cache ${result.cache || "—"} · ${result.ms} ms\n${body}`;
+};
+map.on("click", (event) => {
+  if (!pipe.enabled) return;
+  const latlng = `${event.latlng.lat.toFixed(5)},${event.latlng.lng.toFixed(5)}`;
+  const url = $("apiurl").value;
+  $("apiurl").value = /latlng=[^&]*/.test(url) ? url.replace(/latlng=[^&]*/, `latlng=${latlng}`) : url + (url.includes("?") ? "&" : "?") + `latlng=${latlng}`;
+  L.popup().setLatLng(event.latlng).setContent(`latlng=${latlng} — bấm “Gọi”`).openOn(map);
+});
+
+// Ô API theo KTV trong input (sửa input / nạp mẫu → staff_id trong URL đổi theo).
+function syncApiStaff() {
+  const url = $("apiurl").value, staff = staffOf();
+  if (!url) $("apiurl").value = apiDefault();
+  else if (staff) $("apiurl").value = url.replace(/\/staff\/[^/]*\//, `/staff/${encodeURIComponent(staff)}/`);
+  drawTimeline();
+}
+input.addEventListener("input", () => { if (pipe.enabled) syncApiStaff(); });
+
+// Pipeline: bản đồ chỉ hiện OUT thật từ Kafka (không tính tại chỗ lúc mở trang); không bật thì như cũ: nạp mẫu rồi tính.
+Promise.all([fetch("/pipeline").then((r) => r.json()).catch(() => ({})), loadSample()]).then(([config]) => {
+  if (!config.enabled) return run();
+  pipe.enabled = true;
+  $("run").hidden = true;
+  $("stale").textContent = "⚠ Input đã đổi so với IN đã gửi — bấm “Gửi IN vào Kafka” để gửi event.";
+  $("pills").innerHTML = '<span class="pill warn">chưa có OUT — bấm “Gửi IN vào Kafka”</span>';
+  $("pipecard").hidden = false;
+  $("pipenote").textContent = `IN → ${config.topic_in} · nghe OUT ${config.topic_out} · gateway ${config.gateway || "—"}`;
+  syncApiStaff();
+  poll();
+});
 </script>
 </body>
 </html>
