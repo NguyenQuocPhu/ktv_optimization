@@ -227,6 +227,17 @@ int main() {
         CHECK(sent.size() == before + 2 && data_of(sent.back()).value("priority_type", -1) == 1);
         auto stored = client.Get("/api/v1/staff/S3/route", auth);
         CHECK(stored && data_of(stored->body).value("priority_type", -1) == 1);
+        // Hai vị trí trong cùng phút (khác giây): vị trí sau được ghi (version theo giây) → xa > 50 m thì tính lại;
+        // run_code mang giây. Trước đây version theo phút → vị trí sau bị bỏ, HIT với vị trí cũ.
+        const std::string far = "/api/v1/staff/S3/suggest?action_type=1&latlng=21.1000,105.9000&latlng_at=2026-10-01 09:20:30";
+        auto moved_same_minute = client.Get(far, auth);
+        CHECK(moved_same_minute && moved_same_minute->get_header_value("X-Cache") == "MISS");
+        CHECK(json::parse(sent.empty() ? "{}" : sent.back()).value("run_code", "") == "m3-s20261001092030");
+        const std::optional<ktv::Versioned> loc = store.get_loc("S3");
+        CHECK(loc && json::parse(loc->json).value("latlng", "") == "21.1000,105.9000" &&
+              loc->version == ktv::Version({20261001092030}));
+        auto older = client.Get("/api/v1/staff/S3/suggest?action_type=1&latlng=21.0500,105.8500&latlng_at=2026-10-01 09:20:10", auth);
+        CHECK(older && older->get_header_value("X-Cache") == "HIT");  // GPS cũ hơn (10 s < 30 s) đến muộn: không ghi lùi
 
         // /readyz: PING Redis; bị cắt kết nối thì tự nối lại → vẫn sẵn sàng.
         redis_command(*config, "CLIENT KILL TYPE normal");

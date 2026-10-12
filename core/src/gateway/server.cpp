@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <optional>
 
 #include <nlohmann/json.hpp>
@@ -99,20 +100,28 @@ void replan(RedisStore& redis, const GatewayOptions& options, const httplib::Req
     const std::optional<Minutes> latlng_at =
         request.has_param("latlng_at") ? parse_datetime(request.get_param_value("latlng_at")) : now;
     if (!latlng_at) return error(response, 400, "latlng_at cần dạng \"YYYY-MM-DD HH:mm:ss\"");
+    // Minutes bỏ giây; version vị trí + run_code giữ giây để hai vị trí trong cùng phút vẫn phân biệt (mới hơn thắng).
+    std::string at_text = request.has_param("latlng_at") ? request.get_param_value("latlng_at") : format_datetime(*latlng_at);
+    if (!request.has_param("latlng_at") && !options.fixed_now) {
+        char second[3];
+        std::snprintf(second, sizeof second, "%02d", static_cast<int>(std::time(nullptr) % 60));
+        at_text.replace(17, 2, second);
+    }
+    const std::int64_t loc_stamp = stamp(*latlng_at) + std::stoi(at_text.substr(17, 2));
 
     const std::optional<Versioned> state = redis.get_state(staff_id);
     if (!state) return error(response, 404, "chưa có message IN của KTV " + staff_id);
 
     // Ghi vị trí trước: plan_and_store đọc lại từ Redis (luật 60 phút nằm ở đó). Vị trí cũ hơn bản đang có → giữ bản kia.
-    const nlohmann::json loc = {{"latlng", request.get_param_value("latlng")}, {"latlng_at", format_datetime(*latlng_at)}};
-    redis.put_loc(staff_id, loc.dump(), {stamp(*latlng_at)});
+    const nlohmann::json loc = {{"latlng", request.get_param_value("latlng")}, {"latlng_at", at_text}};
+    redis.put_loc(staff_id, loc.dump(), {loc_stamp});
 
     json in = json::parse(state->json, nullptr, false);
     if (action_type && in.is_object()) in["priority_type"] = *action_type;
     Envelope envelope = local_envelope(in, staff_id, now);
     envelope.trigger = suggest ? "MOBIX_SUGGEST" : "MOBIX_REPLAN";
     envelope.planned_at = now;
-    envelope.run_code = envelope.message_id + (suggest ? "-s" : "-r") + std::to_string(stamp(*latlng_at));
+    envelope.run_code = envelope.message_id + (suggest ? "-s" : "-r") + std::to_string(loc_stamp);
     // 7.20.1b: cùng luật cache với worker (dấu vân tay nội dung + vị trí lệch ≤ location_change_m + hạn tuổi). Trả cache →
     // HIT, change_id "no", không gửi OUT (Mobix hỏi lại không phải thay đổi để báo OA).
     const Published published = plan_and_store(in, envelope, now, state->version, options.rules, options.osrm_url,

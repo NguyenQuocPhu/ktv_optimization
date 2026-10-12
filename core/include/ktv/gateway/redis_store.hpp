@@ -14,10 +14,11 @@
 //     {prefix}loc:{staff}            hash {json = {"latlng","latlng_at"}, v}             TTL 1 ngày
 //     {prefix}dedup:{staff}          "dấu vân tay IN|run_code" của route hiện hành (7.20.1b) TTL 1 ngày
 //
-//   Version = dãy số nguyên, so từ trái sang (thiếu coi là 0). Chỉ ghi khi version MỚI HƠN HẲN;
-//   bằng nhau → không ghi (tính lại cùng state cho cùng kết quả). Mỗi số phải < 2^53 (Lua dùng double).
+//   Version = dãy số nguyên, so từ trái sang (thiếu coi là 0). state / loc chỉ ghi khi version MỚI HƠN HẲN
+//   (IN giao lại không ghi đè); route bằng version vẫn ghi (bản tính sau cùng thắng). Mỗi số < 2^53 (Lua dùng double).
 //   VD state {1790843100000, 123} = timestamp Kafka (ms) + offset của IN (worker truyền {timestamp_ms, offset});
-//      route based_on {1790843100000, 123, 20261001092000} = state đó + latlng_at 09:20:00.
+//      loc {20261001092030} = latlng_at 09:20:30 (giữ giây: hai vị trí trong cùng phút vẫn phân biệt);
+//      route based_on {1790843100000, 123, 20261001092030} = state đó + version loc.
 //
 // Dùng thế nào:
 //   RedisStore store(RedisStore::Config{});                    // ném nếu không kết nối/auth được
