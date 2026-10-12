@@ -26,13 +26,13 @@ Rules default_rules() {
          {PRIORITY_DELAY, 0.5},                    //   việc P1 làm muộn 1 giờ ≈ 2 km
          {DEADLINE_URGENCY, 0.5},                  //   việc gấp để muộn 1 giờ ≈ 0,5 km (7.16.2)
          {FINISH, 0.01},                           //   xong muộn 100 phút ≈ 1 km
-         {SKIP_OPTIONAL, 2}},                      //   7.24: bỏ 1 ca tuỳ chọn ≈ 2 km — chèn khi tốn thêm < 2 [GIẢ ĐỊNH, BR-16]
+         {SKIP_OPTIONAL, 3}},                      //   7.24: bỏ 1 ca tuỳ chọn ≈ 3 km — chèn khi tốn thêm < 3 [GIẢ ĐỊNH, BR-16; 2 → 3 ngày 2026-10-12]
     };
     // Mode Tuyến 100% (7.26, yêu cầu data — thay R2 của 7.23): quãng đường lên tầng 1, kèm trễ hẹn trọng số nhỏ
     // (1 ca trễ hẹn ≈ 1 km × trọng số ưu tiên: P4 1 km … P1 4 km) để phân xử các tuyến dài gần bằng nhau.
     // Đo 400 biến thể sample_in (chim bay): km −23% so SLA, trễ hẹn +30% (trễ hẹn ở tầng 2: km −25%, trễ hẹn +69%).
     rules.route_tiers = {
-        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 2}, {LATE_CHECKIN, 1}},
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 3}, {LATE_CHECKIN, 1}},
         {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1}},
         {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},
     };
@@ -45,7 +45,7 @@ Tiers mix_tiers_from(double sla_share, double breach_km) {
     // ≈ share/(1 − share) × breach_km km. Không còn tầng "đúng hẹn tuyệt đối": đủ km thì chịu trễ (yêu cầu data).
     const double breach = sla_share / (1 - sla_share) * breach_km;
     return {
-        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 2},
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 3},
          {LATE_CHECKIN, breach}, {LATE_COMPLETION, breach}, {AFTER_SHIFT, breach}},
         {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},
     };

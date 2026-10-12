@@ -496,8 +496,10 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
 
     // 7.24 — chọn ca tuỳ chọn mà không đưa hết vào QHĐ:
     //   1. giải ca BẮT BUỘC như trước (≤ max_exact_tasks: chính xác; nhiều hơn: tham lam)
-    //   2. lọc ca tuỳ chọn theo tuyến đó: cận dưới km đi thêm (chèn giữa 2 điểm liền nhau hoặc gắn cuối) > trọng số
-    //      SKIP_OPTIONAL → không bao giờ có lợi, gạt (chi phí tầng chứa KM tăng ít nhất bằng số km đi thêm)
+    //   2. lọc ca tuỳ chọn theo tuyến đó: km đi thêm khi chèn rẻ nhất (giữa 2 điểm liền nhau hoặc gắn cuối) ≥ trọng số
+    //      SKIP_OPTIONAL → gạt (gần như không bao giờ có lợi). ponytail: chỉ là cận dưới khi khoảng cách thỏa bất đẳng
+    //      thức tam giác và tuyến bắt buộc ngắn nhất về km — OSRM / tuyến chọn theo SLA có thể gạt nhầm ca sát ngưỡng;
+    //      cần thì nới (VD ≥ 1,5 × trọng số).
     //   3. ca bắt buộc ≤ max_exact_tasks: giải lại QHĐ chính xác với bắt buộc + ca tuỳ chọn tốt nhất tới đủ max_exact_tasks
     //      (QHĐ tự chọn tập con tối ưu); còn thừa / bắt buộc quá nhiều → 4. cải thiện cục bộ chèn / gỡ từ tuyến hiện có.
     //   Không bước nào làm tuyến ca bắt buộc tệ đi (khóa chỉ giảm). Không có ca ngoài K → chỉ chạy bước 1, như cũ.
