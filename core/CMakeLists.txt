@@ -8,6 +8,8 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 add_compile_options(-Wall -Wextra)
 find_package(Threads REQUIRED)  # cpp-httplib (gọi OSRM) cần pthread.
+# 8.4: hàng chờ kết nối TCP của httplib mặc định 5 → dồn tải thì client bị EOF. Mọi file include httplib.h phải cùng giá trị.
+add_compile_definitions(CPPHTTPLIB_LISTEN_BACKLOG=512)
 
 # Mỗi module một cặp include/ktv/<module>.hpp + src/<module>.cpp.
 add_library(ktv STATIC src/api.cpp src/normalization.cpp src/sla.cpp src/cluster.cpp

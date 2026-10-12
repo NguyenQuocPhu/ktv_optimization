@@ -80,6 +80,19 @@ void route(httplib::Response& response, const std::string& body, const char* cac
 }
 
 #ifdef KTV_WITH_REDIS
+// 8.4: mỗi luồng HTTP một kết nối Redis. Dùng chung một kết nối (hiredis không thread-safe → có khóa) thì các luồng
+// xếp hàng: stress /suggest ~330 req/s, HIT 1,5 → 21 ms dù CPU còn dư. `shared` chỉ để lấy cấu hình; mở lần đầu
+// luồng gọi, lỗi kết nối → ném (handler trả 503).
+RedisStore& thread_redis(const RedisStore& shared) {
+    thread_local std::unique_ptr<RedisStore> own;
+    thread_local const RedisStore* owner = nullptr;
+    if (!own || owner != &shared) {
+        own = std::make_unique<RedisStore>(shared.config());
+        owner = &shared;
+    }
+    return *own;
+}
+
 // /replan (Phase 7.4) và /suggest (7.29) dùng chung: lấy IN mới nhất trong cache + vị trí Mobix → plan_and_store (cache
 // hoặc tính lại, ghi route, gửi Kafka OUT khi tính lại). suggest: action_type (sheet 09) làm mode cho LẦN TÍNH NÀY
 // (ghi đè priority_type của IN đã lưu; state không đổi) và trả bản rút gọn sheet 09 thay cho OUT đầy đủ.
@@ -147,6 +160,9 @@ std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const Ga
                                                      RedisStore* redis) {
     auto server = std::make_unique<httplib::Server>();
     exclusive_port(*server);  // trùng cổng là listen lỗi, không chia request ngẫu nhiên với tiến trình khác
+    // 8.4: gửi response ngay. Tắt (mặc định httplib) thì Nagle + delayed ACK của client cộng ~40 ms mỗi request trên
+    // kết nối keep-alive (stress: p50 50 ms → 1,6 ms) và giữ luồng HTTP lâu gấp nhiều lần.
+    server->set_tcp_nodelay(true);
     server->set_pre_routing_handler([](const httplib::Request&, httplib::Response&) {
         t_request_started = std::chrono::steady_clock::now();
         return httplib::Server::HandlerResponse::Unhandled;  // chỉ bấm giờ, để route xử lý như thường
@@ -191,7 +207,7 @@ std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const Ga
 #ifdef KTV_WITH_REDIS
                     if (redis) {
                         try {
-                            return replan(*redis, options, request, response);
+                            return replan(thread_redis(*redis), options, request, response);
                         } catch (const std::exception& failure) {
                             // Redis lỗi: gateway vẫn sống, Mobix thử lại (không có offset nào cần giữ như worker).
                             return send_json(response, 503, {{"retry_after", 5}, {"message", failure.what()}});
@@ -209,7 +225,7 @@ std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const Ga
 #ifdef KTV_WITH_REDIS
                     if (redis) {
                         try {
-                            return replan(*redis, options, request, response, /*suggest=*/true);
+                            return replan(thread_redis(*redis), options, request, response, /*suggest=*/true);
                         } catch (const std::exception& failure) {
                             return send_json(response, 503, {{"retry_after", 5}, {"message", failure.what()}});
                         }

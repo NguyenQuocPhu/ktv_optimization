@@ -174,7 +174,7 @@ int main() {
         // Redis cắt kết nối của gateway: request gặp lúc rớt → 503, request sau tự nối lại → 200.
         redis_command(*config, "CLIENT KILL TYPE normal");
         auto during = client.Get(replan + "21.0800,105.8800&latlng_at=2026-10-01 09:27:00", auth);
-        CHECK(during && (during->status == 503 || during->status == 200));
+        CHECK(during && during->status == 200);  // 8.4: lệnh Redis tự nối lại + gửi lại 1 lần khi kết nối rớt
         auto after = client.Get(replan + "21.0800,105.8800&latlng_at=2026-10-01 09:27:00", auth);
         CHECK(after && after->status == 200);
 

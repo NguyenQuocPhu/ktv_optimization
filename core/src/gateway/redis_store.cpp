@@ -13,7 +13,15 @@ namespace {
 
 struct Reply {
     redisReply* value = nullptr;
-    Reply(redisContext* context, const std::vector<std::string>& arguments) {
+    Reply(redisContext* context, const std::vector<std::string>& arguments) { send(context, arguments); }
+    // 8.4: kết nối rớt (Redis restart, CLIENT KILL, mạng) chỉ lộ ra ở lệnh đầu tiên → nối lại (live) và gửi lại 1 lần.
+    // An toàn: ghi đều là "ghi nếu mới hơn" / SET ghi đè cùng giá trị, đọc thì không đổi gì.
+    template <class Live>
+    Reply(Live live, const std::vector<std::string>& arguments) {
+        send(live(), arguments);
+        if (!value) send(live(), arguments);
+    }
+    void send(redisContext* context, const std::vector<std::string>& arguments) {
         std::vector<const char*> argv;
         std::vector<size_t> sizes;
         argv.reserve(arguments.size());
@@ -146,7 +154,7 @@ int RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, const
     arguments.insert(arguments.end(), {std::to_string(ttl_seconds), json, version ? "1" : "0",
                                        version ? join(*version) : "", date, replace_equal ? "1" : "0"});
     std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(live(), arguments);
+    Reply reply([this] { return live(); }, arguments);
     if (!reply.ok() || reply.value->type != REDIS_REPLY_INTEGER)
         throw std::runtime_error("redis: ghi " + hash_key + " thất bại (" + reply_error(context_, reply) + ")");
     return static_cast<int>(reply.value->integer);
@@ -154,7 +162,7 @@ int RedisStore::set_if_newer(const std::string& hash_key, int ttl_seconds, const
 
 std::optional<Versioned> RedisStore::get_hash(const std::string& hash_key) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(live(), {"HMGET", hash_key, "json", "v"});
+    Reply reply([this] { return live(); }, {"HMGET", hash_key, "json", "v"});
     if (!reply.value) throw std::runtime_error("redis: đọc " + hash_key + " thất bại (" + reply_error(context_, reply) + ")");
     if (!reply.ok() || reply.value->type != REDIS_REPLY_ARRAY || reply.value->elements != 2) return std::nullopt;
     const redisReply* json = reply.value->element[0];
@@ -167,7 +175,7 @@ std::optional<Versioned> RedisStore::get_hash(const std::string& hash_key) const
 
 std::optional<std::string> RedisStore::get_value(const std::string& key) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(live(), {"GET", key});
+    Reply reply([this] { return live(); }, {"GET", key});
     if (!reply.value) throw std::runtime_error("redis: đọc " + key + " thất bại (" + reply_error(context_, reply) + ")");
     if (reply.value->type == REDIS_REPLY_STRING)
         return std::string(reply.value->str, reply.value->len);
@@ -214,7 +222,7 @@ std::size_t RedisStore::size() const {
     std::string cursor = "0";
     const std::string pattern = config_.prefix + "route:*";
     do {
-        Reply reply(live(), {"SCAN", cursor, "MATCH", pattern, "COUNT", "1000"});
+        Reply reply([this] { return live(); }, {"SCAN", cursor, "MATCH", pattern, "COUNT", "1000"});
         if (!reply.ok() || reply.value->type != REDIS_REPLY_ARRAY || reply.value->elements != 2) break;
         cursor.assign(reply.value->element[0]->str, reply.value->element[0]->len);
         const redisReply* keys = reply.value->element[1];
@@ -233,7 +241,7 @@ std::optional<Versioned> RedisStore::get_loc(const std::string& staff_id) const 
 
 void RedisStore::put_dedup(const std::string& staff_id, const std::string& fingerprint) {
     std::lock_guard<std::mutex> lock(mutex_);
-    Reply reply(live(),
+    Reply reply([this] { return live(); },
                 {"SET", key("dedup", staff_id), fingerprint, "EX", std::to_string(config_.dedup_ttl_seconds)});
     if (!reply.ok()) throw std::runtime_error("redis: ghi dedup thất bại (" + reply_error(context_, reply) + ")");
 }
@@ -242,7 +250,7 @@ bool RedisStore::ping() const {
     std::lock_guard<std::mutex> lock(mutex_);
     try {
         for (int attempt = 0; attempt < 2; ++attempt) {  // kết nối rớt chỉ lộ ra ở lệnh đầu tiên → nối lại, thử 1 lần nữa
-            Reply reply(live(), {"PING"});
+            Reply reply([this] { return live(); }, {"PING"});
             if (reply.ok()) return true;
         }
         return false;

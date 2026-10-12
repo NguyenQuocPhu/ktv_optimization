@@ -82,6 +82,7 @@ public:
     // Ném std::runtime_error nếu không kết nối / AUTH / SELECT được. Kết nối rớt sau đó: tự nối lại ở lệnh kế
     // tiếp; lệnh gặp lúc rớt thì ném (đọc/ghi đều ném khi lỗi kết nối, không coi là "không có").
     explicit RedisStore(const Config& config);
+    const Config& config() const { return config_; }  // 8.4: gateway mở thêm kết nối mỗi luồng HTTP cùng cấu hình
     ~RedisStore() override;
 
     RedisStore(const RedisStore&) = delete;
@@ -125,7 +126,7 @@ private:
 
     Config config_;
     mutable redisContext* context_ = nullptr;
-    mutable std::mutex mutex_;  // hiredis context không thread-safe; khóa chung, tách pool nếu cần throughput
+    mutable std::mutex mutex_;  // hiredis context không thread-safe; gateway dùng một RedisStore mỗi luồng HTTP (8.4)
 };
 
 // "127.0.0.1:6379" → Config (host, port; còn lại mặc định). Sai dạng / cổng ngoài 1–65535 → không có.
