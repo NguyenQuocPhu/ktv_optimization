@@ -401,15 +401,15 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         return result;
     };
     if (routed_stops.empty() && spare_stops.empty() && !deferred.empty()) return deferred_only();
-    if ((routed_stops.empty() && spare_stops.empty()) || routed_stops.size() > 64) {
-        result.response = error_response("422", routed_stops.empty() ? "Không có công việc để dựng tuyến" : "Quá 64 việc cho một KTV",
+    if ((routed_stops.empty() && spare_stops.empty()) || routed_stops.size() > static_cast<size_t>(kMaxStops)) {
+        result.response = error_response("422", routed_stops.empty() ? "Không có công việc để dựng tuyến" : "Quá " + std::to_string(kMaxStops) + " điểm dừng cho một KTV",
                                          message.message_id, server_now);
         return result;
     }
 
     // ---- Bài toán số: mọi mốc giờ đổi về phút kể từ lúc xuất phát. Mỗi điểm dừng = một "việc" của QHĐ.
     // 7.24: dựng trên MỌI điểm dừng — bắt buộc (0..n_mandatory) rồi tuỳ chọn — để một lần gọi bảng khoảng cách.
-    // Ca tuỳ chọn vượt trần 63 điểm (bitmask) → ưu tiên ít ngày còn lại / ưu tiên cao, phần thừa thành DEFERRED.
+    // Ca tuỳ chọn vượt trần kMaxStops điểm (bitmask 128 bit) → ưu tiên ít ngày còn lại / ưu tiên cao, phần thừa thành DEFERRED.
     const int n_mandatory = static_cast<int>(routed_stops.size());
     auto spare_rank = [&](const Stop& stop) {  // catalogue mục B: ít ngày làm việc còn lại → ưu tiên trong ngày cao
         int days = 1 << 20, level = 9;
@@ -423,7 +423,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     };
     std::stable_sort(spare_stops.begin(), spare_stops.end(),
                      [&](const Stop& a, const Stop& b) { return spare_rank(a) < spare_rank(b); });
-    while (n_mandatory + static_cast<int>(spare_stops.size()) > 63) {
+    while (!spare_stops.empty() && n_mandatory + static_cast<int>(spare_stops.size()) > kMaxStops) {
         for (const Task* task : spare_stops.back().tasks) deferred.push_back({task, "BEYOND_K"});
         spare_stops.pop_back();
     }
@@ -468,10 +468,10 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         return a.block_id != 0 && a.block_id == b.block_id;
     };
     for (size_t i = 0; i < all_stops.size(); ++i) {
-        uint64_t mask = 0;
+        Mask mask = 0;
         for (size_t j = 0; j < all_stops.size(); ++j)
             if (j != i && same_area(stop_anchor(all_stops[i]), stop_anchor(all_stops[j])))
-                mask |= uint64_t{1} << j;
+                mask |= Mask{1} << j;
         p.same_area.push_back(mask);
     }
     p.shift_end = static_cast<double>(shift_end - start);
@@ -523,9 +523,9 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             q.weight.push_back(whole.weight[k]);
             q.urgency.push_back(whole.urgency[k]);
             q.optional.push_back(whole.optional[k]);
-            uint64_t mask = 0;
+            Mask mask = 0;
             for (size_t u = 0; u < keep.size(); ++u)
-                if (whole.same_area[k] >> keep[u] & 1) mask |= uint64_t{1} << u;
+                if (whole.same_area[k] >> keep[u] & 1) mask |= Mask{1} << u;
             q.same_area.push_back(mask);
         }
         q.shift_end = whole.shift_end;

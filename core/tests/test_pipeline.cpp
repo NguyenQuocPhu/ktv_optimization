@@ -166,9 +166,19 @@ int main() {
         CHECK(r && r->source == ktv::Source::Heuristic);
         CHECK(r && r->response["data"]["metrics"]["tasks_total"] == 13);
     }
-    {  // Quá 64 điểm dừng → 422.
+    // 8.4: mask 128 bit → trần 127 điểm dừng. 64 điểm trước đây làm worker crash (vòng cắt ca tuỳ chọn gọi back() trên
+    // danh sách rỗng); nay 64 và 127 xếp được, 128 → 422.
+    for (int count : {64, 127}) {
         json tasks = json::array();
-        for (int i = 0; i < 65; ++i)
+        for (int i = 0; i < count; ++i)
+            tasks.push_back(task(200 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "",
+                                 ("21." + std::to_string(3000 + i) + ",105.82").c_str(), ""));
+        auto r = run(message("2026-09-10 09:00:00", none, tasks, none, none, none));
+        CHECK(r && r->response["statuscode"] == "200");
+    }
+    {  // Quá 127 điểm dừng → 422.
+        json tasks = json::array();
+        for (int i = 0; i < 128; ++i)
             tasks.push_back(task(200 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "",
                                  ("21." + std::to_string(30 + i) + ",105.82").c_str(), ""));
         auto r = run(message("2026-09-10 09:00:00", none, tasks, none, none, none));

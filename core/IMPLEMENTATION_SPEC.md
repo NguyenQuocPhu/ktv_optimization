@@ -1798,6 +1798,41 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 - Prod có Grafana → dùng Grafana (lịch sử, cảnh báo, gom replica); trang này cho dev / staging / load test.
 **Hỏi Infra:** có Prometheus / Grafana không; deploy Compose hay k8s.
 
+### Phase 8.4 — Stress test (người dùng duyệt 2026-10-12) ✅
+
+**Mục tiêu.** NFR-01 (≤ 5 s, cả lúc 6h), NFR-05 (đủ cho toàn quốc 6h), NFR-02 (lặp không sai / trùng); tìm điểm gãy. Số KTV thật lúc 6h và nghĩa "≤ 5 s" **chưa có** (hỏi PO) → đẩy tải tới 100k KTV.
+
+**Cấu hình đo ("phần cứng nhỏ", người dùng chọn).** Như `compose.yaml`: 1 worker × 4 luồng, topic 4 partition. Worker + OSRM + Redis (+ gateway ở S3) **chung 4 lõi** (`taskset` 12–15), Kafka riêng 2 lõi (6–7); `docker update --cpus` lỗi cgroup trên máy này nên ghim bằng `taskset`. Máy dev: 16 vCPU Xeon Platinum 8462Y+, 188 GiB RAM, dùng chung người khác (~3 lõi bận). Kafka dev 1 broker, không SASL, cùng máy → số đo **lạc quan** so với prod.
+
+**Công cụ** `tools/stress/` (Python thư viện chuẩn + `vegeta` có sẵn): `batch.sh` (bơm IN dồn / đều, chờ xử lý hết, xóa topic + khóa Redis), `e2e.py` (end-to-end IN → OUT theo timestamp Kafka, đếm mất / trùng), `mon.py` (CPU số lõi TB / đỉnh + RSS từng tiến trình / container qua `/proc`), `pace.py`, `suggest.sh` (gateway + vegeta theo nấc, tỉ lệ HIT, keep-alive bật / tắt). `gen_load.py` thêm khoảng số ca và `LOAD_DATE`.
+
+| Bài | Kịch bản | Tải | Số lượng | Xử lý được | Độ trễ p50 / p95 | Tính 1 KTV p95 (max) | Thành công · mất · trùng | CPU | Kết luận |
+|---|---|---|---|---|---|---|---|---|---|
+| S1 | Batch 6h, dồn | 10k KTV | 10.504 msg | 272 msg/s, xả 40 s | 19 s / 36 s ¹ | 37 ms (295 ms) | 100% · 0 · 0 | worker 1,2 + OSRM 1,1 | Đạt từng KTV; chậm do xếp hàng |
+| S1 | Batch 6h, dồn | 100k KTV | 104.925 msg | 271 msg/s, xả 6,5 phút | 3,2 / 6,1 phút ¹ | 43 ms (284 ms) | 100% · 0 · 0 | 1,3 + 1,1 | Nghẽn ở 4 luồng worker, CPU dư |
+| S2 | Event đều | 100 msg/s × 2′ | 12.578 msg | 101 msg/s | 30 ms / 121 ms | 41 ms | 100% · 0 · 0 | 0,5 + 0,4 | Êm |
+| S2 | Event đều | 200 msg/s × 2′ | 25.228 msg | 202 msg/s | 39 ms / 0,96 s | 45 ms | 100% · 0 · 0 | 1,0 + 0,8 | Êm |
+| S2 | Event đều | 300 msg/s × 2′ | 37.765 msg | 266 msg/s | 10 s / 16 s | 46 ms | 100% · 0 · 0 | 1,3 + 1,1 | Quá sức, lag tăng |
+| S2 | Event đều | 400 msg/s × 2′ | 50.455 msg | 265 msg/s | 31 s / 62 s | 43 ms | 100% · 0 · 0 | 1,3 + 1,1 | Quá sức, lag tăng |
+| S3 | `/suggest` ~95% MISS, keep-alive | 200 req/s × 60 s | 12.000 req | 200 req/s | 8 ms / 27 ms | — | 100% | gateway 0,8 + OSRM 0,8 | Êm (trước sửa p50 52 ms) |
+| S3 | `/suggest` | 400 req/s × 60 s | 24.000 req | ~400 req/s | 12 ms / 58 ms | — | 99,4% (0,6% timeout) | 1,4 + 1,4 | Sát ngưỡng (trước sửa 78%) |
+| S3 | `/suggest` | 800 req/s × 60 s | 48.000 req | ~490 req/s | 8 ms / 30 s | — | 92% | 2,3 + 0,8 (đỉnh 3,6) | CPU 4 lõi đầy = trần |
+| S4 | Message nặng, dồn | 2.000 KTV × 30–63 ca | 2.095 msg | 4 msg/s, xả 8,7 phút | 4,5 / 8,2 phút ¹ | 1,8 s (2,9 s) | 100% · 0 · 0 | worker 3,5 / 4 | Từng KTV < 5 s; CPU-bound (LNS 1000 vòng) |
+
+¹ End-to-end (IN vào Kafka → OUT ra Kafka) khi dồn cả lô, gồm thời gian xếp hàng tới lượt.
+
+**Phân tích.**
+- **Worker:** một luồng xử lý tuần tự ~12,4 ms / message, trong đó chỉ ~4,3 ms CPU worker (~3,9 ms CPU OSRM); còn lại chờ OSRM / Redis. 4 luồng ≈ 4 / 12,4 ms ≈ 280–320 msg/s **không phụ thuộc kích thước lô** — lô lớn chỉ dài thêm tuyến tính. Trần 4 lõi ước ≈ 4 lõi ÷ (4,3 + 3,9) ms ≈ ~490 msg/s → tăng luồng (2–3 × số lõi) hoặc thêm worker / partition. Người dùng chốt không đo thêm số luồng.
+- **Gateway:** sau sửa, trần là CPU (~450–500 req/s / 4 lõi, ~95% MISS). Còn: httplib giữ **một luồng cho một kết nối keep-alive** (15 luồng = lõi máy − 1, không theo giới hạn pod) → bên gọi mở > 15 kết nối thì xếp hàng dù CPU dư (0,6% timeout ở 400 req/s).
+- **NFR-01:** từng KTV đạt (p50 8 ms; nặng nhất 2,9 s; `/suggest` p50 8 ms). Cả batch: 100k KTV cần ~6,5 phút với 1 × 4 luồng — chờ PO chốt nghĩa "≤ 5 s" + số KTV.
+
+**Lỗi tìm ra + sửa.**
+1. 🔴 **Worker crash khi KTV có đúng 64 điểm dừng** (S4): chặn 422 ở `> 64` nhưng mask 64 bit chỉ chứa 63 việc (1 bit nghỉ) → vòng cắt ca tuỳ chọn gọi `back()` trên danh sách rỗng → segfault; restart đọc lại đúng message → crash lặp, **kẹt partition**. Sửa (người dùng chọn): mask **`unsigned __int128`** (`Mask`, `popcount` trong `dp.hpp`) → trần **`kMaxStops` = 127 điểm dừng**; vòng cắt dừng khi hết ca tuỳ chọn. QHĐ chính xác vẫn ≤ 12 việc; bài lớn chạy LNS. Test `test_pipeline`: 64 và 127 điểm → 200, 128 → 422.
+2. 🟠 Gateway (commit `d7e4557`): `TCP_NODELAY` (keep-alive p50 50 → 8 ms), mỗi luồng HTTP một kết nối Redis (HIT 1,5 → 21 ms khi tải cao do chung khóa), `CPPHTTPLIB_LISTEN_BACKLOG` 5 → 512 (EOF khi dồn).
+3. 🟠 Lệnh Redis gặp kết nối rớt → nối lại + gửi lại 1 lần (ghi đều "ghi nếu mới hơn") — gateway không còn 503 mỗi luồng sau Redis restart; worker không còn thoát khi bị cắt kết nối (gặp khi `test_gateway_replan` `CLIENT KILL` trúng worker dev).
+
+**Còn (người dùng để sau).** `--http-threads N` (số luồng HTTP theo số kết nối dự kiến, không theo lõi máy); tách `/healthz`, `/metrics` gateway khỏi nhóm luồng `/suggest` (quá tải → probe timeout → k8s restart pod). Hỏi Mobix / Infra: số kết nối giữ mở tới gateway, có ingress / LB; số pod, `limits.cpu`; OSRM prod. Chạy lại S1 trên staging (Kafka 2 broker, mạng thật).
+
 ### Phase 9 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.

@@ -47,6 +47,14 @@
 
 namespace ktv {
 
+// Tập việc (bit j = việc j) + 1 bit nghỉ trưa (bit n). 128 bit (GCC / Clang) → tối đa kMaxStops = 127 điểm dừng.
+// Trước 8.4 là uint64_t (63 điểm). QHĐ chính xác vẫn chỉ ≤ max_exact_tasks (bảng 2ⁿ); bài lớn chạy LNS.
+using Mask = unsigned __int128;
+constexpr int kMaxStops = 127;
+inline int popcount(Mask m) {
+    return __builtin_popcountll(static_cast<std::uint64_t>(m)) + __builtin_popcountll(static_cast<std::uint64_t>(m >> 64));
+}
+
 inline constexpr double kNone = NAN;  // "Không có". So sánh với NaN luôn sai → không hạn thì không bao giờ trễ.
 inline constexpr int kBreak = -1;     // "Nghỉ trưa": dùng thay chỉ số việc trong Solution.order và Visit.task.
 
@@ -60,7 +68,7 @@ struct Problem {
     std::vector<double> complete_by;  // Hạn làm xong. kNone = không có.
     std::vector<double> weight;       // Trọng số ưu tiên: P1 = 4 … P4 = 1.
     std::vector<double> urgency;      // 7.16.2: độ gấp của ca chèn (0..K; ca chính = 0). Rỗng = không dùng (test cũ).
-    std::vector<uint64_t> same_area;  // same_area[i]: các việc khác cùng lô với việc i (bit j = 1 nếu việc j cùng lô).
+    std::vector<Mask> same_area;       // same_area[i]: các việc khác cùng lô với việc i (bit j = 1 nếu việc j cùng lô).
     double shift_end = kNone;         // Giờ hết ca.
     double break_open = kNone;        // Sớm nhất được bắt đầu nghỉ trưa. kNone = tuyến này không cần nghỉ.
     double break_latest = kNone;      // Muộn nhất phải bắt đầu nghỉ (= hết khung trưa − break_minutes).

@@ -15,7 +15,7 @@ namespace {
 // Giống cost(i, j) của TSP, nhưng thêm `clock` (giờ rời i: quyết định chờ hẹn, trễ hay không)
 // và `done_mask` (việc đã làm: quyết định có "quay lại lô đã rời" không).
 // i = -1: đang ở chỗ xuất phát. j = kBreak: đi nghỉ trưa, KTV đứng yên ở i.
-Visit visit(const Problem& p, uint64_t done_mask, int i, int j, double clock) {
+Visit visit(const Problem& p, Mask done_mask, int i, int j, double clock) {
     Visit v{j, 0, 0, clock, clock, clock, {}};
     if (j == kBreak) {  // Nghỉ: 0 km, không phạt; chưa tới giờ nghỉ thì chờ.
         v.checkin = std::max(clock, p.break_open);
@@ -37,7 +37,7 @@ Visit visit(const Problem& p, uint64_t done_mask, int i, int j, double clock) {
     v.cost[KM] = v.km;
     v.cost[TRAVEL_MINUTES] = v.travel;
     // Rời lô của i để vào lô của j, mà lô của j đã từng làm → quay lại khu vực.
-    uint64_t area = p.same_area[j];
+    Mask area = p.same_area[j];
     if (i >= 0 && !(area >> i & 1) && (done_mask & area)) v.cost[AREA_REENTRY] = 1;
     // 7.24: ca tuỳ chọn không bị phạt vì CHÍNH NÓ làm muộn (không thì chỉ chèn được buổi sáng); ca khác bị đẩy muộn
     // vẫn tính PRIORITY_DELAY của ca đó như thường.
@@ -50,11 +50,11 @@ Visit visit(const Problem& p, uint64_t done_mask, int i, int j, double clock) {
 }
 
 // Bit "đã nghỉ trưa" nằm ngay sau bit các việc: bit n.
-uint64_t rest_bit(const Problem& p) { return uint64_t{1} << p.size(); }
-uint64_t bit_of(const Problem& p, int j) { return j == kBreak ? rest_bit(p) : uint64_t{1} << j; }
+Mask rest_bit(const Problem& p) { return Mask{1} << p.size(); }
+Mask bit_of(const Problem& p, int j) { return j == kBreak ? rest_bit(p) : Mask{1} << j; }
 
 // Luật chặn nghỉ trưa. Trả false nếu bước này làm tuyến không hợp lệ.
-bool allowed(const Problem& p, uint64_t mask, const Visit& v) {
+bool allowed(const Problem& p, Mask mask, const Visit& v) {
     const bool rested = mask & rest_bit(p);
     if (v.task == kBreak) return p.needs_break() && !rested;        // Chỉ nghỉ một lần, khi tuyến cần nghỉ.
     if (p.is_optional(v.task) && v.done > p.shift_end) return false;  // 7.24: ca tuỳ chọn phải xong trong ca (cứng)
@@ -63,7 +63,7 @@ bool allowed(const Problem& p, uint64_t mask, const Visit& v) {
 
 std::vector<Visit> walk(const Problem& p, const std::vector<int>& order) {
     std::vector<Visit> steps;
-    uint64_t mask = 0;
+    Mask mask = 0;
     int i = -1;
     double clock = 0;
     for (int j : order) {
@@ -94,8 +94,8 @@ struct Search {
     double finish_weight = 0;
     int skip_tier = -1;              // 7.24: tầng + trọng số của SKIP_OPTIONAL
     double skip_weight = 0;
-    uint64_t mandatory = 0;          // bit các ca bắt buộc (phải có trong tuyến)
-    uint64_t optional_tasks = 0;     // bit các ca tuỳ chọn
+    Mask mandatory = 0;          // bit các ca bắt buộc (phải có trong tuyến)
+    Mask optional_tasks = 0;     // bit các ca tuỳ chọn
     std::vector<Label> pool{{0, {}, -1, -1}};  // pool[0] = gốc.
 
     Search(const Problem& problem, const Rules& r) : p(problem), rules(r), tiers(static_cast<int>(r.tiers.size())) {
@@ -104,18 +104,18 @@ struct Search {
                 if (rule == FINISH && weight) finish_tier = t, finish_weight = weight;
                 if (rule == SKIP_OPTIONAL) skip_tier = t, skip_weight = weight;
             }
-        for (int j = 0; j < p.size(); ++j) (p.is_optional(j) ? optional_tasks : mandatory) |= uint64_t{1} << j;
+        for (int j = 0; j < p.size(); ++j) (p.is_optional(j) ? optional_tasks : mandatory) |= Mask{1} << j;
     }
 
     // Khóa của một tuyến KẾT THÚC ở nhãn này (đã làm `mask`): cộng phạt cho mỗi ca tuỳ chọn không làm.
-    Key final_key(const Label& label, uint64_t mask) const {
+    Key final_key(const Label& label, Mask mask) const {
         Key k = key(label);
-        if (skip_tier >= 0) k[skip_tier] += skip_weight * __builtin_popcountll(optional_tasks & ~mask);
+        if (skip_tier >= 0) k[skip_tier] += skip_weight * popcount(optional_tasks & ~mask);
         return k;
     }
 
     // Từ nhãn `parent` (đang ở i, đã làm `mask`) đi tới j. Vi phạm luật nghỉ trưa → không có.
-    std::optional<Label> extend(int parent, uint64_t mask, int i, int j) const {
+    std::optional<Label> extend(int parent, Mask mask, int i, int j) const {
         const Label& from = pool[parent];
         Visit v = visit(p, mask, i, j, from.finish);
         if (!allowed(p, mask, v)) return std::nullopt;
@@ -164,7 +164,7 @@ struct Search {
     Key evaluate(const std::vector<int>& order, bool partial = false) {
         pool.resize(1);
         int label = 0, i = -1;
-        uint64_t mask = 0;
+        Mask mask = 0;
         for (int j : order) {
             if (j != kBreak && (j < 0 || j >= p.size() || (mask >> j & 1))) return kInfeasible;
             auto next = extend(label, mask, i, j);
@@ -182,22 +182,22 @@ struct Search {
 Solution exact(Search& s) {
     const Problem& p = s.p;
     const int n = p.size();
-    const uint64_t rest = rest_bit(p), all_tasks = rest - 1;
-    const uint64_t top = p.needs_break() ? (all_tasks | rest) : all_tasks;
+    const Mask rest = rest_bit(p), all_tasks = rest - 1;
+    const Mask top = p.needs_break() ? (all_tasks | rest) : all_tasks;
     // Bảng QHĐ: dp(mask, last) = các nhãn (tuyến dở dang) đã làm đúng tập `mask` (kể cả bit nghỉ),
     // việc thật làm cuối là `last` (-1 = chưa làm việc nào, vẫn ở chỗ xuất phát).
     // Trải phẳng 2 chiều thành 1 chiều: ô [mask][last] nằm ở vị trí mask * (n + 1) + (last + 1).
     std::vector<std::vector<int>> table(static_cast<size_t>(top + 1) * (n + 1));
-    auto dp = [&](uint64_t mask, int last) -> std::vector<int>& { return table[mask * (n + 1) + (last + 1)]; };
+    auto dp = [&](Mask mask, int last) -> std::vector<int>& { return table[mask * (n + 1) + (last + 1)]; };
 
     bool capped = false;
-    auto step = [&](int label, uint64_t mask, int i, int j) {  // dp[mask ∪ {j}][j] ← nhãn + visit(i → j). Nghỉ: vẫn đứng ở i.
+    auto step = [&](int label, Mask mask, int i, int j) {  // dp[mask ∪ {j}][j] ← nhãn + visit(i → j). Nghỉ: vẫn đứng ở i.
         if (auto next = s.extend(label, mask, i, j))
             capped |= s.keep(dp(mask | bit_of(p, j), j == kBreak ? i : j), *next);
     };
     for (int j = 0; j < n; ++j) step(0, 0, -1, j);
     step(0, 0, -1, kBreak);  // Nghỉ ngay từ đầu (chỉ được khi tuyến cần nghỉ).
-    for (uint64_t mask = 1; mask < top; ++mask)
+    for (Mask mask = 1; mask < top; ++mask)
         for (int i = -1; i < n; ++i) {
             if (i < 0 ? (mask & all_tasks) != 0 : !(mask >> i & 1)) continue;  // Ô không thể có.
             for (int label : dp(mask, i)) {  // Nhãn mới luôn vào ô có mask lớn hơn, nên duyệt thẳng được.
@@ -213,7 +213,7 @@ Solution exact(Search& s) {
     int best = -1;
     Key best_key{};
     if (s.mandatory == 0) best = 0, best_key = s.final_key(s.pool[0], 0);  // tuyến rỗng: bỏ mọi ca tuỳ chọn
-    for (uint64_t mask = 0; mask <= top; ++mask) {
+    for (Mask mask = 0; mask <= top; ++mask) {
         if ((mask & s.mandatory) != s.mandatory) continue;
         for (int last = -1; last < n; ++last)
             for (int label : dp(mask, last))
@@ -325,8 +325,8 @@ std::vector<int> heuristic(Search& s) {
     const int n = p.size();
     std::vector<int> order;
     int label = 0, i = -1, done = 0;
-    uint64_t mask = 0;
-    const int need = __builtin_popcountll(s.mandatory);  // 7.24: tham lam chỉ xếp ca bắt buộc; ca tuỳ chọn do improve chèn
+    Mask mask = 0;
+    const int need = popcount(s.mandatory);  // 7.24: tham lam chỉ xếp ca bắt buộc; ca tuỳ chọn do improve chèn
     while (done < need) {
         int best_j = -2;
         Label best{};
@@ -370,7 +370,7 @@ bool window_dp(Search& s, std::vector<int>& order, int a, int w, Key& best_key) 
     const Problem& p = s.p;
     s.pool.resize(1);
     int start = 0, i = -1;
-    uint64_t mask = 0;
+    Mask mask = 0;
     for (int k = 0; k < a; ++k) {
         auto next = s.extend(start, mask, i, order[k]);
         if (!next) return false;
@@ -381,7 +381,7 @@ bool window_dp(Search& s, std::vector<int>& order, int a, int w, Key& best_key) 
     }
     const std::vector<int> elems(order.begin() + a, order.begin() + a + w);
     const int full = (1 << w) - 1;
-    std::vector<uint64_t> bits(full + 1, 0);  // bit toàn cục của một tập con cửa sổ
+    std::vector<Mask> bits(full + 1, 0);  // bit toàn cục của một tập con cửa sổ
     for (int lm = 1; lm <= full; ++lm) bits[lm] = bits[lm & (lm - 1)] | bit_of(p, elems[__builtin_ctz(lm)]);
     // Ô [tập con][phần tử thật làm cuối + 1]; -1 = vẫn ở chỗ cuối phần trước.
     std::vector<std::vector<int>> table(static_cast<size_t>(full + 1) * (w + 1));
@@ -402,7 +402,7 @@ bool window_dp(Search& s, std::vector<int>& order, int a, int w, Key& best_key) 
     for (int last = -1; last < w; ++last)
         for (int label : cell(full, last)) {
             int tail = label, at = last < 0 ? i : elems[last];
-            uint64_t done = mask | bits[full];
+            Mask done = mask | bits[full];
             for (size_t k = a + w; k < order.size() && tail >= 0; ++k) {
                 auto next = s.extend(tail, done, at, order[k]);
                 if (!next) {
