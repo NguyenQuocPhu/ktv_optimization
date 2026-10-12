@@ -2,17 +2,20 @@
 5% KTV có 2 IN liên tiếp (kiểm thứ tự cùng KTV). In ra 'key<TAB>json' cho kafka-console-producer.
 
   python3 tools/dashboard/gen_load.py 2000 1 > /tmp/load.tsv          # 2000 KTV, seed 1
+  python3 tools/dashboard/gen_load.py 500 3 30-64 > /tmp/heavy.tsv     # 8.4 S4: mỗi KTV 30–64 ca
   docker exec -i ktv-kafka-dev /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9094 \
       --topic <topic IN> --property parse.key=true --property key.separator=$'\t' < /tmp/load.tsv
 """
-import copy, json, random, sys
+import copy, json, os, random, sys
 REPO = "/home/phunq/ktv_optimization"
 n = int(sys.argv[1]); seed = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+fixed = tuple(map(int, sys.argv[3].split("-"))) if len(sys.argv) > 3 else None  # "30-64": số ca / KTV cố định khoảng
 rng = random.Random(seed)
 base = json.load(open(f"{REPO}/tools/review_map/sample_in.json"))
 tpl = [t for a in base["tasks"].values() for t in a if t.get("latlng")]
-D = "2026-10-27"
+D = os.environ.get("LOAD_DATE", "2026-10-27")  # 8.4 S3: ngày hôm nay để gateway (giờ thật) tính tuyến thật
 def count():
+    if fixed: return rng.randint(*fixed)
     r = rng.random()
     return rng.randint(1, 4) if r < .5 else rng.randint(5, 9) if r < .9 else rng.randint(10, 12) if r < .98 else rng.randint(13, 20)
 out = []
