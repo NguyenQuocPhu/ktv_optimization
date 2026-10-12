@@ -1762,7 +1762,7 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 **Test:** `test_offsets` (chỗ hổng, nhiều partition, thu hồi); `ctest` 19/19. Load test chạy tay bằng script scratch (sinh tải + chạy N replica × M luồng + đo lag) — [ponytail: chưa đưa vào repo; thêm khi cần chạy lại trên staging].
 **Còn lại:** NFR-01 "≤ 5 s" — hỏi PO nghĩa (mỗi KTV kể cả xếp hàng hay thời gian tính); số KTV thật lúc 6h; deploy Compose hay k8s (`compose.yaml` local chưa thêm `--threads`).
 
-### Phase 8.3 — Metrics + dashboard theo dõi (người dùng duyệt 2026-10-10) — phần 1 `/metrics` ✅, phần 2 dashboard 🚧
+### Phase 8.3 — Metrics + dashboard theo dõi (người dùng duyệt 2026-10-10) — phần 1 `/metrics` ✅, phần 2 dashboard load test ✅
 
 **Bối cảnh.** Cần theo dõi worker / gateway khi chạy (nhất là batch 6h). `/healthz` chỉ là JSON số đếm của **một** tiến trình, không lịch sử. Chuẩn prod: **Prometheus** (định kỳ lấy số từ `/metrics` của mọi replica, lưu lịch sử) + **Grafana** (dashboard, cảnh báo). **Người dùng chốt:** làm phần 1 `/metrics` trước; trang dashboard tự làm chỉ khi công ty không có Prometheus / Grafana.
 
@@ -1788,7 +1788,12 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 
 **Prod:** Infra cấu hình Prometheus lấy `/metrics` của worker (cổng health) và gateway; k8s: annotation `prometheus.io/scrape: "true"`, `prometheus.io/port`, `prometheus.io/path: /metrics`. Gợi ý cảnh báo: `sum(ktv_kafka_lag) > 1000` quá 2 phút; `rate(ktv_messages_total{status=~"500|424"}[5m]) > 0`; p95 `ktv_plan_seconds` > 2 s.
 
-**Phần 2 — trang `/dashboard` 🚧 (chỉ làm nếu không có Grafana):** HTML từ gateway, mỗi 5 s gọi `/metrics` các tiến trình cấu hình, gom replica và vẽ (message / giây, lag, p50 / p95, hàng đợi, statuscode, cache, `route_changed`); lịch sử chỉ trong trình duyệt. Có Grafana thì thay bằng file dashboard JSON mẫu.
+**Phần 2 — dashboard xem khi load test ✅ (người dùng chọn làm ngay, 2026-10-12):** `tools/dashboard/` — không sửa C++.
+- `server.py` (Python thư viện chuẩn): `--targets worker1=http://…:18081,gateway=http://…:8080`; `GET /scrape` tự lấy `/metrics` các nguồn (song song, timeout 2 s, nguồn chết = DOWN) → trình duyệt chỉ gọi một cổng: một tunnel, không CORS.
+- `index.html`: mỗi 2 s gom mọi nguồn, vẽ (canvas): message / giây, tổng lag (+ từng partition), p50 / p95 thời gian tính trong ~10 s gần nhất (hiệu bucket histogram), hàng đợi + chờ p95; bảng statuscode, cache hit %, `route_changed` yes / no, HTTP gateway theo mã, nguồn UP / DOWN. Lịch sử ~10 phút trong trình duyệt.
+- `gen_load.py`: sinh tải giả batch 6h (dùng cho 8.2).
+- Kiểm: JS tự kiểm bằng node (đọc định dạng, cộng nhãn, phân vị toàn bộ / trong khoảng / vượt khoảng); chạy thật 2 worker × 4 luồng + đẩy 2.107 message: `/scrape` thấy lag ~1.000 → 0, hàng đợi tăng rồi về 0, 1.020 + 1.087 = 2.107 message.
+- Prod có Grafana → dùng Grafana (lịch sử, cảnh báo, gom replica); trang này cho dev / staging / load test.
 **Hỏi Infra:** có Prometheus / Grafana không; deploy Compose hay k8s.
 
 ### Phase 9 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)

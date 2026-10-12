@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KTV dashboard</title>
+<style>
+  :root { --bg: #f4f6f8; --card: #fff; --text: #16202f; --muted: #6b7686; --line: #e3e7ee; --accent: #2563eb; --bad: #dc2626; --ok: #16a34a; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  h1 { font-size: 16px; margin: 0; }
+  .muted { color: var(--muted); font-size: 12px; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; padding: 12px 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .card h2 { font-size: 13px; margin: 0 0 4px; color: var(--muted); font-weight: 600; }
+  .big { font-size: 26px; font-weight: 700; }
+  canvas { width: 100%; height: 120px; display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td { padding: 2px 4px; border-bottom: 1px solid var(--line); }
+  td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .up { color: var(--ok); font-weight: 600; } .down { color: var(--bad); font-weight: 600; }
+</style>
+</head>
+<body>
+<header><h1>KTV worker / gateway</h1><span class="muted" id="when">đang lấy số…</span></header>
+<main>
+  <div class="card"><h2>Message / giây (mọi worker)</h2><div class="big" id="rate">–</div><canvas id="c-rate"></canvas></div>
+  <div class="card"><h2>Lag Kafka — message chưa xong (tổng)</h2><div class="big" id="lag">–</div><canvas id="c-lag"></canvas><div class="muted" id="lag-parts"></div></div>
+  <div class="card"><h2>Thời gian tính p50 / p95 (ms, 10 s gần nhất)</h2><div class="big" id="plan">–</div><canvas id="c-plan"></canvas></div>
+  <div class="card"><h2>Hàng đợi trong worker (tổng message chờ)</h2><div class="big" id="queue">–</div><canvas id="c-queue"></canvas><div class="muted" id="queue-wait"></div></div>
+  <div class="card"><h2>Statuscode (từ lúc chạy)</h2><table id="status"></table></div>
+  <div class="card"><h2>Cache · route_changed · gateway</h2><table id="misc"></table></div>
+  <div class="card"><h2>Nguồn</h2><table id="targets"></table></div>
+</main>
+<script>
+const KEEP = 300;                 // điểm giữ lại (2 s / điểm ≈ 10 phút) — lịch sử chỉ trong trình duyệt
+const history = { rate: [], lag: [], p50: [], p95: [], queue: [] };
+const snaps = [];                 // các lần lấy số ~12 s gần nhất: tốc độ (so lần trước) + p50/p95 (so lần cách ~10 s)
+const $ = (id) => document.getElementById(id);
+
+// "name{a="x",b="y"} 12" → {name, labels:{a:"x",...}, value}
+function parse(text) {
+  const rows = [];
+  for (const line of text.split("\n")) {
+    if (!line || line[0] === "#") continue;
+    const m = line.match(/^([a-zA-Z_:][\w:]*)(?:\{(.*)\})?\s+(\S+)$/);
+    if (!m) continue;
+    const labels = {};
+    for (const [, k, v] of (m[2] || "").matchAll(/(\w+)="([^"]*)"/g)) labels[k] = v;
+    rows.push({ name: m[1], labels, value: Number(m[3]) });
+  }
+  return rows;
+}
+const sum = (rows, name, where = () => true) => rows.filter((r) => r.name === name && where(r.labels)).reduce((a, r) => a + r.value, 0);
+const groupBy = (rows, name, key) => {
+  const out = {};
+  for (const r of rows) if (r.name === name) out[r.labels[key]] = (out[r.labels[key]] || 0) + r.value;
+  return out;
+};
+// Phân vị từ bucket cộng dồn (hiệu giữa 2 lần lấy số = chỉ các message trong khoảng đó).
+function quantile(now, before, name, q) {
+  const buckets = (rows) => {
+    const b = {};
+    for (const r of rows) if (r.name === name + "_bucket") b[r.labels.le] = (b[r.labels.le] || 0) + r.value;
+    return b;
+  };
+  const a = buckets(now), z = before ? buckets(before) : {};
+  const les = Object.keys(a).filter((le) => le !== "+Inf").map(Number).sort((x, y) => x - y);
+  const total = (a["+Inf"] || 0) - (z["+Inf"] || 0);
+  if (total <= 0) return null;
+  for (const le of les) if ((a[String(le)] || 0) - (z[String(le)] || 0) >= q * total) return le * 1000;
+  return Infinity;
+}
+function push(key, value) { history[key].push(value); if (history[key].length > KEEP) history[key].shift(); }
+function draw(id, series, colors) {
+  const canvas = $(id), dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr; canvas.height = canvas.clientHeight * dpr;
+  const g = canvas.getContext("2d"), w = canvas.width, h = canvas.height;
+  g.clearRect(0, 0, w, h);
+  const all = series.flat().filter((v) => v != null && isFinite(v));
+  const max = Math.max(1, ...all);
+  g.fillStyle = "#6b7686"; g.font = `${11 * dpr}px system-ui`; g.fillText(max.toFixed(max < 10 ? 1 : 0), 2, 11 * dpr);
+  series.forEach((s, i) => {
+    g.strokeStyle = colors[i]; g.lineWidth = 1.5 * dpr; g.beginPath();
+    s.forEach((v, x) => {
+      if (v == null || !isFinite(v)) return;
+      const px = (x / (KEEP - 1)) * w, py = h - (v / max) * (h - 14 * dpr);
+      x === 0 || s[x - 1] == null ? g.moveTo(px, py) : g.lineTo(px, py);
+    });
+    g.stroke();
+  });
+}
+const table = (id, pairs) => { $(id).innerHTML = pairs.map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join(""); };
+const fmt = (v) => (v == null ? "–" : !isFinite(v) ? "> 10 000" : v < 10 ? v.toFixed(1) : Math.round(v).toLocaleString("vi-VN"));
+
+async function tick() {
+  let scrape;
+  try { scrape = await (await fetch("/scrape", { cache: "no-store" })).json(); }
+  catch { $("when").textContent = "không gọi được dashboard server"; return; }
+  const rows = [], up = [];
+  for (const [name, r] of Object.entries(scrape)) {
+    up.push([name, r.ok ? '<span class="up">UP</span>' : `<span class="down">DOWN</span> <span class="muted">${r.error}</span>`]);
+    if (r.ok) rows.push(...parse(r.text));
+  }
+  const at = Date.now();
+  const total = sum(rows, "ktv_messages_total");
+  const last = snaps[snaps.length - 1], base = snaps.find((x) => at - x.at <= 10500) || last;
+  const rate = last ? Math.max(0, (total - last.total) / ((at - last.at) / 1000)) : null;
+  const p50 = quantile(rows, base?.rows, "ktv_plan_seconds", 0.5), p95 = quantile(rows, base?.rows, "ktv_plan_seconds", 0.95);
+  const lag = sum(rows, "ktv_kafka_lag"), queue = sum(rows, "ktv_queue_depth");
+  push("rate", rate); push("lag", lag); push("p50", p50); push("p95", p95); push("queue", queue);
+
+  $("rate").textContent = fmt(rate); draw("c-rate", [history.rate], ["#2563eb"]);
+  $("lag").textContent = fmt(lag); draw("c-lag", [history.lag], ["#dc2626"]);
+  const parts = groupBy(rows, "ktv_kafka_lag", "partition");
+  $("lag-parts").textContent = Object.entries(parts).map(([p, v]) => `p${p}: ${fmt(v)}`).join(" · ");
+  $("plan").textContent = `${fmt(p50)} / ${fmt(p95)}`; draw("c-plan", [history.p50, history.p95], ["#16a34a", "#d97706"]);
+  $("queue").textContent = fmt(queue); draw("c-queue", [history.queue], ["#7c3aed"]);
+  const q95 = quantile(rows, base?.rows, "ktv_queue_seconds", 0.95);
+  $("queue-wait").textContent = `chờ trong hàng p95: ${fmt(q95)} ms`;
+
+  const status = groupBy(rows, "ktv_messages_total", "status");
+  table("status", Object.entries(status).sort().map(([k, v]) => [k, fmt(v)]).concat([["tổng", fmt(total)]]));
+  const cache = groupBy(rows, "ktv_cache_total", "result"), changed = groupBy(rows, "ktv_route_changed_total", "value");
+  const hit = (cache.hit || 0) / Math.max(1, (cache.hit || 0) + (cache.miss || 0));
+  const http = groupBy(rows, "ktv_http_requests_total", "code");
+  table("misc", [
+    ["cache hit", `${(hit * 100).toFixed(1)}% (${fmt(cache.hit || 0)} / ${fmt((cache.hit || 0) + (cache.miss || 0))})`],
+    ["route_changed yes / no", `${fmt(changed.yes || 0)} / ${fmt(changed.no || 0)}`],
+    ...Object.entries(http).sort().map(([code, v]) => [`gateway HTTP ${code}`, fmt(v)]),
+  ]);
+  table("targets", up);
+  $("when").textContent = `cập nhật ${new Date().toLocaleTimeString("vi-VN")} · mỗi 2 s · p50/p95 tính trên ~10 s gần nhất`;
+
+  snaps.push({ at, rows, total });
+  while (snaps.length && at - snaps[0].at > 12000) snaps.shift();
+}
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>

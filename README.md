@@ -187,6 +187,7 @@ core/build/ktv_worker --env .env --out responses.jsonl --health-port 8081
 core/build/ktv_worker --env .env --log-payload all        # in payload IN vào mọi dòng log (soi staging)
 core/build/ktv_worker --env .env --threads 4               # 8.2: 4 luồng xử lý (cùng KTV vẫn tuần tự); --queue N = hàng đợi mỗi luồng (20)
 curl -s localhost:8081/metrics                             # 8.3: số liệu Prometheus (worker: cổng --health-port; gateway: /metrics cùng cổng API)
+python3 tools/dashboard/server.py --targets worker1=http://127.0.0.1:8081   # 8.3: dashboard load test → http://127.0.0.1:8095
 core/build/ktv_worker --env .env --osrm http://127.0.0.1:5000 --rules rules.json
 core/build/ktv_worker --env .env --redis 127.0.0.1:6379   # ghi thêm state + route vào Redis (Phase 7.3)
 ```
