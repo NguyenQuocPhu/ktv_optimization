@@ -2,6 +2,7 @@
 
 #include "ktv/adapter/http.hpp"
 #include "ktv/adapter/log.hpp"
+#include "ktv/adapter/metrics.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -19,6 +20,9 @@
 namespace ktv {
 
 namespace {
+
+// 8.3: số liệu cho GET /metrics (cả tiến trình gateway).
+Metrics g_metrics;
 
 // Giờ bắt đầu request: pre_routing và logger của httplib chạy cùng một luồng cho cùng một request.
 thread_local std::chrono::steady_clock::time_point t_request_started;
@@ -40,9 +44,16 @@ void log_request(const httplib::Request& request, const httplib::Response& respo
     const nlohmann::json body = nlohmann::json::parse(response.body, nullptr, false);  // route hoặc lỗi
     line["statuscode"] = body.is_object() && body.contains("statuscode") ? body["statuscode"] : nlohmann::json(nullptr);
     line["message"] = body.is_object() && body.contains("message") ? body["message"] : nlohmann::json(nullptr);
-    line["total_ms"] =
-        std::round(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_request_started).count() * 10) / 10;
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_request_started).count();
+    line["total_ms"] = std::round(seconds * 10000) / 10;
     write_log(line);
+    // 8.3: nhãn route chỉ nhận tên đã biết (path lạ → "other") để số chuỗi số liệu không phình theo request rác.
+    std::string route = line["route"].get<std::string>();
+    if (route != "route" && route != "replan" && route != "suggest") route = "other";
+    g_metrics.add("ktv_http_requests_total", "route=\"" + route + "\",code=\"" + std::to_string(response.status) + "\"");
+    g_metrics.observe("ktv_http_seconds", "route=\"" + route + "\"", seconds);
+    if (response.has_header("X-Cache"))
+        g_metrics.add("ktv_http_cache_total", "route=\"" + route + "\",result=\"" + response.get_header_value("X-Cache") + "\"");
 }
 
 bool authorized(const httplib::Request& request, const std::string& token) {
@@ -133,6 +144,9 @@ std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const Ga
     });
     server->set_logger(log_request);
 
+    server->Get("/metrics", [](const httplib::Request&, httplib::Response& response) {  // 8.3: Prometheus, không cần token
+        response.set_content(g_metrics.render(), "text/plain; version=0.0.4");
+    });
     server->Get("/healthz", [&store, &options](const httplib::Request&, httplib::Response& response) {
         nlohmann::json body = {{"ok", true}, {"entries", store.size()}};
         if (options.out_failed) body["out_failed"] = options.out_failed();

@@ -49,6 +49,7 @@
 #include "ktv/adapter/file.hpp"
 #include "ktv/adapter/http.hpp"
 #include "ktv/adapter/log.hpp"
+#include "ktv/adapter/metrics.hpp"
 #include "ktv/adapter/publish.hpp"
 #include "ktv/kafka/config.hpp"
 #include "ktv/kafka/consumer.hpp"
@@ -107,6 +108,7 @@ struct Health {
     std::map<std::string, long long> by_status;    // statuscode → số message
     std::map<std::string, long long> data_issues;  // issue_key(cảnh báo) → số lần: sổ câu hỏi cho team data
     std::string last_message_at;                   // giờ VN lúc xử lý message gần nhất
+    ktv::Metrics metrics;                          // 8.3: GET /metrics (Prometheus)
 };
 
 // Cộng cảnh báo vào sổ. Trả các khóa lần đầu gặp để log chi tiết đúng một lần.
@@ -138,6 +140,11 @@ std::unique_ptr<HealthServer> start_health(Health& health, int port) {
         const bool ready = last > 0 && std::time(nullptr) - last <= kMaxBrokerGap;
         response.status = ready ? 200 : 503;
         response.set_content(nlohmann::json{{"ready", ready}}.dump(), "application/json");
+    });
+    // 8.3: số liệu dạng Prometheus (đếm theo statuscode, cache, route_changed, thời gian tính / chờ, hàng đợi, lag).
+    hs->server.Get("/metrics", [&health](const httplib::Request&, httplib::Response& response) {
+        health.metrics.set("ktv_uptime_seconds", "", static_cast<double>(std::time(nullptr) - health.started));
+        response.set_content(health.metrics.render(), "text/plain; version=0.0.4");
     });
     hs->server.Get("/healthz", [&health](const httplib::Request&, httplib::Response& response) {
         const long long now = std::time(nullptr), gap = now - health.last_poll, broker = health.last_broker_ok;
@@ -400,6 +407,15 @@ int main(int argc, char** argv) {
         const nlohmann::ordered_json data = published.out ? ktv::out_data(*published.out) : nlohmann::ordered_json(nullptr);
         log["change_id"] = data.is_object() ? data["change_id"] : nlohmann::ordered_json(nullptr);  // "no" = trả cache
         log["generated_in_ms"] = data.is_object() ? data["metrics"]["generated_in_ms"] : nlohmann::ordered_json(nullptr);
+        // 8.3: số liệu cho /metrics.
+        ktv::Metrics& metrics = health.metrics;
+        metrics.add("ktv_messages_total", "status=\"" + status + "\"");
+        metrics.observe("ktv_plan_seconds", "", plan_ms / 1000);
+        metrics.observe("ktv_queue_seconds", "", std::chrono::duration<double>(started - job.queued).count());
+        if (data.is_object()) {
+            metrics.add("ktv_cache_total", std::string("result=\"") + (published.cached ? "hit" : "miss") + "\"");
+            metrics.add("ktv_route_changed_total", "value=\"" + data.value("route_changed", "") + "\"");
+        }
         // 8.2: luồng nào, chờ trong hàng bao lâu, tính bao lâu — queue_ms cao = thiếu luồng / replica; plan_ms cao = bài khó.
         log["thread"] = index;
         log["queue_ms"] = std::round(std::chrono::duration<double, std::milli>(started - job.queued).count() * 10) / 10;
@@ -491,6 +507,16 @@ int main(int argc, char** argv) {
             if (std::chrono::steady_clock::now() - last_commit >= std::chrono::seconds(1)) {
                 commit();
                 last_commit = std::chrono::steady_clock::now();
+                // 8.3 (cập nhật mỗi giây): hàng đợi từng luồng; lag = message chưa xong mỗi partition (chưa đọc + đã giao chưa commit).
+                for (int i = 0; i < threads; ++i) {
+                    std::lock_guard<std::mutex> lock(lanes[i]->mutex);
+                    health.metrics.set("ktv_queue_depth", "thread=\"" + std::to_string(i) + "\"", lanes[i]->jobs.size());
+                }
+                health.metrics.clear("ktv_kafka_lag");
+                for (const auto& [partition, at] : consumer.positions()) {
+                    health.metrics.set("ktv_kafka_lag", "partition=\"" + std::to_string(partition) + "\"",
+                                       static_cast<double>(at.first - at.second + tracker.pending(partition)));
+                }
             }
             const long long tick = std::time(nullptr);
             if (health_server && tick - last_check >= kBrokerCheckEvery) {  // chỉ cần khi có /readyz

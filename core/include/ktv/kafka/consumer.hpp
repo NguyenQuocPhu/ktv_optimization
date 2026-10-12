@@ -71,6 +71,10 @@ public:
     // chờ message đang chạy của chúng xong + commit. Không đặt → trả luôn (message dở được giao lại: at-least-once).
     std::function<void(const std::vector<int>& partitions)> on_revoke;
 
+    // 8.3: partition đang giữ → (high watermark, vị trí đọc kế tiếp) — số liệu đã có sẵn trong client, không hỏi broker.
+    // Chưa biết (chưa fetch lần nào) → bỏ qua partition đó.
+    std::map<int, std::pair<long long, long long>> positions();
+
     // Hỏi broker (metadata) xem có nối được không. Dùng cho /readyz: poll() không phân biệt được
     // "đang chờ message" với "chưa bao giờ nối được broker".
     bool reachable(int timeout_ms);

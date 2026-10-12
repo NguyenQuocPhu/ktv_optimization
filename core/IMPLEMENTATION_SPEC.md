@@ -1760,6 +1760,35 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 **Test:** `test_offsets` (chỗ hổng, nhiều partition, thu hồi); `ctest` 19/19. Load test chạy tay bằng script scratch (sinh tải + chạy N replica × M luồng + đo lag) — [ponytail: chưa đưa vào repo; thêm khi cần chạy lại trên staging].
 **Còn lại:** NFR-01 "≤ 5 s" — hỏi PO nghĩa (mỗi KTV kể cả xếp hàng hay thời gian tính); số KTV thật lúc 6h; deploy Compose hay k8s (`compose.yaml` local chưa thêm `--threads`).
 
+### Phase 8.3 — Metrics + dashboard theo dõi (người dùng duyệt 2026-10-10) — phần 1 `/metrics` ✅, phần 2 dashboard 🚧
+
+**Bối cảnh.** Cần theo dõi worker / gateway khi chạy (nhất là batch 6h). `/healthz` chỉ là JSON số đếm của **một** tiến trình, không lịch sử. Chuẩn prod: **Prometheus** (định kỳ lấy số từ `/metrics` của mọi replica, lưu lịch sử) + **Grafana** (dashboard, cảnh báo). **Người dùng chốt:** làm phần 1 `/metrics` trước; trang dashboard tự làm chỉ khi công ty không có Prometheus / Grafana.
+
+**Phần 1 — `GET /metrics` (định dạng text Prometheus `version=0.0.4`, không cần token) ✅:**
+- `adapter/metrics.hpp`: `Metrics` (counter / gauge / histogram, an toàn nhiều luồng, tự in định dạng — không thêm thư viện). Khoảng histogram (giây): 0,005 … 10.
+- **Worker** (cổng `--health-port`, cạnh `/healthz`):
+
+| Số liệu | Loại | Ý nghĩa |
+|---|---|---|
+| `ktv_messages_total{status}` | counter | Message theo statuscode (200 / 422 / 424 OSRM lỗi / 400 / 500 / STALE) |
+| `ktv_cache_total{result=hit\|miss}` | counter | Trả cache 7.20.1b hay tính lại |
+| `ktv_route_changed_total{value=yes\|no}` | counter | 7.28 |
+| `ktv_plan_seconds` | histogram | Thời gian `plan_and_store` (p50 / p95 qua `histogram_quantile`) |
+| `ktv_queue_seconds` | histogram | Chờ trong hàng của luồng — cao = thiếu luồng / replica |
+| `ktv_queue_depth{thread}` | gauge | Số message đang chờ mỗi luồng (cập nhật mỗi giây) |
+| `ktv_kafka_lag{partition}` | gauge | Message chưa xong mỗi partition = (high watermark − vị trí đọc) + đã giao chưa commit; mỗi giây (trễ ≤ 1 s). Partition chưa đọc message nào: vị trí = offset đã commit (hỏi broker), chưa commit = đầu partition |
+| `ktv_uptime_seconds` | gauge | |
+
+- **Gateway** (cổng gateway): `ktv_http_requests_total{route,code}`, `ktv_http_seconds{route}` (histogram), `ktv_http_cache_total{route,result=HIT\|MISS}`; `route` ∈ `route` / `replan` / `suggest` / `other` (path lạ gom `other` để không phình số chuỗi).
+- Tốc độ = hiệu hai lần đọc counter (Prometheus: `rate(ktv_messages_total[1m])`).
+
+**Kiểm (2026-10-10, Kafka dev, 2.107 message dồn, 4 luồng):** đọc `/metrics` giữa chừng thấy lag 4 partition giảm dần về 0, hàng đợi từng luồng, đếm statuscode khớp log (2.085 × 200, 22 × 422), cache miss 2.085, `route_changed` yes 2.085. Sửa trong lúc làm: lag partition chưa đọc message nào bị thiếu (vị trí `-1001`). **Test:** `test_metrics` (định dạng, cộng dồn bucket, 4 luồng × 1.000 lần cộng không mất), `test_gateway_server` (`/metrics` không token, đếm route + mã, histogram). `ctest` 20/20.
+
+**Prod:** Infra cấu hình Prometheus lấy `/metrics` của worker (cổng health) và gateway; k8s: annotation `prometheus.io/scrape: "true"`, `prometheus.io/port`, `prometheus.io/path: /metrics`. Gợi ý cảnh báo: `sum(ktv_kafka_lag) > 1000` quá 2 phút; `rate(ktv_messages_total{status=~"500|424"}[5m]) > 0`; p95 `ktv_plan_seconds` > 2 s.
+
+**Phần 2 — trang `/dashboard` 🚧 (chỉ làm nếu không có Grafana):** HTML từ gateway, mỗi 5 s gọi `/metrics` các tiến trình cấu hình, gom replica và vẽ (message / giây, lag, p50 / p95, hàng đợi, statuscode, cache, `route_changed`); lịch sử chỉ trong trình duyệt. Có Grafana thì thay bằng file dashboard JSON mẫu.
+**Hỏi Infra:** có Prometheus / Grafana không; deploy Compose hay k8s.
+
 ### Phase 9 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.

@@ -94,6 +94,11 @@ int main() {
         CHECK(ok && ok->status == 200 && ok->body == route_a);
 
         auto health = running.client.Get("/healthz");  // healthz không cần token
+        // 8.3: /metrics không cần token; đếm request /api/ theo route + mã trả về, đo thời gian.
+        auto metrics = running.client.Get("/metrics");
+        CHECK(metrics && metrics->status == 200 && metrics->get_header_value("Content-Type").rfind("text/plain", 0) == 0);
+        CHECK(metrics && metrics->body.find("ktv_http_requests_total{route=\"route\",code=\"") != std::string::npos);
+        CHECK(metrics && metrics->body.find("ktv_http_seconds_count{route=\"route\"}") != std::string::npos);
         CHECK(health && health->status == 200);
     }
 

@@ -155,6 +155,37 @@ bool KafkaConsumer::commit(const std::string& topic, const std::map<int, long lo
     fail("commit: " + std::string(rd_kafka_err2str(code)));
 }
 
+std::map<int, std::pair<long long, long long>> KafkaConsumer::positions() {
+    std::map<int, std::pair<long long, long long>> result;
+    rd_kafka_topic_partition_list_t* parts = nullptr;
+    if (rd_kafka_assignment(handle_, &parts) != RD_KAFKA_RESP_ERR_NO_ERROR || !parts) return result;
+    rd_kafka_position(handle_, parts);
+    // Chưa lấy message nào của partition → vị trí chưa biết: dùng offset đã commit (hỏi broker), chưa commit → đầu partition.
+    bool unknown = false;
+    for (int i = 0; i < parts->cnt; ++i) unknown |= parts->elems[i].offset < 0;
+    rd_kafka_topic_partition_list_t* committed = nullptr;
+    if (unknown) {
+        committed = rd_kafka_topic_partition_list_copy(parts);
+        if (rd_kafka_committed(handle_, committed, 1000) != RD_KAFKA_RESP_ERR_NO_ERROR) {
+            rd_kafka_topic_partition_list_destroy(committed);
+            committed = nullptr;
+        }
+    }
+    for (int i = 0; i < parts->cnt; ++i) {
+        const rd_kafka_topic_partition_t& p = parts->elems[i];
+        int64_t low = 0, high = 0;
+        if (rd_kafka_get_watermark_offsets(handle_, p.topic, p.partition, &low, &high) != RD_KAFKA_RESP_ERR_NO_ERROR || high < 0)
+            continue;
+        long long at = p.offset;
+        if (at < 0 && committed) at = committed->elems[i].offset;
+        if (at < 0) at = low;
+        result[p.partition] = {high, at};
+    }
+    if (committed) rd_kafka_topic_partition_list_destroy(committed);
+    rd_kafka_topic_partition_list_destroy(parts);
+    return result;
+}
+
 bool KafkaConsumer::reachable(int timeout_ms) {
     const struct rd_kafka_metadata* metadata = nullptr;  // "struct": trùng tên với hàm rd_kafka_metadata.  // all_topics=0: chỉ hỏi broker + topic đã biết, nhẹ.
     const rd_kafka_resp_err_t code = rd_kafka_metadata(handle_, 0, nullptr, &metadata, timeout_ms);
