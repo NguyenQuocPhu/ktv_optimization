@@ -175,7 +175,9 @@ int main() {
         CHECK(r.warnings.size() == 2);
         for (const auto& cluster : r.response["data"]["clusters"])
             for (const auto& row : cluster["schedule"]) {
-                CHECK(row["entry_type"] != "TASK" || row["task_id"] == 101 || row["task_id"] == 102 || row["task_id"] == 105);
+                // 8.5c: việc đang làm (current_task) cũng ra dòng TASK nhưng seq 0
+                CHECK(row["entry_type"] != "TASK" || row["seq"] == 0 || row["task_id"] == 101 || row["task_id"] == 102 ||
+                      row["task_id"] == 105);
                 if (row["task_id"] == 101) CHECK(row["handle_minutes"] == 120);  // "" → định mức trien_khai_net
             }
     }

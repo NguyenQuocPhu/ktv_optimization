@@ -163,6 +163,10 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
         for (size_t i = 0; i < schedule.size(); ++i) {
             const auto& row = schedule[i];
             const std::string type = row["entry_type"].get<std::string>();
+            if (type == "TASK" && row["seq"] == 0) {  // 8.5c: việc đang làm — chỉ ở đầu cụm 1, không tính tổng
+                CHECK(c == 0 && i == 0 && row["at"] == "" && row["start_at"] == "" && row["end_at"] == metrics["start_at"]);
+                continue;
+            }
             if (type == "IDLE") idle += row["duration_minutes"].get<long long>();
             if (type == "BREAK") rest += row["duration_minutes"].get<long long>();
             // 7.19.2: IDLE chờ khung hẹn nằm cùng cụm với TASK nó chờ (dòng ngay sau).
@@ -224,9 +228,11 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
             next_day.insert(candidate->task_id);
     for (long long id : next_day) CHECK(listed.count(id) == 1);
     for (long long id : listed) {
-        CHECK(next_day.count(id) == 1 || beyond.count(id) == 1);
         CHECK(deferred.count(id) == 1);
-        if (deferred.count(id)) CHECK(deferred[id] == (next_day.count(id) ? "NEXT_DAY" : "BEYOND_K"));
+        // 8.5b: ca chèn trong K bị bỏ vì hết chỗ → NO_CAPACITY; BEYOND_K chỉ cho ca ngoài K.
+        const std::string reason = deferred.count(id) ? deferred[id] : "";
+        CHECK((reason == "NEXT_DAY") == (next_day.count(id) == 1));
+        CHECK(reason == "NEXT_DAY" || reason == "NO_CAPACITY" || (reason == "BEYOND_K" && beyond.count(id) == 1));
     }
     CHECK(deferred.size() == listed.size());
     std::set<long long> expected_ids;

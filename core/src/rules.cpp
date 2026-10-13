@@ -18,8 +18,11 @@ Rules default_rules() {
     Rules rules;
     rules.tiers = {
         {{LATE_CHECKIN, 1}},                       // Tầng 1: đúng hẹn khách hàng.
-        {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1}},  // Tầng 2: hoàn tất đúng hạn, trong ca.
-        {{KM, 1},                                  // Tầng 3: quy về "km tương đương".
+        {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1},   // Tầng 2: hoàn tất đúng hạn, trong ca.
+         {SKIP_INSERTED, 1},                       //   8.5b: bỏ ca chèn: mỗi ngày gấp hơn 1 (0 ngày = 6) …
+         {SKIP_INSERTED_PRIORITY, 0.25}},          //   … mỗi bậc ưu tiên 0,25 (ca chèn P2–P4: chênh ≤ 0,5 < 1 ngày)
+        {{PRIORITY_ORDER, 1}},                     // Tầng 3 (8.5a): cùng khung hẹn thì ưu tiên cao trước, thắng km.
+        {{KM, 1},                                  // Tầng 4: quy về "km tương đương".
          {LATE_MINUTES, 0.1},                      //   10 phút trễ ≈ 1 km
          {TRAVEL_MINUTES, 0.05},                   //   20 phút đi ≈ 1 km
          {AREA_REENTRY, 2},                        //   quay lại lô 1 lần ≈ 2 km
@@ -32,7 +35,10 @@ Rules default_rules() {
     // (1 ca trễ hẹn ≈ 1 km × trọng số ưu tiên: P4 1 km … P1 4 km) để phân xử các tuyến dài gần bằng nhau.
     // Đo 400 biến thể sample_in (chim bay): km −23% so SLA, trễ hẹn +30% (trễ hẹn ở tầng 2: km −25%, trễ hẹn +69%).
     rules.route_tiers = {
-        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 3}, {LATE_CHECKIN, 1}},
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 3}, {LATE_CHECKIN, 1},
+         // 8.5 [GIẢ ĐỊNH]: đảo ưu tiên 1 cặp ≈ 2 km; bỏ ca chèn 0,5 km / ngày gấp + 0,2 km / bậc ưu tiên (hạn hôm nay
+         // P4 3,2 · P2 3,6 km < trễ hẹn P1 4 km). Phải ở tầng km: ở tầng 2 thì bớt chút km là bỏ.
+         {PRIORITY_ORDER, 2}, {SKIP_INSERTED, 0.5}, {SKIP_INSERTED_PRIORITY, 0.2}},
         {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1}},
         {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},
     };
@@ -46,7 +52,10 @@ Tiers mix_tiers_from(double sla_share, double breach_km) {
     const double breach = sla_share / (1 - sla_share) * breach_km;
     return {
         {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 3},
-         {LATE_CHECKIN, breach}, {LATE_COMPLETION, breach}, {AFTER_SHIFT, breach}},
+         {LATE_CHECKIN, breach}, {LATE_COMPLETION, breach}, {AFTER_SHIFT, breach},
+         // 8.5 [GIẢ ĐỊNH]: bỏ ca chèn 2,5 km / ngày gấp + 1,2 km / bậc ưu tiên (hạn hôm nay P4 16,2 · P2 18,6 km < 1 ca hẹn
+         // P3 trễ ≈ 23 km; ngày gấp 2,5 > chênh ưu tiên P2–P4 2,4 → vẫn xét ngày trước); đảo ưu tiên 1 cặp ≈ nửa ca trễ.
+         {SKIP_INSERTED, 2.5}, {SKIP_INSERTED_PRIORITY, 1.2}, {PRIORITY_ORDER, breach / 2}},
         {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},
     };
 }
@@ -121,6 +130,7 @@ Rules rules_from_json(const nlohmann::json& data) {
     number("stop_group_radius_m", rules.stop_group_radius_m, 0);
     number("location_change_m", rules.location_change_m, 0);  // 7.30
     number("optional_filter_km", rules.optional_filter_km, 0);
+    number("inserted_overtime_minutes", rules.inserted_overtime_minutes, 0);
     double group_wait = rules.stop_group_max_wait_minutes;
     number("stop_group_max_wait_minutes", group_wait, 0);
     rules.stop_group_max_wait_minutes = static_cast<int>(group_wait);
@@ -190,6 +200,7 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"stop_group_radius_m", rules.stop_group_radius_m},
         {"location_change_m", rules.location_change_m},
         {"optional_filter_km", rules.optional_filter_km},
+        {"inserted_overtime_minutes", rules.inserted_overtime_minutes},
         {"stop_group_max_wait_minutes", rules.stop_group_max_wait_minutes},
         {"current_task_minutes", rules.current_task_minutes},
         {"average_speed_kmh", rules.average_speed_kmh},

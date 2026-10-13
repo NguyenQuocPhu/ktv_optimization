@@ -37,7 +37,9 @@ Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes plan
     if (task.appointment) {
         d.opens = task.appointment;
         if (task.sla_minutes) d.due = *task.appointment + *task.sla_minutes;  // Check-in ≤ B = A + SLA.
-        else d.complete_by = start_of_day(*task.appointment) + 1439;          // Xong trong ngày hẹn.
+        // Xong trong ngày hẹn: không có SLA, hoặc loại "hoàn tất trong ngày hẹn" (Giao TB Cam) dù input có SLA (8.5b).
+        if (!task.sla_minutes || kind.on_time == OnTime::DoneSameAppointmentDay)
+            d.complete_by = start_of_day(*task.appointment) + 1439;
         return d;
     }
     // Không hẹn: "trong ngày tạo phiếu / trong tháng" lấy theo create_date nếu có, không thì planned_at.

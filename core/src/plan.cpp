@@ -56,7 +56,7 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
     const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
     const double priority = priority_score(task, kind, resolve_deadlines(task, kind, now), now, rules);
     return {{"seq", 0}, {"entry_type", "DEFERRED"}, {"at", ""}, {"start_at", ""}, {"end_at", ""},
-            {"task_id", task.task_id}, {"location", task.location}, {"latlng", latlng(*task.latlng, 6)},
+            {"task_id", task.task_id}, {"location", task.location}, {"latlng", task.latlng ? latlng(*task.latlng, 6) : ""},
             {"task_role", "inserted"}, {"priority", priority}, {"insert_reason", reason},
             {"task_group_id", task.task_group_id}, {"task_group_name", task.task_group_name},
             {"task_type_id", task.task_type_id}, {"task_type_name", task.task_type_name},
@@ -67,6 +67,17 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
             {"contract_no", task.contract_no.value_or("")}, {"contract_name", task.contract_name},
             {"timezone", task.timezone}, {"appointment", echo_datetime(task.appointment)},
             {"complete_date", echo_datetime(task.complete_date)}};
+}
+
+// 8.5c: việc đang làm (staff.current_task) — workbook (6) sheet 01/06 "khóa ở đầu tuyến": dòng TASK đầu cụm 1, seq 0
+// (không số thẻ, UAT case 27/29), end_at = giờ dự kiến xong (= giờ xuất phát của tuyến). Không có giờ check-in thật trong
+// IN → at / start_at / checkindate "". Không đếm vào task_count, km, metrics.
+ojson current_row(const Task& task, Minutes done, Minutes now, const Rules& rules) {
+    ojson row = deferred_row(task, "", now, rules);
+    row["entry_type"] = "TASK";
+    row["end_at"] = format_datetime(done);
+    row["task_role"] = kind_or_default(task.task_group_name, task.task_type_name).extra ? "inserted" : "main";
+    return row;
 }
 
 // ---- Giải thích tuyến (--explain): chi phí theo tầng/rule + so vài phương án khác. ----
@@ -382,6 +393,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         for (const auto& [task, reason] : deferred) spots.push_back({task, 0.0, 0.0});
         const ClusterSummary summary = summarize_clusters(spots, staff.plots, 1e9).front();  // một cụm duy nhất
         ojson schedule = ojson::array();
+        if (worklist.current_task) schedule.push_back(current_row(*worklist.current_task, start, now, rules));
         for (const auto& [task, reason] : deferred) schedule.push_back(deferred_row(*task, reason, now, rules));
         ojson clusters = ojson::array({{{"cluster_seg", 1}, {"cluster_code", summary.code}, {"name", summary.name},
                                         {"center", latlng(summary.center)}, {"radius_m", std::llround(summary.radius_km * 1000)},
@@ -401,6 +413,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         return result;
     };
     if (routed_stops.empty() && spare_stops.empty() && !deferred.empty()) return deferred_only();
+    // ponytail: chỉ còn việc đang làm (không ca nào khác) vẫn 422 như trước — summarize_clusters cần ít nhất 1 ca có toạ độ.
     if ((routed_stops.empty() && spare_stops.empty()) || routed_stops.size() > static_cast<size_t>(kMaxStops)) {
         result.response = error_response("422", routed_stops.empty() ? "Không có công việc để dựng tuyến" : "Quá " + std::to_string(kMaxStops) + " điểm dừng cho một KTV",
                                          message.message_id, server_now);
@@ -436,7 +449,8 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         points.push_back(*stop_anchor(stop).latlng);
         int service = 0;
         std::optional<Minutes> opens, due, complete_by;
-        double weight = 0, urgency = 0;
+        double weight = 0, urgency = 0, skip = 0, skip_priority = 0;
+        bool inserted = true;  // 8.5b: điểm dừng toàn ca chèn → được bỏ khi hết chỗ
         for (const Task* task : stop.tasks) {
             const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);  // Ngoài danh mục: chỉ lọt qua khi nới lỏng.
             const Deadlines d = resolve_deadlines(*task, kind, now);
@@ -450,6 +464,12 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             const int days_left = d.complete_by ? workdays_until(now, *d.complete_by) : 0;
             const double own = kind.extra && d.complete_by ? static_cast<double>(std::max(0, rules.k_month_days - days_left)) : 0.0;
             urgency = std::max(urgency, own);
+            // 8.5b: bỏ ca chèn phạt theo chuỗi phân xử UAT: ít ngày còn lại (SKIP_INSERTED) → ưu tiên
+            // (SKIP_INSERTED_PRIORITY) → thuận tuyến (km). Trọng số từng mode giữ "1 ngày > chênh ưu tiên".
+            inserted &= kind.extra;
+            const int days = std::clamp(d.complete_by ? days_left : rules.k_month_days, 0, rules.k_month_days);
+            skip += rules.k_month_days + 1 - days;
+            skip_priority += rules.priority_weight[task->priority_in_day];
         }
         p.service.push_back(service);
         p.opens.push_back(relative(opens));
@@ -457,7 +477,21 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         p.complete_by.push_back(relative(complete_by));
         p.weight.push_back(weight);
         p.urgency.push_back(urgency);
-        p.optional.push_back(static_cast<int>(p.optional.size()) >= n_mandatory);
+        const bool optional = static_cast<int>(p.optional.size()) >= n_mandatory;
+        p.optional.push_back(optional);
+        p.skip_cost.push_back(inserted && !optional ? skip : kNone);  // ca tuỳ chọn (ngoài K) giữ luật 7.24
+        p.skip_priority.push_back(inserted && !optional ? skip_priority : 0);
+        if (inserted && !optional) p.inserted |= Mask{1} << (p.skip_cost.size() - 1);
+    }
+    // 8.5a: cặp ca có khung hẹn [A, B] chồng nhau → ca ưu tiên thấp làm trước ca ưu tiên cao bị phạt PRIORITY_ORDER.
+    for (int j = 0; j < static_cast<int>(all_stops.size()); ++j) {
+        Mask mask = 0;
+        for (int i = 0; i < static_cast<int>(all_stops.size()); ++i)
+            // Chỉ giữa ca CHÍNH: ca chèn có hẹn (Giao TB Cam) được chen trước ca hẹn khi kịp (UAT case 5).
+            if (!p.is_skippable(i) && !p.is_skippable(j) && p.weight[i] < p.weight[j] && p.opens[i] <= p.due[j] &&
+                p.opens[j] <= p.due[i])  // NaN (không hẹn) → false
+                mask |= Mask{1} << i;
+        p.outranks.push_back(mask);
     }
     // Khu vực cho rule "quay lại khu vực đã rời" (AREA_REENTRY): biết lô → theo lô; lô 0 → lùi xuống block
     // (workbook (3): "không có lô thì tính ưu tiên xuống block_id"), chỉ so với task lô 0 khác; lô 0 + block 0 → không
@@ -503,7 +537,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     //   3. ca bắt buộc ≤ max_exact_tasks: giải lại QHĐ chính xác với bắt buộc + ca tuỳ chọn tốt nhất tới đủ max_exact_tasks
     //      (QHĐ tự chọn tập con tối ưu); còn thừa / bắt buộc quá nhiều → 4. cải thiện cục bộ chèn / gỡ từ tuyến hiện có.
     //   Không bước nào làm tuyến ca bắt buộc tệ đi (khóa chỉ giảm). Không có ca ngoài K → chỉ chạy bước 1, như cũ.
-    const Problem whole = p;
+    Problem whole = p;  // 8.5b: inserted_cap gán sau khi giải tuyến chỉ ca chính
     auto subproblem = [&](const std::vector<int>& keep) {  // bài con trên các điểm dừng `keep` (chỉ số trong all_stops)
         Problem q;
         q.travel.km.assign(keep.size() + 1, std::vector<double>(keep.size() + 1));
@@ -523,17 +557,37 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             q.weight.push_back(whole.weight[k]);
             q.urgency.push_back(whole.urgency[k]);
             q.optional.push_back(whole.optional[k]);
-            Mask mask = 0;
-            for (size_t u = 0; u < keep.size(); ++u)
+            q.skip_cost.push_back(whole.skip_cost[k]);
+            q.skip_priority.push_back(whole.skip_priority[k]);
+            if (whole.inserted >> k & 1) q.inserted |= Mask{1} << t;
+            Mask mask = 0, outranks = 0;
+            for (size_t u = 0; u < keep.size(); ++u) {
                 if (whole.same_area[k] >> keep[u] & 1) mask |= Mask{1} << u;
+                if (whole.outranks[k] >> keep[u] & 1) outranks |= Mask{1} << u;
+            }
             q.same_area.push_back(mask);
+            q.outranks.push_back(outranks);
         }
         q.shift_end = whole.shift_end;
+        q.inserted_cap = whole.inserted_cap;
         q.break_open = whole.break_open;
         q.break_latest = whole.break_latest;
         q.break_minutes = whole.break_minutes;
         return q;
     };
+    // 8.5b: mốc giờ xong khi có ca chèn = max(giờ hết ca, giờ xong tuyến chỉ ca chính) + inserted_overtime_minutes.
+    // Ngày ca chính đã quá giờ sẵn: ca chèn chỉ được nhét vào chỗ trống, không kéo tuyến dài thêm quá X′.
+    if (whole.inserted != 0) {
+        std::vector<int> mains;
+        for (int k = 0; k < n_mandatory; ++k)
+            if (!whole.is_skippable(k)) mains.push_back(k);
+        double base = whole.shift_end;
+        if (!mains.empty()) {
+            const Solution only_mains = solve(subproblem(mains), rules);
+            if (!only_mains.steps.empty()) base = std::max(base, only_mains.steps.back().done);
+        }
+        whole.inserted_cap = base + rules.inserted_overtime_minutes;
+    }
     std::vector<int> kept(n_mandatory);  // kept[t] = chỉ số trong all_stops của việc t trong bài đang giải
     std::iota(kept.begin(), kept.end(), 0);
     p = subproblem(kept);
@@ -579,9 +633,9 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     std::vector<char> visited(all_stops.size(), 0);
     for (int t : solution.order)
         if (t != kBreak) visited[kept[t]] = 1;
-    for (int k = n_mandatory; k < static_cast<int>(all_stops.size()); ++k)
-        if (!visited[k])
-            for (const Task* task : all_stops[k].tasks) deferred.push_back({task, "BEYOND_K"});
+    for (int k = 0; k < static_cast<int>(all_stops.size()); ++k)
+        if (!visited[k])  // 8.5b: ca chèn trong K bị bỏ vì hết chỗ → NO_CAPACITY (mã riêng repo)
+            for (const Task* task : all_stops[k].tasks) deferred.push_back({task, k < n_mandatory ? "NO_CAPACITY" : "BEYOND_K"});
     routed_stops.clear();  // từ đây: điểm dừng theo chỉ số của bài đang giải (p)
     for (int k : kept) routed_stops.push_back(all_stops[k]);
     result.routed = 0;
@@ -704,6 +758,9 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         for (auto it = rows[i].begin(); it != rows[i].end(); ++it) ordered[it.key()] = it.value();
         cluster_schedule[c].push_back(std::move(ordered));
     }
+
+    if (worklist.current_task)  // 8.5c: việc đang làm đứng đầu cụm 1, seq 0
+        cluster_schedule[0].insert(cluster_schedule[0].begin(), current_row(*worklist.current_task, start, now, rules));
 
     // 7.20.2: ca tồn không xếp → DEFERRED cuối schedule của cụm có TÂM GẦN NHẤT (cụm của core là đoạn tuyến, ca không
     // xếp không thuộc đoạn nào → suy theo địa lý). Không đếm vào task_count / km / handle / metrics.

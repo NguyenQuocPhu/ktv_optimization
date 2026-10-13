@@ -1855,6 +1855,58 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
 
 **Còn (người dùng để sau).** `--http-threads N` (số luồng HTTP theo số kết nối dự kiến, không theo lõi máy); tách `/healthz`, `/metrics` gateway khỏi nhóm luồng `/suggest` (quá tải → probe timeout → k8s restart pod). Hỏi Mobix / Infra: số kết nối giữ mở tới gateway, có ingress / LB; số pod, `limits.cpu`; OSRM prod. Chạy lại S1 trên staging (Kafka 2 broker, mạng thật).
 
+### Phase 8.5 — Sửa theo UAT ISC (người dùng duyệt 2026-10-13) ✅ đã thực thi
+
+**Bối cảnh.** Chạy 42 case của `ISC - UAT Test Case - AIGoiYSapXepCaVu v1.0` bằng harness `tests/uat/` (dựng IN đúng workbook (6) → `ktv_core plan`, chim bay 30 km/h; `report.txt` + `runs/` IN/OUT từng case). So với Expected người dùng cập nhật: 28 khớp, 4 khớp một phần, 10 khác. Người dùng chốt làm trước 3 việc dưới (case 4, 17, 27/29); các case còn lại xem "Chưa làm".
+
+**8.5a — Ưu tiên cao trước trong cùng khung hẹn (UAT case 4).**
+- Trước: ưu tiên chỉ là `PRIORITY_DELAY` tầng 3 (0,5 × trọng số × giờ muộn) → Vật lý P1 xa 6 km thua Swap P3 gần 2 km (chênh ~4 km > ~1,6).
+- Rule mới **`PRIORITY_ORDER`**: khi tới ca j, cộng số ca **chính** đã làm có khung hẹn [A, B] **chồng** với j mà ưu tiên **thấp hơn** j. `Problem::outranks[j]` (mask) dựng ở `plan.cpp`, `visit()` cộng `popcount(done_mask & outranks[j])`.
+- Khung không chồng (case 2: P1 16–18 vs P3 08–10) → không tính: ưu tiên không phá trình tự khung hẹn.
+- Chỉ giữa ca chính (không ca chèn): ca chèn có hẹn (Giao TB Cam) vẫn được chen trước ca hẹn khi kịp (case 5).
+- Trọng số: mode SLA **tầng riêng** giữa tầng 2 và tầng km (thắng km tuyệt đối, thua trễ hẹn / quá hạn) → mode SLA giờ 4 tầng; mode Kết nối tầng 1 = `breach / 2` (≈ 5,8 km / cặp); mode Tuyến tầng 1 = 2 km / cặp (km vẫn là chính → case 4 ở mode Tuyến vẫn ca gần trước). [GIẢ ĐỊNH]
+
+**8.5b — Ca chèn được bỏ khi hết chỗ (UAT case 17; 16, 22, 24, 25, 41).**
+- Nguồn: UAT case 17 (Expected "Ca Giao thiết bị Cam được chèn" — khoảng trống chỉ đủ 1 ca) + người dùng chốt "ca chèn có thể nới ra muộn giờ trực" (sau chốt lại: chỉ một mức nhỏ — ràng buộc cứng 15′).
+- Ca chèn = ca không neo khung hẹn (`kind.extra`: Giao TB Cam, Thu hồi, Thu bill, cscd). Ca còn **> K** ngày làm việc tới hạn đã là ca tuỳ chọn từ 7.24 (có khoảng trống thật thì chèn, không thì `BEYOND_K`) — không đổi.
+- Trước: ca chèn **trong K** (≤ K ngày, hoặc hạn hôm nay như Cam, Thu bill trúng ngày thanh toán) là ca **bắt buộc** → hết chỗ vẫn xếp, kể cả quá giờ ca, chỉ gắn cờ (case 17: cả Cam lẫn Thu bill vào tuyến, xong sau giờ ca 18′).
+- Nay ca chèn trong K **được bỏ** khi hết chỗ → **DEFERRED `NO_CAPACITY`** (mã riêng repo, như `SPARE_TIME`). Code: `Problem::skip_cost[j]` (phạt nếu bỏ), `may_drop()`; QHĐ chính xác chọn tập con như 7.24; heuristic / LNS / improve được rút / chèn / gỡ các ca này như ca tuỳ chọn (`droppable`). Gsafe chưa có trong danh mục → đang là ca chính loại lạ, vẫn bắt buộc.
+- Phạt bỏ (cộng ở khóa cuối cho mỗi ca chèn không làm), tách 2 rule để mỗi mode chỉnh riêng — đúng chuỗi phân xử UAT **số ngày còn lại → ưu tiên → thuận tuyến (km)**:
+  - **`SKIP_INSERTED`** = Σ ca trong điểm dừng (K + 1 − ngày làm việc còn lại);
+  - **`SKIP_INSERTED_PRIORITY`** = Σ trọng số ưu tiên (ca chèn chỉ P2–P4: 3 … 1).
+  - Bản đầu gộp một công thức (ngày + ưu tiên / 4) × một trọng số → mode Kết nối 1 bậc ưu tiên chỉ ≈ 0,75 km (case 17 thắng sát nút, giảm trọng số là lật) → tách để nâng phần ưu tiên.
+- **Hết chỗ = ràng buộc cứng** (người dùng chốt: "không còn chỗ trống trong giờ trực thì là hết chỗ; chấp nhận quá giờ nhưng chỉ một mức nhỏ"): tuyến có ca chèn trong K thì từ ca chèn đầu tiên trở đi không bước nào được xong sau **`inserted_cap` = max(giờ hết ca, giờ xong tuyến chỉ có ca chính) + `inserted_overtime_minutes` (15′)** (`allowed()` trong `dp.cpp`). Tuyến chỉ có ca chính được giải thêm một lần trong `plan.cpp` (chỉ khi KTV có ca chèn).
+  - Xét cả tuyến, không riêng ca chèn: ca chèn làm trước đẩy ca chính ra sau giờ ca cũng bị chặn.
+  - Ngày ca chính đã quá giờ sẵn (case 30): mốc là giờ xong của tuyến chỉ có ca chính → ca chèn nhét vào khoảng chờ vẫn được, chỉ không kéo tuyến dài thêm quá 15′.
+  - Lịch sử: thử phạt mềm `OVERTIME_MINUTES` (phút quá giờ) trước — tính cho mọi tuyến thì QHĐ đổi 1 ca trễ hẹn lấy bớt 50–76′ quá giờ (+47 ca vỡ hẹn / 2.000 KTV); chỉ tính khi tuyến có ca chèn thì ca chèn bị "phạt oan" cả phần quá giờ do ca hẹn gây ra → bỏ hẳn, thay bằng ràng buộc cứng.
+- Bỏ ca **đã quá hạn hoàn tất trước lúc xuất phát** cộng thêm `LATE_COMPLETION` (làm cũng trễ → bỏ không được rẻ hơn làm).
+- Loại "hoàn tất trong ngày hẹn" (Giao TB Cam) có `complete_by` = cuối ngày hẹn **cả khi input có SLA** (trước chỉ có hạn B → bị coi là còn K ngày, phạt bỏ rẻ) — `sla.cpp`.
+- Trọng số [GIẢ ĐỊNH, chờ PO] — chỉ quyết **bỏ ca nào** khi tranh chỗ và đổi với trễ hẹn / km ("có chỗ hay không" do ràng buộc cứng trên). Chọn sao cho 1 ngày gấp > chênh ưu tiên P2–P4, và bỏ ca hạn hôm nay < trễ 1 ca hẹn:
+
+| Mode | `SKIP_INSERTED` / ngày | `SKIP_INSERTED_PRIORITY` / bậc | Bỏ ca hạn hôm nay P4 / P2 | Ca còn 5 ngày | Ghi chú |
+|---|---|---|---|---|---|
+| SLA (1) | 1, tầng 2 | 0,25, tầng 2 | 6,25 / 6,75 | 1,25–1,75 | dưới trễ hẹn (tầng 1), trên km → không bỏ vì xa |
+| Kết nối (0) | 2,5 km, tầng 1 | 1,2 km, tầng 1 | 16,2 / 18,6 km | 3,7–6,1 km | < 1 ca hẹn P3 trễ ≈ 23,3 km; xa hơn ngưỡng thì bị bỏ dù còn giờ (chờ PO) |
+| Tuyến (2) | 0,5 km, tầng 1 | 0,2 km, tầng 1 | 3,2 / 3,6 km | 0,7–1,1 km | < trễ hẹn P1 4 km; km là chính → case 17 mode Tuyến giữ Thu bill gần hơn 0,6 km thay Cam. Ở tầng 2 thì bớt chút km là bỏ ca chèn |
+
+**8.5c — Dòng việc đang làm (UAT case 27 / 29).** Workbook (6) sheet 01 / 06: `current_task` *"khóa ở đầu tuyến"*. Trước: OUT bỏ hẳn ca đang làm. Nay: dòng **TASK đầu cụm 1, `seq 0`** (không số thẻ — UAT "không còn số thứ tự"), `at` / `start_at` / `checkindate` `""` (IN không có giờ check-in thật), `end_at` = giờ dự kiến xong (= `metrics.start_at`), `task_role` theo loại; current_task không có row trong tasks → dòng tối thiểu, `latlng` `""`. Không đếm vào `task_count`, km, metrics. Chỉ còn ca đang làm (không ca nào khác) vẫn 422 như trước.
+
+**Test.** `test_plan`: 8.5a (3 mode + khung không chồng), 8.5b (ca trực 09:40 → Thu bill `NO_CAPACITY`, Cam được làm; ca trực dài → không bỏ ca nào; mode 0 + 1), 8.5c (dòng đầu seq 0, `end_at`, metrics). Sửa test cũ: mode SLA 4 tầng (`score.tiers`); `test_invariants` nhận dòng seq 0 + lý do `NO_CAPACITY`; `test_pipeline` / `test_normalization` nhận dòng việc đang làm; chạy lúc 23:30 (hết ca) → hóa đơn `NO_CAPACITY` là đúng. ctest 20/20.
+
+**Đo (chim bay, `gen_load.py`, ngày 13/10).**
+- 2.000 KTV thường: thời gian không đổi (p95 12–13 ms, max ~181 ms). Tuyến: 2.039 / 2.085 giữ nguyên; vỡ hẹn 796 → 800 (5 KTV +1, 1 KTV −1 — đều ngày quá tải nặng 9–20 ca chạy LNS, làm tới 19h–4h sáng: do đảo ưu tiên hoặc LNS rơi nghiệm khác); km +0,4%.
+- 200 KTV × 30–63 ca: p95 1.310 → 1.407 ms (+7%), max ~1,9 s (không đổi).
+
+**UAT sau sửa** (`tests/uat/report.txt`): case 4 Vật lý P1 trước; 17 Cam được chèn, Thu bill `NO_CAPACITY`; 25 Thu hồi thuận tuyến thắng Thu bill cùng 3 ngày; 27 hiển thị đủ 8 ca (5 số thứ tự + 1 seq 0 + 2 `NEXT_DAY`); 29 ca vừa check-in là dòng seq 0; 41 Vật lý 16:30 về ON_TIME, 3 Thu bill không kịp `NO_CAPACITY`.
+
+**Chưa làm (người dùng để sau / chờ PO, OA).**
+- Case 14 (Thu bill gần, KTV trống 2h cuối ngày vẫn bị lọc: gate 1 theo km 4 km) — đổi điều kiện theo phút đi thêm + có khoảng trống.
+- Case 25 / 41: ca chèn đẩy ca hẹn xuống AT_RISK — cân nhắc trọng số giảm AT_RISK.
+- Case 31 / 42: ngày không thể kịp hết thì hy sinh 1 ca hay giữ trình tự khung (PO); ca hẹn đã quá hạn xếp ngược giờ hẹn; Thu bill qua ngày thanh toán (`+1 tháng == hôm nay` → `≤`).
+- Case 37: khóa ca "Đang di chuyển" ở đầu tuyến. Case 40: KTV không GPS → OA phải gửi `staff.latlng` (lô / kho).
+- Gsafe chưa có trong danh mục loại tác vụ (đang là loại lạ, ưu tiên mặc định 3).
+- Mã `NO_CAPACITY` + dòng `seq 0` cần OA / Mobix xác nhận (danh sách `insert_reason` workbook còn mở).
+
 ### Phase 9 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 
 **Không đồng nhất với replan tự động.** Replan tự động xử lý thay đổi dữ liệu nguồn (task hoàn tất/mới/hẹn lại). Reoptimize là hành động chủ động của KTV sau khi đã xem một route và muốn chọn một cách tối ưu khác.

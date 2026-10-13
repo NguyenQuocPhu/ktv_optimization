@@ -120,7 +120,11 @@ int main() {
         CHECK(r && r->response["data"]["metrics"]["tasks_total"] == 1);
         for (const auto& cluster : r->response["data"]["clusters"])
             for (const auto& row : cluster["schedule"])
-                CHECK(row["entry_type"] != "TASK" || row["task_id"] != 99);
+                CHECK(row["entry_type"] != "TASK" || row["task_id"] != 99 || row["seq"] == 0);  // 8.5c: seq 0
+        // 8.5c: việc đang làm không có row trong tasks → dòng đầu tối thiểu (không toạ độ), end_at = giờ xuất phát.
+        const auto& head = r->response["data"]["clusters"][0]["schedule"][0];
+        CHECK(head["task_id"] == 99 && head["seq"] == 0 && head["entry_type"] == "TASK" && head["latlng"] == "" &&
+              head["end_at"] == "2026-09-10 09:30:00");
     }
     {  // 7.22: việc đang làm có row trong tasks → còn ½ định mức.
         json current = {{"task_id", 99}, {"task_status_id", 10}, {"task_type_id", 1}};

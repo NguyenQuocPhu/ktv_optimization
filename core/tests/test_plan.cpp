@@ -116,7 +116,7 @@ int main() {
     // --explain: thêm data.score (chi phí từng tầng/rule + phương án so sánh); tuyến QHĐ không thua phương án nào.
     ktv::PlanResult explained = ktv::plan(parsed, ktv::default_rules(), server_now, "", true);
     const auto& score = explained.response["data"]["score"];
-    CHECK(score.is_object() && score["tiers"].size() == 3 && score["alternatives"].size() == 3);
+    CHECK(score.is_object() && score["tiers"].size() == 4 && score["alternatives"].size() == 3);
     CHECK(score["sequence_source"] == "OPTIMAL");
     CHECK(score["raw"]["km"].get<double>() == explained.response["data"]["metrics"]["total_distance_km"].get<double>());
     for (const auto& tier : score["tiers"]) {  // tổng tầng = tổng các rule trong tầng (chi tiết phải khớp số đã chấm)
@@ -124,19 +124,19 @@ int main() {
         for (auto it = tier["rules"].begin(); it != tier["rules"].end(); ++it) sum += it.value().get<double>();
         CHECK(std::abs(sum - tier["total"].get<double>()) < 0.02);
     }
-    const double chosen[3] = {score["tiers"][0]["total"].get<double>(), score["tiers"][1]["total"].get<double>(),
-                              score["tiers"][2]["total"].get<double>()};
+    double chosen[4] = {};  // mode SLA: 4 tầng (8.5a thêm tầng đảo ưu tiên)
+    for (int t = 0; t < 4; ++t) chosen[t] = score["tiers"][t]["total"].get<double>();
     bool never_worse = true;
     for (const auto& alt : score["alternatives"]) {
         if (!alt["feasible"].get<bool>()) continue;
-        for (int t = 0; t < 3; ++t) {
+        for (int t = 0; t < 4; ++t) {
             const double value = alt["tiers"][t].get<double>();
             if (value > chosen[t] + 1e-9) break;               // tệ hơn ở tầng này → QHĐ thắng, đúng
             if (value < chosen[t] - 1e-9) never_worse = false;  // tốt hơn mà các tầng trước bằng → sai
         }
     }
-    CHECK(score["tiers"][2]["rules"].contains("DEADLINE_URGENCY"));
-    CHECK(score["tiers"][2]["rules"]["DEADLINE_URGENCY"].get<double>() > 0);  // hóa đơn (ca chèn) còn 2 ngày ≤ K → có urgency
+    CHECK(score["tiers"][3]["rules"].contains("DEADLINE_URGENCY"));
+    CHECK(score["tiers"][3]["rules"]["DEADLINE_URGENCY"].get<double>() > 0);  // hóa đơn (ca chèn) còn 2 ngày ≤ K → có urgency
     CHECK(never_worse);
     CHECK(!r["data"].contains("score"));  // mặc định không explain: OUT giữ nguyên contract
 
@@ -146,12 +146,12 @@ int main() {
     early["planned_at"] = "2026-09-10 09:20:00";
     early["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 14:00:00";
     early["tasks"]["hoa_don"][0]["latlng"] = "21.1000,105.9000";
-    early["priority_type"] = 1;  // chỉ số tầng [2] dưới là bố cục mode SLA (mặc định Kết nối chỉ có 2 tầng, 7.26)
+    early["priority_type"] = 1;  // chỉ số tầng [3] dưới là bố cục mode SLA (mặc định Kết nối chỉ có 2 tầng, 7.26)
     errors.clear();
     ktv::PlanResult k_filtered = ktv::plan(ktv::parse_message(early, errors), ktv::default_rules(), server_now, "", true);
     CHECK(errors.empty());
     CHECK(k_filtered.response["data"]["metrics"]["tasks_total"] == 1);
-    CHECK(k_filtered.response["data"]["score"]["tiers"][2]["rules"]["DEADLINE_URGENCY"].get<double>() == 0);  // chỉ còn ca chính → urgency 0
+    CHECK(k_filtered.response["data"]["score"]["tiers"][3]["rules"]["DEADLINE_URGENCY"].get<double>() == 0);  // chỉ còn ca chính → urgency 0
     CHECK(k_filtered.unplaced.size() == 1 && k_filtered.unplaced[0] == 5454544);
     int k_deferred = 0;  // 7.20.2: ca bị lọc K vẫn trả về — dòng DEFERRED BEYOND_K, không phải TASK
     for (const auto& cluster : k_filtered.response["data"]["clusters"])
@@ -215,7 +215,7 @@ int main() {
         CHECK(errors.empty());
         CHECK(due_today.unplaced.empty());
         CHECK(due_today.response["data"]["metrics"]["tasks_total"] == 2);
-        CHECK(due_today.response["data"]["score"]["tiers"][2]["rules"]["DEADLINE_URGENCY"].get<double>() > 0);
+        CHECK(due_today.response["data"]["score"]["tiers"][3]["rules"]["DEADLINE_URGENCY"].get<double>() > 0);
     }
     // Ngày 28/09 (2 ngày làm việc ≤ K) thì hóa đơn vẫn xếp, không ca nào bị lọc — đã kiểm ở trên.
     CHECK(result.unplaced.empty());
@@ -249,8 +249,9 @@ int main() {
         CHECK(next_day == 1);
         ktv::PlanResult yesterday = run("2026-09-27 14:00:00");
         CHECK(yesterday.unplaced.empty() && yesterday.response["data"]["metrics"]["tasks_total"] == 2);
-        ktv::PlanResult late_today = run("2026-09-28 23:30:00");  // cuối ngày chạy vẫn là hôm nay
-        CHECK(late_today.unplaced.empty());
+        ktv::PlanResult late_today = run("2026-09-28 23:30:00");  // cuối ngày chạy vẫn là hôm nay (không NEXT_DAY)
+        // 8.5b: hóa đơn (ca chèn) lúc 23:30 đã hết giờ ca → được bỏ (NO_CAPACITY); ca hẹn hôm nay vẫn xếp.
+        CHECK(std::find(late_today.unplaced.begin(), late_today.unplaced.end(), 5454541) == late_today.unplaced.end());
         // Chỉ còn ca ngày sau → 7.20.2: 200, một cụm chỉ có DEFERRED, metrics = 0 (trước: 422).
         json only = message();
         only["tasks"]["trien_khai"][0]["appointment"] = "2026-09-30 09:00:00";
@@ -345,7 +346,7 @@ int main() {
         const json& tiers = route.response["data"]["score"]["tiers"];
         CHECK(tiers[0]["rules"].contains("KM") && tiers[0]["rules"].contains("LATE_CHECKIN") &&
               tiers[1]["rules"].contains("LATE_COMPLETION"));
-        CHECK(sla.response["data"]["score"]["tiers"][2]["rules"].contains("KM"));
+        CHECK(sla.response["data"]["score"]["tiers"][3]["rules"].contains("KM"));
         // 7.26 mặc định 0 = Kết nối: KM + LATE_CHECKIN / LATE_COMPLETION / AFTER_SHIFT chung tầng 1, ca trễ ≈ 0,7/0,3 × Q km.
         const json& mix = plain.response["data"]["score"]["tiers"];
         CHECK(mix[0]["rules"].contains("KM") && mix[0]["rules"].contains("LATE_CHECKIN") &&
@@ -401,6 +402,98 @@ int main() {
         for (const auto& cluster : u["data"]["clusters"])
             for (const auto& row : cluster["schedule"])
                 if (row.value("task_id", 0LL) == 5454541) CHECK(row["priority"] == 76.3);  // 100 × (0,5 + 0,2625)
+    }
+
+    // ---- Phase 8.5 (UAT case 4 / 17 / 27): KTV ở Trung Kính, toạ độ ca = (km đông, km bắc) so với KTV.
+    auto task = [](long long id, const char* group, int group_id, int type_id, const char* type, int status, int priority,
+                   int sla, const std::string& appointment, double east, double north, int handle,
+                   const std::string& complete_date = "") {
+        char ll[48];
+        std::snprintf(ll, sizeof ll, "%.6f,%.6f", 21.0248 + north / 111.2, 105.7961 + east / 103.8);
+        return json{{"task_id", id}, {"task_group_id", group_id}, {"task_group_name", group}, {"task_type_id", type_id},
+                    {"task_type_name", type}, {"task_sub_id", 0}, {"task_sub_name", ""}, {"task_status_id", status},
+                    {"task_status_name", ""}, {"sla", {{"sla_minutes", sla ? json(sla) : json(nullptr)}, {"priority_in_day", priority}}},
+                    {"appointment", appointment}, {"complete_date", complete_date}, {"location", "Nhà " + std::to_string(id)},
+                    {"latlng", ll}, {"handle_minutes", handle}, {"task_plots_id", 2}, {"staff_plots_id", 2}, {"staff_role", 1},
+                    {"block_id", 3434}};
+    };
+    auto day_message = [&](const std::string& planned_at, json trien_khai, json bao_tri, json hoa_don, int mode) {
+        json m = message();
+        m["planned_at"] = planned_at;
+        m["priority_type"] = mode;
+        m["tasks"] = {{"trien_khai", trien_khai}, {"bao_tri", bao_tri}, {"thu_hoi", json::array()}, {"hoa_don", hoa_don},
+                      {"onsite", json::array()}};
+        return m;
+    };
+    struct Outcome {
+        std::vector<long long> order;            // task_id các dòng TASK có seq > 0, theo thứ tự
+        std::map<long long, std::string> deferred;  // task_id → insert_reason
+        json out;
+    };
+    auto run_day = [&](const json& m) {
+        errors.clear();
+        Outcome o{{}, {}, ktv::plan(ktv::parse_message(m, errors), ktv::default_rules(), server_now, "").response};
+        CHECK(o.out["statuscode"] == "200");  // errors chỉ còn cảnh báo (VD SLA swap khác danh mục)
+        for (const auto& cluster : o.out["data"]["clusters"])
+            for (const auto& row : cluster["schedule"]) {
+                if (row["entry_type"] == "TASK" && row["seq"] != 0) o.order.push_back(row["task_id"]);
+                if (row["entry_type"] == "DEFERRED") o.deferred[row["task_id"]] = row["insert_reason"];
+            }
+        return o;
+    };
+    {  // 8.5a (case 4): cùng khung 08:00–10:00, Bảo trì Vật lý P1 xa 6 km vs Swap P3 gần 2 km, cả hai kịp hẹn.
+        for (int mode : {0, 1, 2}) {
+            const Outcome o = run_day(day_message(
+                "2026-09-28 07:30:00",
+                json::array({task(2, "trien_khai", 1, 5, "swap", 97, 3, 120, "2026-09-28 08:00:00", 0, 2, 60)}),
+                json::array({task(1, "bao_tri", 2, 1, "bao_tri_vat_ly", 6, 1, 120, "2026-09-28 08:00:00", 6, 0, 60)}),
+                json::array(), mode));
+            // Mặc định / SLA: ưu tiên cao trước dù xa hơn. Tuyến: đảo 1 cặp ≈ 2 km < km chênh (~4 km) → gần trước.
+            CHECK(o.order == (mode == 2 ? std::vector<long long>{2, 1} : std::vector<long long>{1, 2}));
+        }
+        // Khung KHÔNG chồng (case 2): P1 hẹn 16:00 không được kéo lên trước P3 hẹn 08:00.
+        const Outcome apart = run_day(day_message(
+            "2026-09-28 07:30:00",
+            json::array({task(2, "trien_khai", 1, 5, "swap", 97, 3, 120, "2026-09-28 08:00:00", 0, 2, 60)}),
+            json::array({task(1, "bao_tri", 2, 1, "bao_tri_vat_ly", 6, 1, 120, "2026-09-28 16:00:00", 6, 0, 60)}),
+            json::array(), 0));
+        CHECK((apart.order == std::vector<long long>{2, 1}));
+    }
+    {  // 8.5b (case 17): ca trực tới 09:40 chỉ đủ 1 ca chèn 25′ sau ca hẹn 08:00 (xong 09:00). Giao TB Cam (hạn trong
+       // ngày, P3) vs Thu bill trúng ngày thanh toán (14/08 → 14/09, còn 0 ngày, P4): hoà số ngày → ưu tiên → Cam.
+        auto day = [&](const std::string& available, int mode) {
+            json m = day_message(
+                "2026-09-14 07:30:00",
+                json::array({task(8, "trien_khai", 1, 6, "giao_thiet_bi_cam", 97, 3, 60, "2026-09-14 08:00:00", 2.5, 0.5, 25)}),
+                json::array({task(1, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 60, "2026-09-14 08:00:00", 2, 0, 60)}),
+                json::array({task(9, "hoa_don", 4, 2, "tra_sau", 0, 4, 0, "", 2.5, -0.5, 25, "2026-08-14 10:00:00")}), mode);
+            m["staff"]["available"] = available;
+            return run_day(m);
+        };
+        for (int mode : {0, 1}) {
+            const Outcome tight = day("08:00-09:40", mode);
+            CHECK(tight.deferred.size() == 1 && tight.deferred.count(9) && tight.deferred.at(9) == "NO_CAPACITY");
+            CHECK(std::find(tight.order.begin(), tight.order.end(), 8) != tight.order.end());
+            CHECK(tight.out["data"]["metrics"]["tasks_total"] == 2);
+            const Outcome roomy = day("08:00-17:30", mode);  // đủ chỗ → không bỏ ca nào
+            CHECK(roomy.deferred.empty() && roomy.order.size() == 3);
+        }
+    }
+    {  // 8.5c (case 27/29): việc đang làm → dòng TASK đầu cụm 1, seq 0, end_at = giờ xuất phát, không vào metrics.
+        json m = day_message(
+            "2026-09-28 09:00:00", json::array(),
+            json::array({task(7, "bao_tri", 2, 1, "bao_tri_vat_ly", 10, 1, 60, "2026-09-28 08:30:00", 0, 0, 60),
+                         task(1, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 60, "2026-09-28 11:00:00", 3, 0, 60)}),
+            json::array(), 1);
+        m["staff"]["current_task"] = {{"task_id", 7}, {"task_status_id", 10}, {"task_type_id", 1}};
+        const Outcome o = run_day(m);
+        const json& head = o.out["data"]["clusters"][0]["schedule"][0];
+        CHECK(head["task_id"] == 7 && head["seq"] == 0 && head["entry_type"] == "TASK" && head["task_role"] == "main");
+        CHECK(head["at"] == "" && head["start_at"] == "" && head["checkindate"] == "" && head["latlng"] != "");
+        CHECK(head["end_at"] == o.out["data"]["metrics"]["start_at"]);  // VL 60′ còn ½ → 09:30
+        CHECK(head["end_at"] == "2026-09-28 09:30:00");
+        CHECK((o.order == std::vector<long long>{1}) && o.out["data"]["metrics"]["tasks_total"] == 1);
+        CHECK(o.out["data"]["clusters"][0]["task_count"] == 1);
     }
 
     if (failures) std::cerr << failures << " lỗi\n" << r.dump(2) << "\n";

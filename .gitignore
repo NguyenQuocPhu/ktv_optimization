@@ -83,3 +83,8 @@ Thumbs.db
 API-Goi-y-cong-viec*.xlsx
 SDD*.xlsx
 ISC_MobiX_EventCatalogue*.xlsx
+ISC - UAT Test Case*.xlsx
+ISC_MobiX_PRD*.docx
+
+# Harness UAT: IN/OUT sinh ra mỗi lần chạy (python3 tests/uat/uat_cases.py)
+tests/uat/runs/

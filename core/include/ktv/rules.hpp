@@ -4,8 +4,10 @@
 // Hiểu nhanh:
 //   "Hàm so sánh nhãn" mình đã thống nhất. Mỗi tuyến được chấm một bảng điểm phạt theo tầng:
 //     tầng 1: trễ hẹn check-in       → so tầng này trước
-//     tầng 2: làm xong quá hạn, quá ca → chỉ xét khi tầng 1 bằng nhau
-//     tầng 3: km, phút đi, quay lại lô… cộng có trọng số → chỉ xét khi tầng 1, 2 bằng nhau
+//     tầng 2: làm xong quá hạn, quá ca, bỏ ca chèn → chỉ xét khi tầng 1 bằng nhau
+//     tầng 3: đảo ưu tiên trong cùng khung hẹn (8.5a)
+//     tầng 4: km, phút đi, quay lại lô… cộng có trọng số → chỉ xét khi các tầng trên bằng nhau
+//   (Mode SLA. Mode Kết nối / Tuyến gom một số rule lên tầng 1 có trọng số — xem default_rules.)
 //   Giống xếp hạng bảng đấu: so điểm trước, bằng điểm mới so hiệu số, rồi mới so bàn thắng.
 //   Muốn đổi nghiệp vụ → đổi tầng / trọng số ở đây, KHÔNG phải sửa thuật toán.
 //
@@ -15,7 +17,7 @@
 //   ktv_core print-rules > rules.json       // in bộ đang dùng ra file để sửa
 //
 // Trong file này có:
-//   Rule, kRuleCodes – 9 rule mềm và tên chữ của chúng (dùng trong file JSON)
+//   Rule, kRuleCodes – 14 rule mềm và tên chữ của chúng (dùng trong file JSON)
 //   Rules            – toàn bộ cấu hình: các tầng, trọng số ưu tiên P1–P4, ngưỡng, giả định
 //   default_rules, load_rules, rules_from_json, rules_to_json – tạo / đọc / ghi Rules
 //   mix_tiers_from   – 7.26: sinh bộ tầng mode Kết nối từ tỷ trọng SLA + tỷ giá ca trễ ↔ km
@@ -33,7 +35,7 @@
 
 namespace ktv {
 
-// 9 rule mềm. Với mỗi bước đi tới một việc, dp::visit() tính ra một con số cho từng rule.
+// 14 rule mềm. Với mỗi bước đi tới một việc, dp::visit() tính ra một con số cho từng rule.
 enum Rule {
     LATE_CHECKIN,     // Check-in sau hạn B: cộng trọng số ưu tiên của việc (P1 = 4 … P4 = 1).
     LATE_COMPLETION,  // Làm xong sau hạn hoàn tất: cộng 1.
@@ -46,11 +48,15 @@ enum Rule {
     FINISH,           // Giờ xong việc cuối (phút).
     DEADLINE_URGENCY, // 7.16.2: độ gấp (K − ngày làm việc còn lại) × giờ check-in — chỉ ca chèn (ca chính = 0).
     SKIP_OPTIONAL,    // 7.24: mỗi ca TUỲ CHỌN không làm cộng 1 (× trọng số = ngưỡng "đáng đi thêm", km tương đương).
+    PRIORITY_ORDER,   // 8.5a: mỗi cặp ca có khung hẹn chồng nhau mà ca ưu tiên THẤP làm trước ca ưu tiên cao: cộng 1.
+    SKIP_INSERTED,    // 8.5b: bỏ một ca CHÈN trong K (hết chỗ): cộng K + 1 − ngày làm việc còn lại (phần "gấp").
+    SKIP_INSERTED_PRIORITY,  // 8.5b: bỏ ca chèn: cộng trọng số ưu tiên của ca (P2 3 … P4 1) — tách để mỗi mode chỉnh riêng.
     RULE_COUNT        // Không phải rule: số lượng rule.
 };
 inline constexpr const char* kRuleCodes[RULE_COUNT] = {
     "LATE_CHECKIN", "LATE_COMPLETION", "AFTER_SHIFT", "LATE_MINUTES", "KM",
-    "TRAVEL_MINUTES", "AREA_REENTRY", "PRIORITY_DELAY", "FINISH", "DEADLINE_URGENCY", "SKIP_OPTIONAL"};
+    "TRAVEL_MINUTES", "AREA_REENTRY", "PRIORITY_DELAY", "FINISH", "DEADLINE_URGENCY", "SKIP_OPTIONAL",
+    "PRIORITY_ORDER", "SKIP_INSERTED", "SKIP_INSERTED_PRIORITY"};
 
 inline constexpr int kMaxTiers = 4;  // Tối đa 4 tầng.
 
@@ -95,6 +101,9 @@ struct Rules {
     // 7.24 gate 1 (lọc thô ca tuỳ chọn trước QHĐ): km đi thêm khi chèn rẻ nhất ≥ ngần này → gạt. Rộng hơn trọng số
     // SKIP_OPTIONAL (gate 2, QHĐ quyết thật) để chừa lề cho cận dưới không chặt (OSRM, tuyến chọn theo SLA). 0 = gạt hết.
     double optional_filter_km = 4;
+    // 8.5b: tuyến có ca chèn trong K → giờ xong việc cuối ≤ max(giờ hết ca, giờ xong tuyến chỉ ca chính) + ngần này phút
+    // (ràng buộc cứng; người dùng: "chấp nhận quá giờ, nhưng chỉ một mức nhỏ"). Không chèn được → DEFERRED NO_CAPACITY.
+    double inserted_overtime_minutes = 15;
     std::vector<std::string> force_recompute_triggers;  // Trigger luôn tính lại dù IN không đổi. Mặc định rỗng.
 };
 

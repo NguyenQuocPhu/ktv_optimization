@@ -46,6 +46,8 @@ Visit visit(const Problem& p, Mask done_mask, int i, int j, double clock) {
     // 7.16.2: việc gấp (gần hạn) bị để muộn thì phạt theo giờ check-in; ca chính urgency = 0.
     const double urgency = !optional && j < static_cast<int>(p.urgency.size()) ? p.urgency[j] : 0;
     v.cost[DEADLINE_URGENCY] = urgency * v.checkin / 60;
+    // 8.5a: các ca cùng khung hẹn mà ưu tiên thấp hơn j đã làm trước j → mỗi ca một lần đảo.
+    if (j < static_cast<int>(p.outranks.size())) v.cost[PRIORITY_ORDER] = popcount(done_mask & p.outranks[j]);
     return v;
 }
 
@@ -58,6 +60,9 @@ bool allowed(const Problem& p, Mask mask, const Visit& v) {
     const bool rested = mask & rest_bit(p);
     if (v.task == kBreak) return p.needs_break() && !rested;        // Chỉ nghỉ một lần, khi tuyến cần nghỉ.
     if (p.is_optional(v.task) && v.done > p.shift_end) return false;  // 7.24: ca tuỳ chọn phải xong trong ca (cứng)
+    // 8.5b: từ khi tuyến có ca chèn, không bước nào được xong sau inserted_cap (ca chèn không kéo tuyến quá giờ > X′,
+    // kể cả khi chính nó xong sớm mà đẩy ca chính ra sau).
+    if (v.done > p.inserted_cap && ((mask & p.inserted) || (v.task >= 0 && (p.inserted >> v.task & 1)))) return false;
     return rested || !p.needs_break() || v.done <= p.break_latest;  // Chưa nghỉ: phải xong trước giờ chốt.
 }
 
@@ -94,8 +99,15 @@ struct Search {
     double finish_weight = 0;
     int skip_tier = -1;              // 7.24: tầng + trọng số của SKIP_OPTIONAL
     double skip_weight = 0;
+    int skip_inserted_tier = -1;     // 8.5b: tầng + trọng số của SKIP_INSERTED / SKIP_INSERTED_PRIORITY
+    double skip_inserted_weight = 0;
+    int skip_priority_tier = -1;
+    double skip_priority_weight = 0;
+    int late_completion_tier = -1;   // 8.5b: bỏ ca đã quá hạn từ trước → cộng LATE_COMPLETION như khi làm (trễ)
+    double late_completion_weight = 0;
     Mask mandatory = 0;          // bit các ca bắt buộc (phải có trong tuyến)
     Mask optional_tasks = 0;     // bit các ca tuỳ chọn
+    Mask droppable = 0;          // bit các ca QHĐ được bỏ: tuỳ chọn (7.24) + ca chèn trong K (8.5b)
     std::vector<Label> pool{{0, {}, -1, -1}};  // pool[0] = gốc.
 
     Search(const Problem& problem, const Rules& r) : p(problem), rules(r), tiers(static_cast<int>(r.tiers.size())) {
@@ -103,14 +115,28 @@ struct Search {
             for (auto [rule, weight] : rules.tiers[t]) {
                 if (rule == FINISH && weight) finish_tier = t, finish_weight = weight;
                 if (rule == SKIP_OPTIONAL) skip_tier = t, skip_weight = weight;
+                if (rule == SKIP_INSERTED) skip_inserted_tier = t, skip_inserted_weight = weight;
+                if (rule == SKIP_INSERTED_PRIORITY) skip_priority_tier = t, skip_priority_weight = weight;
+                if (rule == LATE_COMPLETION) late_completion_tier = t, late_completion_weight = weight;
             }
-        for (int j = 0; j < p.size(); ++j) (p.is_optional(j) ? optional_tasks : mandatory) |= Mask{1} << j;
+        for (int j = 0; j < p.size(); ++j) {
+            if (p.is_optional(j)) optional_tasks |= Mask{1} << j;
+            (p.may_drop(j) ? droppable : mandatory) |= Mask{1} << j;
+        }
     }
 
-    // Khóa của một tuyến KẾT THÚC ở nhãn này (đã làm `mask`): cộng phạt cho mỗi ca tuỳ chọn không làm.
+    // Khóa của một tuyến KẾT THÚC ở nhãn này (đã làm `mask`): cộng phạt cho mỗi ca tuỳ chọn / ca chèn không làm.
     Key final_key(const Label& label, Mask mask) const {
         Key k = key(label);
         if (skip_tier >= 0) k[skip_tier] += skip_weight * popcount(optional_tasks & ~mask);
+        for (int j = 0; j < p.size(); ++j) {
+            if (!p.is_skippable(j) || (mask >> j & 1)) continue;
+            if (skip_inserted_tier >= 0) k[skip_inserted_tier] += skip_inserted_weight * p.skip_cost[j];
+            if (skip_priority_tier >= 0 && j < static_cast<int>(p.skip_priority.size()))
+                k[skip_priority_tier] += skip_priority_weight * p.skip_priority[j];
+            // Ca đã quá hạn hoàn tất trước lúc xuất phát: làm cũng trễ → bỏ không được rẻ hơn làm.
+            if (late_completion_tier >= 0 && p.complete_by[j] <= 0) k[late_completion_tier] += late_completion_weight;
+        }
         return k;
     }
 
@@ -174,7 +200,7 @@ struct Search {
             mask |= bit_of(p, j);
             if (j != kBreak) i = j;
         }
-        if (!partial && (mask & mandatory) != mandatory) return kInfeasible;  // Thiếu ca bắt buộc (ca tuỳ chọn được thiếu).
+        if (!partial && (mask & mandatory) != mandatory) return kInfeasible;  // Thiếu ca bắt buộc (ca được bỏ thì được thiếu).
         return final_key(pool[label], mask);
     }
 };
@@ -207,12 +233,12 @@ Solution exact(Search& s) {
             }
         }
 
-    // Kết thúc hợp lệ: đã làm đủ ca BẮT BUỘC (7.24: ca tuỳ chọn làm hay bỏ tùy khóa nhỏ hơn — mỗi ô của bảng đã là một
+    // Kết thúc hợp lệ: đã làm đủ ca BẮT BUỘC (7.24 / 8.5b: ca tuỳ chọn, ca chèn làm hay bỏ tùy khóa nhỏ hơn — mỗi ô của bảng đã là một
     // tập con, chọn tập ở đây không tốn thêm), có nghỉ hoặc không (không nghỉ thì luật chặn bảo đảm xong trước giờ chốt).
     // Không có ca tuỳ chọn → chỉ còn mask ⊇ all_tasks, như trước.
     int best = -1;
     Key best_key{};
-    if (s.mandatory == 0) best = 0, best_key = s.final_key(s.pool[0], 0);  // tuyến rỗng: bỏ mọi ca tuỳ chọn
+    if (s.mandatory == 0) best = 0, best_key = s.final_key(s.pool[0], 0);  // tuyến rỗng: bỏ mọi ca được bỏ
     for (Mask mask = 0; mask <= top; ++mask) {
         if ((mask & s.mandatory) != s.mandatory) continue;
         for (int last = -1; last < n; ++last)
@@ -268,13 +294,13 @@ std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, 
             }
         return improved;
     };
-    // 7.24 chèn rẻ nhất: mỗi ca tuỳ chọn chưa làm thử mọi vị trí (tuyến cần nghỉ mà chưa có nghỉ: thử cả cặp nghỉ + ca),
+    // 7.24 chèn rẻ nhất: mỗi ca được bỏ (tuỳ chọn / ca chèn 8.5b) chưa làm thử mọi vị trí (tuyến cần nghỉ mà chưa có nghỉ: thử cả cặp nghỉ + ca),
     // lấy vị trí khóa nhỏ nhất, nhận nếu khóa giảm. Gỡ: bỏ một ca tuỳ chọn đang làm nếu khóa giảm.
     const Problem& p = s.p;
     auto insert_optional = [&] {
         bool improved = false;
         for (int o = 0; o < p.size(); ++o) {
-            if (!p.is_optional(o) || std::find(order.begin(), order.end(), o) != order.end()) continue;
+            if (!p.may_drop(o) || std::find(order.begin(), order.end(), o) != order.end()) continue;
             const bool add_break = p.needs_break() && std::find(order.begin(), order.end(), kBreak) == order.end();
             std::vector<int> best_candidate;
             Key best_candidate_key = best_key;
@@ -292,7 +318,7 @@ std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, 
     auto remove_optional = [&] {
         bool improved = false;
         for (int a = 0; a < static_cast<int>(order.size());) {
-            if (p.is_optional(order[a])) {
+            if (order[a] != kBreak && p.may_drop(order[a])) {
                 std::vector<int> candidate = order;
                 candidate.erase(candidate.begin() + a);
                 if (take(candidate)) {
@@ -304,7 +330,7 @@ std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, 
         }
         return improved;
     };
-    const bool has_optional = s.optional_tasks != 0;
+    const bool has_optional = s.droppable != 0;
     for (int round = 0; round < rounds; ++round) {
         bool improved = false;
         if (has_optional) improved |= insert_optional();
@@ -326,7 +352,8 @@ std::vector<int> heuristic(Search& s) {
     std::vector<int> order;
     int label = 0, i = -1, done = 0;
     Mask mask = 0;
-    const int need = popcount(s.mandatory);  // 7.24: tham lam chỉ xếp ca bắt buộc; ca tuỳ chọn do improve chèn
+    // 7.24: tham lam xếp ca bắt buộc + ca chèn trong K (8.5b, improve gỡ nếu đáng); ca tuỳ chọn do improve chèn.
+    const int need = popcount(s.mandatory) + popcount(s.droppable & ~s.optional_tasks);
     while (done < need) {
         int best_j = -2;
         Label best{};
@@ -348,7 +375,7 @@ std::vector<int> heuristic(Search& s) {
         mask |= bit_of(p, best_j);
         if (best_j != kBreak) i = best_j, ++done;
     }
-    if (n < 3 && s.optional_tasks == 0) return order;
+    if (n < 3 && s.droppable == 0) return order;
     const std::vector<int> reversed = improve(s, order, true, false, 2);  // điểm xuất phát thứ 2 (2-opt cũ)
     std::vector<int> best;
     Key best_key = kInfeasible;
@@ -559,9 +586,9 @@ std::vector<int> lns(Search& s, std::vector<int> start, int iterations, int wind
             std::vector<int> removed, kept;
             for (size_t q = 0; q < route.size(); ++q) (drop[q] ? removed : kept).push_back(route[q]);
             route.swap(kept);
-            // Ca tuỳ chọn đang bỏ: 1/4 cơ hội được thử chèn lại ở vòng này.
+            // Ca được bỏ đang bỏ: 1/4 cơ hội được thử chèn lại ở vòng này.
             for (int j = 0; j < p.size(); ++j)
-                if (p.is_optional(j) && std::find(current.begin(), current.end(), j) == current.end() && pick(4) == 0)
+                if (p.may_drop(j) && std::find(current.begin(), current.end(), j) == current.end() && pick(4) == 0)
                     removed.push_back(j);
             // Thứ tự dựng: nghỉ trưa trước (thiếu nghỉ thì tuyến dở hay phạm luật); rồi xen kẽ "khó trước" (hạn B sớm,
             // ưu tiên cao) và ngẫu nhiên.
@@ -572,7 +599,7 @@ std::vector<int> lns(Search& s, std::vector<int> start, int iterations, int wind
             }
             std::stable_partition(removed.begin(), removed.end(), [](int j) { return j == kBreak; });
             for (int j : removed) {
-                const bool may_skip = j == kBreak || p.is_optional(j);
+                const bool may_skip = j == kBreak || p.may_drop(j);
                 std::vector<int> chosen = route;
                 Key chosen_key = may_skip ? s.evaluate(route, true) : kInfeasible;
                 bool have = may_skip;

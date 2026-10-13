@@ -76,7 +76,18 @@ struct Problem {
     // 7.24: ca TUỲ CHỌN (ca ngoài K…): được bỏ, mỗi ca bỏ cộng rule SKIP_OPTIONAL; làm thì phải xong ≤ shift_end
     // (ràng buộc cứng) và không tính PRIORITY_DELAY / DEADLINE_URGENCY của chính nó. Rỗng = mọi ca bắt buộc.
     std::vector<char> optional;
+    // 8.5a: outranks[j] = các việc i có khung hẹn [A, B] chồng với j mà ưu tiên THẤP hơn j; làm i trước j → PRIORITY_ORDER
+    // cộng 1 mỗi cặp. Rỗng = không xét.
+    std::vector<Mask> outranks;
+    // 8.5b: ca CHÈN trong K được bỏ khi hết chỗ: skip_cost[j] = điểm SKIP_INSERTED nếu bỏ (kNone = bắt buộc làm). Rỗng =
+    // mọi ca bắt buộc. Tuyến đã làm ca chèn thì mọi bước từ đó phải xong ≤ inserted_cap (ràng buộc cứng; kNone = không chặn).
+    std::vector<double> skip_cost;
+    std::vector<double> skip_priority;  // điểm SKIP_INSERTED_PRIORITY nếu bỏ (Σ trọng số ưu tiên); rỗng = 0
+    Mask inserted = 0;               // bit các ca có skip_cost
+    double inserted_cap = kNone;
     bool is_optional(int j) const { return j >= 0 && j < static_cast<int>(optional.size()) && optional[j]; }
+    bool is_skippable(int j) const { return j >= 0 && j < static_cast<int>(skip_cost.size()) && !std::isnan(skip_cost[j]); }
+    bool may_drop(int j) const { return is_optional(j) || is_skippable(j); }  // QHĐ được bỏ ca này
     bool needs_break() const { return !std::isnan(break_latest); }
     int size() const { return static_cast<int>(service.size()); }  // Số việc.
 };
