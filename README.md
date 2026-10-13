@@ -10,13 +10,13 @@ Không thuộc team routing: gán việc (Optimal Assign), vòng đời checklis
 Optimal Assign ──Kafka IN (task đã gán, 1 KTV/message)──▶ ktv_worker ── tính ──▶ Redis: IN mới nhất + route mỗi KTV
                                                                                    ▲  │
 Mobix ──GET /api/v1/staff/{id}/route──────▶ ktv_gateway (API của team) ── đọc ─────┘  │
-      ◀── 200 route | 202 chưa có ──────────┘                                          │
-Mobix ──GET /api/v1/staff/{id}/replan?latlng=…─▶ ktv_gateway ── IN mới nhất + vị trí ─ tính ─▶ Redis
-      ◀── 200 route (X-Cache MISS/HIT) ─────────┘
+      ◀── 200 route mới nhất | 202 chưa có ─┘                                          │
+Mobix ──POST /api/v1/staff/{id}/suggest {latlng, action_type}─▶ ktv_gateway ── IN mới nhất + vị trí + mode ─ tính ─▶ Redis
+      ◀── 200 bản rút gọn sheet 09 (X-Cache MISS/HIT) ─┘
                     (Phase 7.5: mỗi lần tính đẩy cùng JSON ra Kafka OUT ──▶ Optimal Assign lưu Oracle)
 ```
 
-Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ gateway, hoặc gọi `replan` với vị trí mới để tính lại từ IN mới nhất. Thiết kế chi tiết: [core/IMPLEMENTATION_SPEC.md](core/IMPLEMENTATION_SPEC.md) Phase 7; API cho Mobix: [docs/MOBIX-REPLAN-API-DRAFT.md](docs/MOBIX-REPLAN-API-DRAFT.md).
+Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ gateway, hoặc gọi `POST /suggest` với vị trí + mode để tính lại từ IN mới nhất. Thiết kế chi tiết: [core/IMPLEMENTATION_SPEC.md](core/IMPLEMENTATION_SPEC.md) Phase 7; API cho Mobix: [docs/MOBIX-REPLAN-API-DRAFT.md](docs/MOBIX-REPLAN-API-DRAFT.md).
 
 **Trạng thái hiện tại** (2026-10-01):
 
@@ -24,8 +24,8 @@ Worker tính sẵn route mỗi khi OA gửi IN mới; Mobix đọc route từ ga
 |---|---|
 | Lõi `plan()`: parse → lọc → SLA → OSRM → QHĐ → cụm → response | ✅ |
 | `ktv_worker` đọc Kafka IN → state + route vào Redis (`--redis`) | ✅ Phase 7.1–7.3 |
-| `ktv_gateway` `GET /staff/{id}/route` + `GET /staff/{id}/replan` (Redis) | ✅ Phase 7.4 |
-| `ktv_gateway` `GET /staff/{id}/suggest?latlng=&action_type=` — API Mobix theo sheet 09 (bản rút gọn) | ✅ Phase 7.29 |
+| `ktv_gateway` `GET /staff/{id}/route` (bản mới nhất) | ✅ Phase 7.4 |
+| `ktv_gateway` `POST /staff/{id}/suggest` body `{latlng, action_type, latlng_at?}` — API Mobix theo sheet 09 (bản rút gọn); `/replan` đã xóa | ✅ Phase 7.29, 7.31 |
 | Produce Kafka OUT (worker + gateway) | ✅ Phase 7.5 (chờ SYS cấp topic OUT thật) |
 | Compose chạy worker + gateway + Redis + Kafka local | ✅ Phase 7.6 |
 
@@ -74,7 +74,7 @@ Bản Python cũ (`src/ktv_routing`, `simulator/`, `research/`, `tests/`) đã x
 |---|---|
 | `ktv_core` | CLI local: `plan` (JSON/JSONL → response JSONL), `validate`, `print-rules` |
 | `ktv_worker` | Kafka worker: đọc topic IN → `plan()` → ghi response ra stdout/file, commit offset sau khi ghi xong; `/healthz` tùy chọn |
-| `ktv_gateway` | Gateway API của team: `GET /api/v1/staff/{staff_id}/route?date=`, `GET /api/v1/staff/{staff_id}/replan?latlng=&latlng_at=` (cần `--redis`), `/healthz` (store RAM hoặc Redis, nạp từ file OUT) — đồ nghề dev; API `replan` là Phase 7A |
+| `ktv_gateway` | Gateway API của team: `GET /api/v1/staff/{staff_id}/route` (bản mới nhất), `POST /api/v1/staff/{staff_id}/suggest` (cần `--redis`), `/healthz` `/readyz` `/metrics` |
 
 ## Build & test
 
@@ -118,11 +118,11 @@ core/build/ktv_core validate request.json             # chỉ kiểm tra contrac
 
 # Gateway + Redis (worker ghi state/route vào cùng Redis, xem mục Kafka worker)
 core/build/ktv_gateway --port 8080 --token secret --redis 127.0.0.1:6379 --redis-prefix ktv:
-# → GET http://127.0.0.1:8080/api/v1/staff/{staff_id}/route?date=YYYY-MM-DD
-# → GET http://127.0.0.1:8080/api/v1/staff/{staff_id}/replan?latlng=21.02,105.79&latlng_at=2026-10-01%2009:20:00
+# → GET  http://127.0.0.1:8080/api/v1/staff/{staff_id}/route                       (bản mới nhất)
+# → POST http://127.0.0.1:8080/api/v1/staff/{staff_id}/suggest  body {"latlng":"21.02,105.79","action_type":0,"latlng_at":"2026-10-01 09:20:30"}
 # thêm --osrm URL, --rules rules.json như ktv_core; --at để cố định giờ khi test
-# --env .env: KAFKA_TOPIC_OUT có giá trị thì route replan được đẩy ra OUT (không chờ; lỗi đếm out_failed ở /healthz)
-# Không Redis (đồ nghề dev): --seed file OUT, chỉ đọc route; replan trả 503
+# --env .env: KAFKA_TOPIC_OUT có giá trị thì route /suggest tính ra được đẩy ra OUT (không chờ; lỗi đếm out_failed ở /healthz)
+# Không Redis (đồ nghề dev): --seed file OUT, chỉ đọc route; /suggest trả 503
 ```
 
 Service local bằng Docker (`compose.yaml` chỉ bind vào localhost):
@@ -147,10 +147,11 @@ docker exec -i ktv-kafka /opt/kafka/bin/kafka-console-producer.sh \
 
 H='Authorization: Bearer dev-token'                                   # đổi bằng KTV_GATEWAY_TOKEN khi up
 curl -s -H "$H" localhost:8080/api/v1/staff/DEMO01/route              # route worker tính từ IN (202 nếu chưa xong)
-curl -si -H "$H" 'localhost:8080/api/v1/staff/DEMO01/replan?latlng=21.0450,105.8000'   # X-Cache: MISS
-curl -si -H "$H" 'localhost:8080/api/v1/staff/DEMO01/replan?latlng=21.0450,105.8000'   # X-Cache: HIT
+B='{"latlng":"21.0450,105.8000","action_type":0}'
+curl -si -H "$H" -H 'Content-Type: application/json' -d "$B" localhost:8080/api/v1/staff/DEMO01/suggest   # X-Cache: MISS
+curl -si -H "$H" -H 'Content-Type: application/json' -d "$B" localhost:8080/api/v1/staff/DEMO01/suggest   # X-Cache: HIT
 
-# Kafka OUT: 1 bản DAY_START (worker) + 1 bản MOBIX_REPLAN (replan MISS). data là array 1 phần tử, có change_id:
+# Kafka OUT: 1 bản DAY_START (worker) + 1 bản MOBIX_SUGGEST (suggest MISS). data là array 1 phần tử, có change_id:
 # "yes" = tính mới; "no" = IN không đổi nội dung, trả lại bản cache (data.trace_id = run_code lần tính thật) — 7.20.1
 docker exec ktv-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
   --topic ktv-local-out --from-beginning --timeout-ms 5000 --property print.key=true
@@ -228,7 +229,7 @@ có giây), `event`.
 | `event` | Khi nào | Trường chính |
 |---|---|---|
 | `message` (worker) | Mỗi message IN | `topic` `partition` `offset` `key` `headers` `message_id` `run_code` `staff_id` `statuscode` `message` `errors` (đầy đủ, response chỉ ghi 3 lỗi đầu) `warnings` `tasks` (`received`/`routed` = số dòng TASK/`deferred` = số dòng DEFERRED theo lý do, VD `{"NEXT_DAY":1}`/`skipped_status`/`current`/`missing_location`) `change_id` (`"no"` = trả cache) `sent_to` (`"kafka"` khi thật sự đẩy OUT, không thì `null`) `stored` (route ghi Redis) `used_mobix_loc` `generated_in_ms` `thread` `queue_ms` (chờ trong hàng) `plan_ms` (tính) `total_ms`, `payload` (theo `--log-payload`) |
-| `http` (gateway) | Mỗi request `/api/` (không log `/healthz`, `/readyz`, không log query) | `method` `route` (`route`/`replan`) `staff_id` `http_status` `cache` (HIT/MISS) `statuscode` `message` `total_ms` |
+| `http` (gateway) | Mỗi request `/api/` (không log `/healthz`, `/readyz`, không log body) | `method` `route` (`route`/`suggest`) `staff_id` `http_status` `cache` (HIT/MISS) `statuscode` `message` `total_ms` |
 | `start` / `stop` | Khởi động / dừng | cấu hình (không password) / số message, lý do |
 | `fatal` | Lỗi làm tiến trình thoát | `error`, `exit_code` |
 | `data_issue_new` | Lần đầu gặp một loại cảnh báo dữ liệu | `issue`, `message_id` (đếm đầy đủ ở `/healthz`) |

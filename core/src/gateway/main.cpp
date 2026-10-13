@@ -1,8 +1,8 @@
-// ktv_gateway: API của team cho Mobix — GET /api/v1/staff/{id}/route, GET /api/v1/staff/{id}/replan (cần Redis).
+// ktv_gateway: API của team cho Mobix — GET /api/v1/staff/{id}/route, POST /api/v1/staff/{id}/suggest (cần Redis).
 //   ktv_gateway --port 8080 [--host H] [--seed out.jsonl] [--token T]
 //               [--redis HOST:PORT [--redis-password P] [--redis-prefix ktv:]]
 //               [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"] [--env .env]
-// --env: đọc KAFKA_* (như worker, không cần GROUP_ID/TOPIC_IN); KAFKA_TOPIC_OUT có giá trị thì route replan
+// --env: đọc KAFKA_* (như worker, không cần GROUP_ID/TOPIC_IN); KAFKA_TOPIC_OUT có giá trị thì route /suggest
 //        được đẩy ra Kafka OUT (Phase 7.5). Không --env: không đẩy OUT.
 #include <csignal>
 #include <fstream>
@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
         return fatal("không listen được " + options.host + ":" + std::to_string(options.port), 1);
     start["listen"] = options.host + ":" + std::to_string(options.port);
     start["token"] = !options.token.empty();
-    if (!start.contains("redis")) start["redis"] = nullptr;  // không Redis: /replan trả 503
+    if (!start.contains("redis")) start["redis"] = nullptr;  // không Redis: /suggest trả 503
     ktv::write_log(start);
     std::thread listener([&server] { server->listen_after_bind(); });
     server->wait_until_ready();  // stop() chỉ tác dụng khi server đã chạy

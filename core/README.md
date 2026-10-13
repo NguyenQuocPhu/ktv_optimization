@@ -37,7 +37,7 @@ cluster    cắt cụm theo chặng > 2 km + tóm tắt (tâm, bán kính, km v�
 | adapter/envelope | `include/ktv/adapter/envelope.hpp`, `src/adapter/envelope.cpp` | `Envelope` + `wrap_response` — dùng chung mọi transport (file, Kafka sau này) |
 | adapter/file | `include/ktv/adapter/file.hpp`, `src/adapter/file.cpp` | Vỏ truyền tải local: đọc object/JSONL, sinh envelope |
 | (CLI) | `src/cli/main.cpp` | `ktv_core`: `plan`, `validate`, `print-rules` |
-| (Gateway) | `src/gateway/main.cpp` | `ktv_gateway`: API của team cho Mobix — `GET /staff/{id}/route` (đọc Redis/seed), `GET /staff/{id}/replan` (Redis, tính lại theo vị trí), `GET /staff/{id}/suggest?latlng=&action_type=` (7.29: như replan + mode, trả bản rút gọn sheet 09) |
+| (Gateway) | `src/gateway/main.cpp` | `ktv_gateway`: API của team cho Mobix — `GET /staff/{id}/route` (bản mới nhất, đọc Redis/seed), `POST /staff/{id}/suggest` body `{latlng, action_type, latlng_at?}` (7.29 / 7.31: Redis, tính lại theo vị trí + mode, trả bản rút gọn sheet 09; `/replan` đã xóa) |
 | adapter/publish | `include/ktv/adapter/publish.hpp`, `src/adapter/publish.cpp` | `plan_and_store`: IN → state Redis → `plan()` → route Redis (worker T1, gateway T2) |
 | (Worker) | `src/kafka/main.cpp`, `kafka/config.*`, `kafka/consumer.*`, `kafka/producer.*` | `ktv_worker`: đọc topic IN → `plan_and_store` → ghi response (+ Redis nếu `--redis`) → đẩy OUT nếu có `KAFKA_TOPIC_OUT`, chờ xác nhận rồi commit; `/healthz` tùy chọn. Config qua `.env` |
 
@@ -54,8 +54,8 @@ core/build/ktv_core print-rules > rules.json             # sửa trọng số r�
 # Gateway đọc route đã tính (đồ nghề dev, không tính lại): sinh OUT rồi seed, rồi mở HTTP
 core/build/ktv_core plan artifacts/fake/messages.jsonl --out artifacts/fake/responses_v2.jsonl
 core/build/ktv_gateway --port 8080 --seed artifacts/fake/responses_v2.jsonl --token secret
-# → GET http://127.0.0.1:8080/api/v1/staff/{staff_id}/route?date=YYYY-MM-DD  ·  /healthz
-#   GET .../staff/{staff_id}/replan?latlng=21.02,105.79 cần --redis (không có thì 503)
+# → GET http://127.0.0.1:8080/api/v1/staff/{staff_id}/route (bản mới nhất)  ·  /healthz
+#   POST .../staff/{staff_id}/suggest body {"latlng":"21.02,105.79","action_type":0} cần --redis (không có thì 503)
 
 # Gateway + Redis (nhiều replica, sống qua restart). Khóa: {prefix}state|route|latest|loc|dedup:{...} (gateway/redis_store.hpp)
 core/build/ktv_gateway --port 8080 --token secret \

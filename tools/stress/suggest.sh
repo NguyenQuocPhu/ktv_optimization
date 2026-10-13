@@ -14,7 +14,7 @@ GW=$!
 sleep 2
 for rate in $RATES; do
   python3 - "$N" "$SEED" "$HIT" "$rate$RANDOM" > "$OUTDIR/targets.txt" <<'PY'
-import random, sys
+import base64, json, random, sys
 n, seed, hit = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
 rng = random.Random(sys.argv[4])  # mỗi nấc một bộ vị trí mới: nấc sau không ăn cache của nấc trước
 fixed = {}
@@ -25,12 +25,14 @@ for _ in range(200000):
     else:
         lat, lng = 10.70 + rng.random() * .15, 106.62 + rng.random() * .15   # vị trí mới → MISS (tính lại)
         fixed[sid] = (lat, lng)
-    print(f"GET http://127.0.0.1:18200/api/v1/staff/{sid}/suggest?latlng={lat:.5f},{lng:.5f}&action_type={rng.choice('012')}")
-    print("Authorization: Bearer stress\n")
+    body = json.dumps({"latlng": f"{lat:.5f},{lng:.5f}", "action_type": int(rng.choice("012"))})
+    print(json.dumps({"method": "POST", "url": f"http://127.0.0.1:18200/api/v1/staff/{sid}/suggest",  # POST body JSON
+                      "body": base64.b64encode(body.encode()).decode(),
+                      "header": {"Authorization": ["Bearer stress"], "Content-Type": ["application/json"]}}))
 PY
   python3 "$HERE/mon.py" 3600 gateway=$GW osrm=@ktv-osrm redis=@ktv-redis-dev > "$OUTDIR/mon-$rate.json" &
   MON=$!
-  vegeta attack -targets "$OUTDIR/targets.txt" -rate "$rate" -duration "${SECONDS_PER}s" -timeout 30s -max-workers 2000 -keepalive="${KEEPALIVE:-true}" \
+  vegeta attack -format json -targets "$OUTDIR/targets.txt" -rate "$rate" -duration "${SECONDS_PER}s" -timeout 30s -max-workers 2000 -keepalive="${KEEPALIVE:-true}" \
     > "$OUTDIR/vegeta-$rate.bin"
   kill -TERM $MON; wait $MON || true
   vegeta report -type json < "$OUTDIR/vegeta-$rate.bin" > "$OUTDIR/report-$rate.json"

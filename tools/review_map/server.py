@@ -85,12 +85,16 @@ def follow_out():
         time.sleep(2)
 
 
-def gateway_get(path: str):
-    """Chuyển tiếp GET sang gateway kèm token (trình duyệt không vướng CORS, một tunnel là đủ)."""
+def gateway_call(path: str, body=None):
+    """Chuyển tiếp sang gateway kèm token (trình duyệt không vướng CORS, một tunnel là đủ). body (dict) → POST JSON
+    (POST /suggest, 2026-10-13); không body → GET (VD /route)."""
     if not path.startswith(("/api/v1/", "/healthz", "/readyz", "/metrics")):
         return {"ok": False, "error": "chỉ cho /api/v1/…, /healthz, /readyz, /metrics"}
-    request = urllib.request.Request(SETTINGS["gateway"].rstrip("/") + path,
-                                     headers={"Authorization": "Bearer " + SETTINGS["token"]} if SETTINGS["token"] else {})
+    headers = {"Authorization": "Bearer " + SETTINGS["token"]} if SETTINGS["token"] else {}
+    data = None
+    if body is not None:
+        data, headers["Content-Type"] = json.dumps(body).encode(), "application/json"
+    request = urllib.request.Request(SETTINGS["gateway"].rstrip("/") + path, data=data, headers=headers)
     started = time.monotonic()
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -210,9 +214,6 @@ class Handler(BaseHTTPRequestHandler):
             with OUTS_LOCK:
                 items = [item for item in OUTS if item["id"] > after]
             return self.send(200, json.dumps(items, ensure_ascii=False).encode(), "application/json; charset=utf-8")
-        if path == "/gw":  # /gw?path=/api/v1/staff/X/suggest?latlng=…
-            result = gateway_get((query.get("path") or [""])[0])
-            return self.send(200, json.dumps(result, ensure_ascii=False).encode(), "application/json; charset=utf-8")
         if path == "/road":  # hình học đường bộ cho map: /road?from=lat,lng&to=lat,lng
             def point(name):
                 parts = (query.get(name) or [""])[0].split(",")
@@ -237,7 +238,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):  # noqa: N802
         path = self.path.split("?", 1)[0]
-        if path not in ("/plan", "/kafka/in"):
+        if path not in ("/plan", "/kafka/in", "/gw"):
             return self.send(404, b"not found", "text/plain")
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length).decode("utf-8", "replace")
@@ -248,6 +249,10 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError as error:
             return self.send(400, json.dumps({"ok": False, "error": f"JSON hỏng: {error}"}).encode(),
                              "application/json; charset=utf-8")
+        if path == "/gw":  # {"path": "/api/v1/staff/X/suggest", "body": {...} | null}
+            request = json.loads(body or "{}")
+            result = gateway_call(request.get("path", ""), request.get("body"))
+            return self.send(200, json.dumps(result, ensure_ascii=False).encode(), "application/json; charset=utf-8")
         if path == "/kafka/in":
             if not SETTINGS["topic_in"]:
                 return self.send(400, b'{"ok":false,"error":"server chua bat Pipeline (--topic-in)"}', "application/json")

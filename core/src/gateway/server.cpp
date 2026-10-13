@@ -28,13 +28,13 @@ Metrics g_metrics;
 // Giờ bắt đầu request: pre_routing và logger của httplib chạy cùng một luồng cho cùng một request.
 thread_local std::chrono::steady_clock::time_point t_request_started;
 
-// Một dòng JSON / request /api/ (không log /healthz, /readyz; không log query — latlng là vị trí KTV).
-// VD {"event":"http","route":"replan","staff_id":"00201964","http_status":200,"cache":"MISS","statuscode":"200",...}
+// Một dòng JSON / request /api/ (không log /healthz, /readyz; không log body — latlng là vị trí KTV).
+// VD {"event":"http","route":"suggest","staff_id":"00201964","http_status":200,"cache":"MISS","statuscode":"200",...}
 void log_request(const httplib::Request& request, const httplib::Response& response) {
     if (request.path.rfind("/api/", 0) != 0) return;
     nlohmann::ordered_json line = log_event("http");
     line["method"] = request.method;
-    const size_t staff = request.path.find("/staff/");  // /api/v1/staff/{staff_id}/{route|replan}
+    const size_t staff = request.path.find("/staff/");  // /api/v1/staff/{staff_id}/{route|suggest}
     const size_t slash = staff == std::string::npos ? staff : request.path.find('/', staff + 7);
     line["route"] = slash == std::string::npos ? request.path : request.path.substr(slash + 1);
     line["staff_id"] = slash == std::string::npos ? nlohmann::ordered_json(nullptr)
@@ -50,7 +50,7 @@ void log_request(const httplib::Request& request, const httplib::Response& respo
     write_log(line);
     // 8.3: nhãn route chỉ nhận tên đã biết (path lạ → "other") để số chuỗi số liệu không phình theo request rác.
     std::string route = line["route"].get<std::string>();
-    if (route != "route" && route != "replan" && route != "suggest") route = "other";
+    if (route != "route" && route != "suggest") route = "other";
     g_metrics.add("ktv_http_requests_total", "route=\"" + route + "\",code=\"" + std::to_string(response.status) + "\"");
     g_metrics.observe("ktv_http_seconds", "route=\"" + route + "\"", seconds);
     if (response.has_header("X-Cache"))
@@ -93,29 +93,32 @@ RedisStore& thread_redis(const RedisStore& shared) {
     return *own;
 }
 
-// /replan (Phase 7.4) và /suggest (7.29) dùng chung: lấy IN mới nhất trong cache + vị trí Mobix → plan_and_store (cache
-// hoặc tính lại, ghi route, gửi Kafka OUT khi tính lại). suggest: action_type (sheet 09) làm mode cho LẦN TÍNH NÀY
-// (ghi đè priority_type của IN đã lưu; state không đổi) và trả bản rút gọn sheet 09 thay cho OUT đầy đủ.
-void replan(RedisStore& redis, const GatewayOptions& options, const httplib::Request& request,
-            httplib::Response& response, bool suggest = false) {
+// POST /suggest (7.29, sheet 09; POST body JSON từ 2026-10-13): lấy IN mới nhất trong cache + vị trí Mobix →
+// plan_and_store (cache hoặc tính lại, ghi route, gửi Kafka OUT khi tính lại). action_type làm mode cho LẦN TÍNH NÀY
+// (ghi đè priority_type của IN đã lưu; state không đổi); trả bản rút gọn sheet 09. Body {"latlng", "action_type",
+// "latlng_at"?} — tọa độ không nằm trên URL / access log. (/replan GET cũ đã xóa 2026-10-13.)
+void suggest(RedisStore& redis, const GatewayOptions& options, const httplib::Request& request, httplib::Response& response) {
     const std::string staff_id = request.matches[1];
-    std::optional<int> action_type;
-    if (suggest) {
-        const std::string text = request.has_param("action_type") ? request.get_param_value("action_type") : "";
-        if (text != "0" && text != "1" && text != "2")
-            return error(response, 400, "action_type cần 0 (mặc định: 70% SLA + 30% tuyến), 1 (SLA) hoặc 2 (tuyến)");
-        action_type = text[0] - '0';
-    }
-    const std::optional<Point> point =
-        request.has_param("latlng") ? parse_latlng(request.get_param_value("latlng")) : std::nullopt;
+    const json body = json::parse(request.body, nullptr, false);
+    if (!body.is_object()) return error(response, 400, "body cần JSON object {\"latlng\", \"action_type\", \"latlng_at\"?}");
+    const auto param = [&](const char* key) -> std::optional<std::string> {
+        if (!body.contains(key) || body[key].is_null()) return std::nullopt;
+        if (body[key].is_string()) return body[key].get<std::string>();
+        if (body[key].is_number_integer()) return std::to_string(body[key].get<long long>());
+        return "";  // sai kiểu → kiểm tra bên dưới báo 400
+    };
+    const std::string action = param("action_type").value_or("");
+    if (action != "0" && action != "1" && action != "2")
+        return error(response, 400, "action_type cần 0 (mặc định: 70% SLA + 30% tuyến), 1 (SLA) hoặc 2 (tuyến)");
+    const std::optional<std::string> latlng_text = param("latlng"), latlng_at_text = param("latlng_at");
+    const std::optional<Point> point = latlng_text ? parse_latlng(*latlng_text) : std::nullopt;
     if (!point) return error(response, 400, "latlng cần dạng \"lat,lng\" trong Việt Nam, VD 21.02,105.79");
     const Minutes now = options.fixed_now.value_or(vietnam_now());
-    const std::optional<Minutes> latlng_at =
-        request.has_param("latlng_at") ? parse_datetime(request.get_param_value("latlng_at")) : now;
+    const std::optional<Minutes> latlng_at = latlng_at_text ? parse_datetime(*latlng_at_text) : now;
     if (!latlng_at) return error(response, 400, "latlng_at cần dạng \"YYYY-MM-DD HH:mm:ss\"");
     // Minutes bỏ giây; version vị trí + run_code giữ giây để hai vị trí trong cùng phút vẫn phân biệt (mới hơn thắng).
-    std::string at_text = request.has_param("latlng_at") ? request.get_param_value("latlng_at") : format_datetime(*latlng_at);
-    if (!request.has_param("latlng_at") && !options.fixed_now) {
+    std::string at_text = latlng_at_text ? *latlng_at_text : format_datetime(*latlng_at);
+    if (!latlng_at_text && !options.fixed_now) {
         char second[3];
         std::snprintf(second, sizeof second, "%02d", static_cast<int>(std::time(nullptr) % 60));
         at_text.replace(17, 2, second);
@@ -126,30 +129,28 @@ void replan(RedisStore& redis, const GatewayOptions& options, const httplib::Req
     if (!state) return error(response, 404, "chưa có message IN của KTV " + staff_id);
 
     // Ghi vị trí trước: plan_and_store đọc lại từ Redis (luật 60 phút nằm ở đó). Vị trí cũ hơn bản đang có → giữ bản kia.
-    const nlohmann::json loc = {{"latlng", request.get_param_value("latlng")}, {"latlng_at", at_text}};
+    const nlohmann::json loc = {{"latlng", *latlng_text}, {"latlng_at", at_text}};
     redis.put_loc(staff_id, loc.dump(), {loc_stamp});
 
     json in = json::parse(state->json, nullptr, false);
-    if (action_type && in.is_object()) in["priority_type"] = *action_type;
+    if (in.is_object()) in["priority_type"] = action[0] - '0';
     Envelope envelope = local_envelope(in, staff_id, now);
-    envelope.trigger = suggest ? "MOBIX_SUGGEST" : "MOBIX_REPLAN";
+    envelope.trigger = "MOBIX_SUGGEST";
     envelope.planned_at = now;
-    envelope.run_code = envelope.message_id + (suggest ? "-s" : "-r") + std::to_string(loc_stamp);
+    envelope.run_code = envelope.message_id + "-s" + std::to_string(loc_stamp);
     // 7.20.1b: cùng luật cache với worker (dấu vân tay nội dung + vị trí lệch ≤ location_change_m + hạn tuổi). Trả cache →
-    // HIT, change_id "no", không gửi OUT (Mobix hỏi lại không phải thay đổi để báo OA).
+    // HIT, không gửi OUT (Mobix hỏi lại không phải thay đổi để báo OA).
     const Published published = plan_and_store(in, envelope, now, state->version, options.rules, options.osrm_url,
                                                &redis, options.send_out, /*reply_on_cache=*/false);
-    const auto text = [suggest](const nlohmann::ordered_json& out) {
-        return (suggest ? mobix_response(out) : out).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
+    const auto slim = [](const nlohmann::ordered_json& out) {
+        return mobix_response(out).dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     };
-    if (published.cached) return route(response, text(*published.out), "HIT");
-    if (published.route_stored) return route(response, text(*published.out), "MISS");
+    if (published.cached) return route(response, slim(*published.out), "HIT");
+    if (published.route_stored) return route(response, slim(*published.out), "MISS");
     // Không ghi được: đã có route mới hơn (worker vừa tính từ IN mới) hoặc lỗi tính → trả bản mới nhất đang có.
-    if (const std::optional<std::string> cached = redis.get_latest(staff_id)) {
-        if (!suggest) return route(response, *cached, "HIT");
-        return route(response, text(nlohmann::ordered_json::parse(*cached, nullptr, false)), "HIT");
-    }
-    if (published.out) return route(response, text(*published.out), "MISS");
+    if (const std::optional<std::string> cached = redis.get_latest(staff_id))
+        return route(response, slim(nlohmann::ordered_json::parse(*cached, nullptr, false)), "HIT");
+    if (published.out) return route(response, slim(*published.out), "MISS");
     send_json(response, 202, {{"retry_after", 5}});
 }
 #endif
@@ -194,38 +195,20 @@ std::unique_ptr<httplib::Server> make_gateway_server(RouteStore& store, const Ga
                 [&store, &options](const httplib::Request& request, httplib::Response& response) {
                     if (!authorized(request, options.token)) return error(response, 401, "unauthorized");
                     const std::string staff_id = request.matches[1];
-                    const std::optional<std::string> found =
-                        request.has_param("date") ? store.get(staff_id, request.get_param_value("date"))
-                                                  : store.get_latest(staff_id);
+                    // 2026-10-13: chỉ bản mới nhất của KTV (bỏ ?date=).
+                    const std::optional<std::string> found = store.get_latest(staff_id);
                     if (!found) return send_json(response, 202, {{"retry_after", 5}});  // chưa có bản nào: thử lại sau
                     route(response, *found, nullptr);
                 });
 
-    server->Get(R"(/api/v1/staff/([^/]+)/replan)",
+    // 7.29: API cho Mobix theo sheet 09 — trả bản rút gọn. POST body JSON (2026-10-13).
+    server->Post(R"(/api/v1/staff/([^/]+)/suggest)",
                 [&options, redis](const httplib::Request& request, httplib::Response& response) {
                     if (!authorized(request, options.token)) return error(response, 401, "unauthorized");
 #ifdef KTV_WITH_REDIS
                     if (redis) {
                         try {
-                            return replan(thread_redis(*redis), options, request, response);
-                        } catch (const std::exception& failure) {
-                            // Redis lỗi: gateway vẫn sống, Mobix thử lại (không có offset nào cần giữ như worker).
-                            return send_json(response, 503, {{"retry_after", 5}, {"message", failure.what()}});
-                        }
-                    }
-#endif
-                    (void)redis;
-                    send_json(response, 503, {{"retry_after", 5}, {"message", "replan cần Redis (--redis)"}});
-                });
-
-    // 7.29: API cho Mobix theo sheet 09 — như replan + action_type, trả bản rút gọn. /route, /replan giữ nguyên.
-    server->Get(R"(/api/v1/staff/([^/]+)/suggest)",
-                [&options, redis](const httplib::Request& request, httplib::Response& response) {
-                    if (!authorized(request, options.token)) return error(response, 401, "unauthorized");
-#ifdef KTV_WITH_REDIS
-                    if (redis) {
-                        try {
-                            return replan(thread_redis(*redis), options, request, response, /*suggest=*/true);
+                            return suggest(thread_redis(*redis), options, request, response);
                         } catch (const std::exception& failure) {
                             return send_json(response, 503, {{"retry_after", 5}, {"message", failure.what()}});
                         }

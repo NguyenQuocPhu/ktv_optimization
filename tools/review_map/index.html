@@ -128,9 +128,10 @@
       <p class="note" id="pipenote"></p>
       <h2 style="margin-top:12px">Gọi API gateway <span style="text-transform:none;letter-spacing:0">(click bản đồ = điền latlng)</span></h2>
       <div class="api">
-        <input id="apiurl" spellcheck="false">
+        <input id="apiurl" spellcheck="false" title="POST tới đường này (GET nếu ô body trống, VD /api/v1/staff/X/route)">
         <button id="apigo">Gọi</button>
       </div>
+      <div class="api"><input id="apibody" spellcheck="false" title="body JSON của POST /suggest"></div>
       <pre id="apiresult"></pre>
       <h2 style="margin-top:12px">Kafka OUT nhận được (KTV đang sửa)</h2>
       <ul id="timeline"><li class="t">chưa có — gửi IN hoặc gọi API</li></ul>
@@ -194,8 +195,8 @@ function applyMode() {  // ghi mode vào input (thấy gì gửi nấy) rồi t�
   message.priority_type = Number($("mode").value);
   input.value = JSON.stringify(message, null, 2);
   if (!pipe.enabled) return run();
-  // Pipeline: không tính tại chỗ — mode đi theo IN gửi Kafka (priority_type) và action_type của ô API.
-  $("apiurl").value = $("apiurl").value.replace(/action_type=[^&]*/, `action_type=${$("mode").value}`);
+  // Pipeline: không tính tại chỗ — mode đi theo IN gửi Kafka (priority_type) và action_type của body API.
+  setBody({ action_type: Number($("mode").value) });
 }
 
 async function loadSample() {
@@ -489,10 +490,17 @@ $("mode").onchange = applyMode;
 // ---- Pipeline: IN → Kafka → worker → Kafka OUT (trang nghe OUT, vẽ lại); gọi API gateway → OUT cũng ra Kafka.
 const pipe = { enabled: false, after: 0, items: [], shown: null, lastApiLatlng: null };
 const staffOf = () => { try { return String(JSON.parse(input.value).staff.staff_id); } catch { return ""; } };
+// POST /suggest body JSON (2026-10-13); ô body sửa tay được, click bản đồ / đổi mode chỉ ghi đè field tương ứng.
+function setBody(fields) {
+  let body = {};
+  try { body = JSON.parse($("apibody").value || "{}"); } catch { /* ô body hỏng: viết lại */ }
+  $("apibody").value = JSON.stringify({ ...body, ...fields });
+}
 function apiDefault() {
-  let staff = staffOf(), latlng = "10.7550,106.6600";
+  let latlng = "10.7550,106.6600";
   try { latlng = JSON.parse(input.value).staff.latlng || latlng; } catch { /* giữ mặc định */ }
-  return `/api/v1/staff/${staff}/suggest?latlng=${latlng}&action_type=${$("mode").value}`;
+  setBody({ latlng, action_type: Number($("mode").value) });
+  return `/api/v1/staff/${staffOf()}/suggest`;
 }
 function showOut(item) {
   pipe.shown = item.id;
@@ -522,7 +530,7 @@ async function poll() {
   try {
     const items = await (await fetch(`/kafka/out?after=${pipe.after}`)).json();
     if (items.length) {
-      // OUT do gateway tính (/replan, /suggest): KTV ở latlng của lời gọi API gần nhất (bản rút gọn không có run_code để khớp).
+      // OUT do gateway tính (/suggest): KTV ở latlng của lời gọi API gần nhất (bản rút gọn không có run_code để khớp).
       for (const item of items) if (item.out.trigger?.startsWith("MOBIX_")) item.staff = pipe.lastApiLatlng;
       pipe.items.push(...items);
       pipe.items = pipe.items.slice(-50);
@@ -549,11 +557,12 @@ $("sendin").onclick = async () => {
   }
 };
 $("apigo").onclick = async () => {
-  const path = $("apiurl").value.trim();
-  const latlng = new URLSearchParams(path.split("?")[1] || "").get("latlng");
+  const path = $("apiurl").value.trim(), text = $("apibody").value.trim();
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch { return void ($("apiresult").textContent = "body không phải JSON"); }
   $("apiresult").textContent = "đang gọi…";
-  pipe.lastApiLatlng = latlng;
-  const result = await (await fetch(`/gw?path=${encodeURIComponent(path)}`)).json();
+  if (payload?.latlng) pipe.lastApiLatlng = payload.latlng;
+  const result = await (await fetch("/gw", { method: "POST", body: JSON.stringify({ path, body: payload }) })).json();
   if (!result.ok) return void ($("apiresult").textContent = `lỗi: ${result.error}`);
   let body = result.body;
   try {
@@ -565,8 +574,7 @@ $("apigo").onclick = async () => {
 map.on("click", (event) => {
   if (!pipe.enabled) return;
   const latlng = `${event.latlng.lat.toFixed(5)},${event.latlng.lng.toFixed(5)}`;
-  const url = $("apiurl").value;
-  $("apiurl").value = /latlng=[^&]*/.test(url) ? url.replace(/latlng=[^&]*/, `latlng=${latlng}`) : url + (url.includes("?") ? "&" : "?") + `latlng=${latlng}`;
+  setBody({ latlng });
   L.popup().setLatLng(event.latlng).setContent(`latlng=${latlng} — bấm “Gọi”`).openOn(map);
 });
 

@@ -681,6 +681,7 @@ Authorization: Bearer <token>       Cache-Control: no-store
 | 7.28 ✅ | Field mới `data[0].route_changed` ("yes" / "no"): tuyến có đổi so với bản mới nhất trong cache không — chi tiết bên dưới | đổi tình trạng ca / GPS mà tuyến giữ nguyên → `change_id` "yes", `route_changed` "no"; OUT vẫn ghi + đẩy Kafka |
 | 7.29 ✅ | API mới cho Mobix theo sheet 09: `GET /api/v1/staff/{id}/suggest?latlng=&action_type=` — như `/replan` + `action_type` (mode lần tính này), trả bản rút gọn sheet 09 (`mobix_response`); `/route`, `/replan`, cache, Kafka OUT giữ nguyên — chi tiết bên dưới | body chỉ `success, statuscode, message, data[{staff_id, clusters[{cluster_seg, cluster_code, schedule}], metrics{3 chỉ số}}]` |
 | 7.30 ✅ | Khớp PRD v1.4 BR-10: `route_changed` bỏ `projected_sla` (chỉ thứ tự ca + cụm, DEFERRED; ca Bổ sung chèn / gỡ đã nằm trong thứ tự); vị trí KTV: ngưỡng khoảng cách `rules.json` `location_change_m` (50 m) thay làm tròn tọa độ — chi tiết bên dưới | ca đổi `ON_TIME` → `AT_RISK`, thứ tự giữ → `route_changed` "no"; KTV dịch 33 m → cache, 67 m → tính lại |
+| 7.31 ✅ | API gateway gọn lại (người dùng chốt 2026-10-13): xóa `GET /replan`; `/suggest` thành `POST` body JSON `{latlng, action_type, latlng_at?}`; `GET /route` chỉ trả bản mới nhất (bỏ `?date=`); `/healthz` `/readyz` `/metrics` giữ — chi tiết bên dưới | GET `/suggest`, GET `/replan` → 404; body không phải JSON → 400; `/route?date=` → bản mới nhất |
 | sau | JWT thay token tĩnh, rate limit | |
 
 #### Quyết định cần chốt (đang theo đề xuất)
@@ -1625,6 +1626,27 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 
 **File:** `rules.hpp/.cpp` (`location_change_m`), `publish.hpp/.cpp` (`in_fingerprint(in, planned_at)`, `dedup_meta`, `reuse_cached` so khoảng cách, `route_signature` bỏ `projected_sla`); chú thích gateway. **Test:** `test_publish` — KTV dịch ~33 m → cache (trước đây có thể vượt ranh làm tròn), ~67 m → tính lại, `location_change_m` 0 → 1 m cũng tính lại, đọc từ `rules.json`; ca đầu `ON_TIME` → `AT_RISK` mà thứ tự giữ → `route_changed` "no"; ca 2 sang ngày mai (gỡ) → "yes", về lại hôm nay (chèn) → "yes". `ctest` 18/18.
 **Còn lại từ PRD v1.4 (chưa làm):** mốc B cho Mobix ("Hẹn A – B", "còn X phút" = B − hiện tại); nghĩa "Cách bạn X km" (từ KTV, không phải từ điểm trước); BR-09 "chỉ cập nhật nếu tuyến mới tốt hơn" cho sự kiện vận hành; BR-07 tâm lô / kho vật tư khi chưa có GPS.
+
+##### 7.31 — API gateway: chỉ `POST /suggest` + `GET /route` (người dùng chốt 2026-10-13)
+
+**Bối cảnh.** Tọa độ KTV trên URL (`GET ?latlng=`) dễ lọt vào access log của proxy / ingress; `/suggest` có tác dụng phụ
+(ghi vị trí, tính lại, đẩy Kafka OUT) nên đúng nghĩa là `POST`. Mobix chỉ cần `/suggest` (sheet 09) → `/replan` thừa.
+
+**Làm.**
+- `POST /api/v1/staff/{staff_id}/suggest`, body `{"latlng": "lat,lng", "action_type": 0|1|2, "latlng_at"?: "YYYY-MM-DD HH:mm:ss"}`
+  (`action_type` nhận số nguyên; `staff_id` vẫn trên path như sheet 09). Body không phải JSON object / thiếu / sai field → 400.
+  Kiểm tra, mã lỗi, `X-Cache`, cache, envelope (`MOBIX_SUGGEST`, run_code `-s…`) và bản rút gọn như 7.29. GET → 404.
+- Xóa `GET /replan` hẳn (hàm dùng chung đổi thành `suggest`; không giữ cờ ẩn). Log / metrics nhãn `route` chỉ còn `route`, `suggest`.
+- `GET /route`: luôn `get_latest` (bỏ `?date=`, tham số thừa bị bỏ qua).
+- Đồ nghề: review_map ô "Gọi API" = đường + body JSON (click bản đồ ghi `latlng`, ô mode ghi `action_type`), server `POST /gw`
+  chuyển tiếp POST / GET; `tools/stress/suggest.sh` dùng target JSON của vegeta (POST + body). Tài liệu Mobix:
+  `docs/MOBIX-REPLAN-API-DRAFT.md` viết lại theo API mới.
+
+**Test.** `test_gateway_replan` (Redis thật) chuyển toàn bộ sang `POST /suggest`: 401 / 404 / 400 (thiếu `latlng`, sai,
+giờ sai dạng, thiếu / sai `action_type`, body không phải JSON), GET `/suggest` → 404; MISS → HIT (cùng chỗ, GPS rung, IN mới
+cùng nội dung), đổi vị trí → MISS + run_code `-s` theo `latlng_at`; envelope kiểm trên Kafka OUT + `/route` (bản đầy đủ);
+route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 200. `test_gateway_server`: `/route?date=` → bản mới nhất,
+`/replan` → 404, `POST /suggest` không Redis → 503. `ctest` 20/20.
 
 ### Phase 8 — Bài lớn (> 12 việc): LNS và LNS + QHĐ cửa sổ trượt (người dùng duyệt 2026-10-08) ✅ đã thực thi
 

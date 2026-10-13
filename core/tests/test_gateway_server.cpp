@@ -1,4 +1,4 @@
-// HTTP gateway: /staff/{id}/route 200/202/401, healthz, có/không token, replan không Redis → 503. Chạy trên cổng tạm.
+// HTTP gateway: /staff/{id}/route 200/202/401, healthz, có/không token, /replan ẩn → 404, /suggest không Redis → 503. Chạy trên cổng tạm.
 #include <iostream>
 #include <string>
 #include <thread>
@@ -59,21 +59,22 @@ int main() {
         auto latest = running.client.Get("/api/v1/staff/A/route");
         CHECK(latest && latest->status == 200 && latest->body == route_a);
 
+        // 2026-10-13: /route chỉ trả bản mới nhất; ?date= bị bỏ qua.
         auto by_date = running.client.Get("/api/v1/staff/A/route?date=2026-09-10");
-        CHECK(by_date && by_date->status == 200 && by_date->body == route_a_old);
+        CHECK(by_date && by_date->status == 200 && by_date->body == route_a);
 
         auto missing = running.client.Get("/api/v1/staff/Z/route");
         CHECK(missing && missing->status == 202);
         if (missing) CHECK(nlohmann::json::parse(missing->body)["retry_after"] == 5);
 
-        auto missing_date = running.client.Get("/api/v1/staff/A/route?date=2020-01-01");
-        CHECK(missing_date && missing_date->status == 202);
-
         auto old_path = running.client.Get("/api/v1/worklist/A");  // đường cũ đã bỏ (Phase 7.4)
         CHECK(old_path && old_path->status == 404);
 
-        auto replan = running.client.Get("/api/v1/staff/A/replan?latlng=21.02,105.79");  // không Redis
-        CHECK(replan && replan->status == 503);
+        auto replan = running.client.Get("/api/v1/staff/A/replan?latlng=21.02,105.79");  // tạm ẩn (2026-10-13)
+        CHECK(replan && replan->status == 404);
+        auto suggest = running.client.Post("/api/v1/staff/A/suggest", R"({"latlng":"21.02,105.79","action_type":0})",
+                                           "application/json");  // không Redis
+        CHECK(suggest && suggest->status == 503);
 
         auto ready = running.client.Get("/readyz");  // không Redis: store RAM luôn sẵn sàng
         CHECK(ready && ready->status == 200);
