@@ -47,7 +47,8 @@ enum Rule {
     PRIORITY_DELAY,   // Trọng số ưu tiên × giờ check-in: việc gấp nên làm sớm.
     FINISH,           // Giờ xong việc cuối (phút).
     DEADLINE_URGENCY, // 7.16.2: độ gấp (K − ngày làm việc còn lại) × giờ check-in — chỉ ca chèn (ca chính = 0).
-    SKIP_OPTIONAL,    // 7.24: mỗi ca TUỲ CHỌN không làm cộng 1 (× trọng số = ngưỡng "đáng đi thêm", km tương đương).
+    SKIP_OPTIONAL,    // 7.24: bỏ 1 ca TUỲ CHỌN. 8.7: trọng số = km tương đương / phút được phép đi thêm (plan nhân với
+                      // số phút được phép của KTV: min(optional_max_detour_minutes, optional_spare_ratio × phút trống)).
     PRIORITY_ORDER,   // 8.5a: mỗi cặp ca có khung hẹn chồng nhau mà ca ưu tiên THẤP làm trước ca ưu tiên cao: cộng 1.
     SKIP_INSERTED,    // 8.5b: bỏ một ca CHÈN trong K (hết chỗ): cộng K + 1 − ngày làm việc còn lại (phần "gấp").
     SKIP_INSERTED_PRIORITY,  // 8.5b: bỏ ca chèn: cộng trọng số ưu tiên của ca (P2 3 … P4 1) — tách để mỗi mode chỉnh riêng.
@@ -98,9 +99,12 @@ struct Rules {
     // 7.30 (PRD v1.4 BR-10): KTV dịch chuyển ≤ ngần này mét so với vị trí của lần tính đang cache → coi là input KHÔNG đổi
     // (dùng cache). Thay cho làm tròn tọa độ 4 chữ số (~11 m) của 7.20.1b. [GIẢ ĐỊNH: 50 m = bán kính gom cùng địa chỉ]
     double location_change_m = 50;
-    // 7.24 gate 1 (lọc thô ca tuỳ chọn trước QHĐ): km đi thêm khi chèn rẻ nhất ≥ ngần này → gạt. Rộng hơn trọng số
-    // SKIP_OPTIONAL (gate 2, QHĐ quyết thật) để chừa lề cho cận dưới không chặt (OSRM, tuyến chọn theo SLA). 0 = gạt hết.
-    double optional_filter_km = 4;
+    // 8.7 (UAT case 14) ca tuỳ chọn: phút được phép đi thêm = min(optional_max_detour_minutes,
+    // optional_spare_ratio × phút còn trống của tuyến ca bắt buộc) — rảnh nhiều chịu đi xa hơn, nhưng không quá trần
+    // (case 15: rảnh mà ca xa 90′ thì không đi). Gate 1 gạt ca có phút đi thêm (chèn rẻ nhất) ≥ mức đó; gate 2 = QHĐ với
+    // SKIP_OPTIONAL × mức đó. 0 = gạt hết. Tuyến có ca hẹn trễ → không chèn ca tuỳ chọn. [GIẢ ĐỊNH 20′ / 0,5]
+    double optional_max_detour_minutes = 20;
+    double optional_spare_ratio = 0.5;
     // 8.5b: tuyến có ca chèn trong K → giờ xong việc cuối ≤ max(giờ hết ca, giờ xong tuyến chỉ ca chính) + ngần này phút
     // (ràng buộc cứng; người dùng: "chấp nhận quá giờ, nhưng chỉ một mức nhỏ"). Không chèn được → DEFERRED NO_CAPACITY.
     double inserted_overtime_minutes = 15;

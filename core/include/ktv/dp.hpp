@@ -83,8 +83,11 @@ struct Problem {
     // mọi ca bắt buộc. Tuyến đã làm ca chèn thì mọi bước từ đó phải xong ≤ inserted_cap (ràng buộc cứng; kNone = không chặn).
     std::vector<double> skip_cost;
     std::vector<double> skip_priority;  // điểm SKIP_INSERTED_PRIORITY nếu bỏ (Σ trọng số ưu tiên); rỗng = 0
-    Mask inserted = 0;               // bit các ca có skip_cost
+    Mask inserted = 0;               // bit các ca chèn được bỏ: trong K (skip_cost) + tuỳ chọn (8.7) — chịu inserted_cap
     double inserted_cap = kNone;
+    // 8.6 (UAT case 37): việc KTV đang di chuyển tới — phải là điểm dừng thật đầu tiên (nghỉ trưa trước nó vẫn được).
+    // -1 = không khóa.
+    int first = -1;
     bool is_optional(int j) const { return j >= 0 && j < static_cast<int>(optional.size()) && optional[j]; }
     bool is_skippable(int j) const { return j >= 0 && j < static_cast<int>(skip_cost.size()) && !std::isnan(skip_cost[j]); }
     bool may_drop(int j) const { return is_optional(j) || is_skippable(j); }  // QHĐ được bỏ ca này

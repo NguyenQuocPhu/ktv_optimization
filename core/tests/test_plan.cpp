@@ -190,9 +190,9 @@ int main() {
                     if (rule == ktv::SKIP_OPTIONAL) weight = 0;
         errors.clear();
         CHECK(ktv::plan(ktv::parse_message(near, errors), off, server_now, "").unplaced.size() == 1);
-        // Gate 1 = 0 (gạt mọi ca tuỳ chọn trước QHĐ) → DEFERRED dù gate 2 vẫn bật; đọc được từ rules.json.
-        ktv::Rules gate = ktv::rules_from_json(json{{"optional_filter_km", 0}});
-        CHECK(gate.optional_filter_km == 0 && ktv::default_rules().optional_filter_km == 4);
+        // Trần phút đi thêm = 0 (8.7) → không ca tuỳ chọn nào được chèn; đọc được từ rules.json.
+        ktv::Rules gate = ktv::rules_from_json(json{{"optional_max_detour_minutes", 0}});
+        CHECK(gate.optional_max_detour_minutes == 0 && ktv::default_rules().optional_max_detour_minutes == 20);
         errors.clear();
         CHECK(ktv::plan(ktv::parse_message(near, errors), gate, server_now, "").unplaced.size() == 1);
         // Ca gần nhưng không kịp xong trong ca (ca hết 10:00) → không chèn (ràng buộc cứng của ca tuỳ chọn).
@@ -477,6 +477,16 @@ int main() {
             CHECK(tight.out["data"]["metrics"]["tasks_total"] == 2);
             const Outcome roomy = day("08:00-17:30", mode);  // đủ chỗ → không bỏ ca nào
             CHECK(roomy.deferred.empty() && roomy.order.size() == 3);
+        }
+    }
+    {  // 8.6 (case 37): KTV đang di chuyển tới VL (status 7) → VL đứng đầu dù có ca mới gần hơn, hẹn sớm hơn.
+        for (int mode : {0, 1, 2}) {
+            const Outcome o = run_day(day_message(
+                "2026-09-28 08:20:00", json::array(),
+                json::array({task(1, "bao_tri", 2, 1, "bao_tri_vat_ly", 7, 1, 60, "2026-09-28 09:00:00", 3, 0, 60),
+                             task(2, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 60, "2026-09-28 08:30:00", 0.5, 0.2, 60)}),
+                json::array(), mode));
+            CHECK((o.order == std::vector<long long>{1, 2}));
         }
     }
     {  // 8.5c (case 27/29): việc đang làm → dòng TASK đầu cụm 1, seq 0, end_at = giờ xuất phát, không vào metrics.

@@ -354,7 +354,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     }
     // 7.16.1 + mục C: ca tháng > K bị lọc chỉ khi nhóm của nó không còn ca nào khác được xếp.
     // 7.24 (điều kiện 3 catalogue): ca ngoài K không bị gạt thẳng nữa mà thành ca TUỲ CHỌN — QHĐ chèn khi KTV có
-    // khoảng trống thật (không làm ca nào trễ thêm, thuận tuyến < SKIP_OPTIONAL km tương đương, xong trong ca).
+    // khoảng trống thật (không làm ca nào trễ thêm, đi thêm ≤ phút được phép theo giờ trống — 8.7, xong trong ca).
     std::vector<Stop> routed_stops, spare_stops;
     for (Stop& stop : grouped) {
         bool any_kept = false;
@@ -479,9 +479,22 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         p.urgency.push_back(urgency);
         const bool optional = static_cast<int>(p.optional.size()) >= n_mandatory;
         p.optional.push_back(optional);
+        // 8.6: KTV đang di chuyển tới (trạng thái "Đang di chuyển") → khóa đầu tuyến, không được bỏ. Nhiều ca → task_id nhỏ nhất.
+        bool moving = false;
+        for (const Task* task : stop.tasks) {
+            const TaskStatus* status = find_status(task->task_group_name, task->task_status_id);
+            moving |= status && std::string(status->name) == "Đang di chuyển";
+        }
+        const int index = static_cast<int>(p.skip_cost.size());
+        if (moving && !optional) {
+            if (p.first >= 0) result.warnings.push_back({"", "nhiều ca đang di chuyển tới, khóa task_id nhỏ nhất", "MULTIPLE_MOVING"});
+            if (p.first < 0 || stop.tasks.front()->task_id < all_stops[p.first].tasks.front()->task_id) p.first = index;
+            inserted = false;
+        }
         p.skip_cost.push_back(inserted && !optional ? skip : kNone);  // ca tuỳ chọn (ngoài K) giữ luật 7.24
         p.skip_priority.push_back(inserted && !optional ? skip_priority : 0);
-        if (inserted && !optional) p.inserted |= Mask{1} << (p.skip_cost.size() - 1);
+        // 8.7: ca tuỳ chọn cũng chịu mốc inserted_cap (không được đẩy ca chính ra sau giờ ca quá X′ — UAT case 42).
+        if ((inserted && !optional) || optional) p.inserted |= Mask{1} << (p.skip_cost.size() - 1);
     }
     // 8.5a: cặp ca có khung hẹn [A, B] chồng nhau → ca ưu tiên thấp làm trước ca ưu tiên cao bị phạt PRIORITY_ORDER.
     for (int j = 0; j < static_cast<int>(all_stops.size()); ++j) {
@@ -530,10 +543,9 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
 
     // 7.24 — chọn ca tuỳ chọn mà không đưa hết vào QHĐ:
     //   1. giải ca BẮT BUỘC như trước (≤ max_exact_tasks: chính xác; nhiều hơn: tham lam)
-    //   2. gate 1 — lọc ca tuỳ chọn theo tuyến đó: km đi thêm khi chèn rẻ nhất (giữa 2 điểm liền nhau hoặc gắn cuối)
-    //      ≥ optional_filter_km (4) → gạt. Gate 2 (QHĐ, trọng số SKIP_OPTIONAL 3) mới quyết chèn hay không. Lề 4 > 3 vì
-    //      km chèn rẻ nhất chỉ là cận dưới khi khoảng cách thỏa bất đẳng thức tam giác và tuyến bắt buộc ngắn nhất về km
-    //      (OSRM / tuyến chọn theo SLA có thể lệch).
+    //   2. gate 1 — lọc ca tuỳ chọn theo tuyến đó (8.7): PHÚT đi thêm khi chèn rẻ nhất (giữa 2 điểm liền nhau hoặc gắn
+    //      cuối) ≥ phút được phép = min(optional_max_detour_minutes, optional_spare_ratio × phút còn trống) → gạt. Gate 2
+    //      (QHĐ, SKIP_OPTIONAL × phút được phép, km tương đương) mới quyết chèn hay không.
     //   3. ca bắt buộc ≤ max_exact_tasks: giải lại QHĐ chính xác với bắt buộc + ca tuỳ chọn tốt nhất tới đủ max_exact_tasks
     //      (QHĐ tự chọn tập con tối ưu); còn thừa / bắt buộc quá nhiều → 4. cải thiện cục bộ chèn / gỡ từ tuyến hiện có.
     //   Không bước nào làm tuyến ca bắt buộc tệ đi (khóa chỉ giảm). Không có ca ngoài K → chỉ chạy bước 1, như cũ.
@@ -570,6 +582,8 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         }
         q.shift_end = whole.shift_end;
         q.inserted_cap = whole.inserted_cap;
+        for (size_t t = 0; t < keep.size(); ++t)
+            if (keep[t] == whole.first) q.first = static_cast<int>(t);
         q.break_open = whole.break_open;
         q.break_latest = whole.break_latest;
         q.break_minutes = whole.break_minutes;
@@ -577,36 +591,55 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     };
     // 8.5b: mốc giờ xong khi có ca chèn = max(giờ hết ca, giờ xong tuyến chỉ ca chính) + inserted_overtime_minutes.
     // Ngày ca chính đã quá giờ sẵn: ca chèn chỉ được nhét vào chỗ trống, không kéo tuyến dài thêm quá X′.
+    // Ca bắt buộc toàn ca chính (chỉ có ca tuỳ chọn được bỏ) → dùng luôn giờ xong của lần giải ca bắt buộc bên dưới.
+    bool cap_after_mandatory = false;
     if (whole.inserted != 0) {
         std::vector<int> mains;
         for (int k = 0; k < n_mandatory; ++k)
             if (!whole.is_skippable(k)) mains.push_back(k);
-        double base = whole.shift_end;
-        if (!mains.empty()) {
-            const Solution only_mains = solve(subproblem(mains), rules);
-            if (!only_mains.steps.empty()) base = std::max(base, only_mains.steps.back().done);
+        if (static_cast<int>(mains.size()) == n_mandatory) {
+            cap_after_mandatory = true;
+        } else {
+            double base = whole.shift_end;
+            if (!mains.empty()) {
+                const Solution only_mains = solve(subproblem(mains), rules);
+                if (!only_mains.steps.empty()) base = std::max(base, only_mains.steps.back().done);
+            }
+            whole.inserted_cap = base + rules.inserted_overtime_minutes;
         }
-        whole.inserted_cap = base + rules.inserted_overtime_minutes;
     }
     std::vector<int> kept(n_mandatory);  // kept[t] = chỉ số trong all_stops của việc t trong bài đang giải
     std::iota(kept.begin(), kept.end(), 0);
     p = subproblem(kept);
     Solution solution = solve(p, rules);
-    double skip_km = 0;
-    for (const auto& tier : rules.tiers)
-        for (auto [rule, weight] : tier)
-            if (rule == SKIP_OPTIONAL) skip_km = weight;
+    if (cap_after_mandatory)
+        whole.inserted_cap = std::max(whole.shift_end, solution.steps.empty() ? 0.0 : solution.steps.back().done) +
+                             rules.inserted_overtime_minutes;
+    // 8.7 (UAT case 14): phút còn trống của tuyến bắt buộc = các khoảng chờ (khung hẹn, nghỉ trưa) + từ việc cuối tới hết
+    // ca. Rảnh nhiều → chịu đi thêm xa hơn, không quá trần.
+    double spare_minutes = std::max(0.0, p.shift_end - (solution.steps.empty() ? 0.0 : solution.steps.back().done));
+    for (const Visit& v : solution.steps) spare_minutes += v.checkin - v.arrive;
+    // Tuyến bắt buộc có ca hẹn trễ (sẽ / đã vỡ hẹn) → không có giờ trống thật: không chèn ca tuỳ chọn (người dùng chốt
+    // "đang có khách hẹn bị trễ thì không đi làm ca tùy chọn"; đo 2.000 KTV: không chặn thì ca trễ bị đẩy ra sau giờ ca tới +120′).
+    bool late = false;
+    for (const Visit& v : solution.steps) late |= v.cost[LATE_CHECKIN] > 0;
+    const double allowed =
+        late ? 0.0 : std::min(rules.optional_max_detour_minutes, rules.optional_spare_ratio * spare_minutes);
+    double skip_km = 0;  // gate 2: SKIP_OPTIONAL (km / phút được phép) × phút được phép
+    for (auto& tier : rules.tiers)
+        for (auto& [rule, weight] : tier)
+            if (rule == SKIP_OPTIONAL) skip_km = weight *= allowed;
     if (!spare_stops.empty() && skip_km > 0) {
         std::vector<int> route{0};  // điểm trong bảng khoảng cách của tuyến bắt buộc: xuất phát + từng điểm dừng
         for (int t : solution.order)
             if (t != kBreak) route.push_back(kept[t] + 1);
-        std::vector<std::pair<double, int>> candidates;  // (cận dưới km đi thêm, chỉ số trong all_stops)
+        std::vector<std::pair<double, int>> candidates;  // (cận dưới phút đi thêm, chỉ số trong all_stops)
         for (int k = n_mandatory; k < static_cast<int>(all_stops.size()); ++k) {
-            const auto& km = whole.travel.km;
-            double bound = km[route.back()][k + 1];  // gắn cuối tuyến
+            const auto& minutes = whole.travel.minutes;
+            double bound = minutes[route.back()][k + 1];  // gắn cuối tuyến
             for (size_t r = 0; r + 1 < route.size(); ++r)
-                bound = std::min(bound, km[route[r]][k + 1] + km[k + 1][route[r + 1]] - km[route[r]][route[r + 1]]);
-            if (bound < rules.optional_filter_km) candidates.push_back({bound, k});
+                bound = std::min(bound, minutes[route[r]][k + 1] + minutes[k + 1][route[r + 1]] - minutes[route[r]][route[r + 1]]);
+            if (bound < allowed) candidates.push_back({bound, k});
         }
         std::stable_sort(candidates.begin(), candidates.end(), [&](const auto& a, const auto& b) {
             return std::make_pair(spare_rank(all_stops[a.second]), a.first) < std::make_pair(spare_rank(all_stops[b.second]), b.first);

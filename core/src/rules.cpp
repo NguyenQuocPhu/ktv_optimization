@@ -29,13 +29,14 @@ Rules default_rules() {
          {PRIORITY_DELAY, 0.5},                    //   việc P1 làm muộn 1 giờ ≈ 2 km
          {DEADLINE_URGENCY, 0.5},                  //   việc gấp để muộn 1 giờ ≈ 0,5 km (7.16.2)
          {FINISH, 0.01},                           //   xong muộn 100 phút ≈ 1 km
-         {SKIP_OPTIONAL, 3}},                      //   7.24: bỏ 1 ca tuỳ chọn ≈ 3 km — chèn khi tốn thêm < 3 [GIẢ ĐỊNH, BR-16; 2 → 3 ngày 2026-10-12]
+         {SKIP_OPTIONAL, 0.5}},                    //   8.7: bỏ 1 ca tuỳ chọn ≈ 0,5 km × phút được phép (30 km/h) [GIẢ ĐỊNH, BR-16]
     };
     // Mode Tuyến 100% (7.26, yêu cầu data — thay R2 của 7.23): quãng đường lên tầng 1, kèm trễ hẹn trọng số nhỏ
     // (1 ca trễ hẹn ≈ 1 km × trọng số ưu tiên: P4 1 km … P1 4 km) để phân xử các tuyến dài gần bằng nhau.
     // Đo 400 biến thể sample_in (chim bay): km −23% so SLA, trễ hẹn +30% (trễ hẹn ở tầng 2: km −25%, trễ hẹn +69%).
     rules.route_tiers = {
-        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 3}, {LATE_CHECKIN, 1},
+        // 8.7: SKIP_OPTIONAL 0,1 km / phút được phép (tối đa 2 km < trễ hẹn P1 4 km).
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 0.1}, {LATE_CHECKIN, 1},
          // 8.5 [GIẢ ĐỊNH]: đảo ưu tiên 1 cặp ≈ 2 km; bỏ ca chèn 0,5 km / ngày gấp + 0,2 km / bậc ưu tiên (hạn hôm nay
          // P4 3,2 · P2 3,6 km < trễ hẹn P1 4 km). Phải ở tầng km: ở tầng 2 thì bớt chút km là bỏ.
          {PRIORITY_ORDER, 2}, {SKIP_INSERTED, 0.5}, {SKIP_INSERTED_PRIORITY, 0.2}},
@@ -51,7 +52,8 @@ Tiers mix_tiers_from(double sla_share, double breach_km) {
     // ≈ share/(1 − share) × breach_km km. Không còn tầng "đúng hẹn tuyệt đối": đủ km thì chịu trễ (yêu cầu data).
     const double breach = sla_share / (1 - sla_share) * breach_km;
     return {
-        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 3},
+        // 8.7: SKIP_OPTIONAL 0,5 km / phút được phép (tối đa 10 km < 1 ca hẹn P3 trễ ≈ 23 km).
+        {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 0.5},
          {LATE_CHECKIN, breach}, {LATE_COMPLETION, breach}, {AFTER_SHIFT, breach},
          // 8.5 [GIẢ ĐỊNH]: bỏ ca chèn 2,5 km / ngày gấp + 1,2 km / bậc ưu tiên (hạn hôm nay P4 16,2 · P2 18,6 km < 1 ca hẹn
          // P3 trễ ≈ 23 km; ngày gấp 2,5 > chênh ưu tiên P2–P4 2,4 → vẫn xét ngày trước); đảo ưu tiên 1 cặp ≈ nửa ca trễ.
@@ -129,7 +131,8 @@ Rules rules_from_json(const nlohmann::json& data) {
     rules.k_month_days = static_cast<int>(k_month);
     number("stop_group_radius_m", rules.stop_group_radius_m, 0);
     number("location_change_m", rules.location_change_m, 0);  // 7.30
-    number("optional_filter_km", rules.optional_filter_km, 0);
+    number("optional_max_detour_minutes", rules.optional_max_detour_minutes, 0);
+    number("optional_spare_ratio", rules.optional_spare_ratio, 0);
     number("inserted_overtime_minutes", rules.inserted_overtime_minutes, 0);
     double group_wait = rules.stop_group_max_wait_minutes;
     number("stop_group_max_wait_minutes", group_wait, 0);
@@ -199,7 +202,8 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"k_month_days", rules.k_month_days},
         {"stop_group_radius_m", rules.stop_group_radius_m},
         {"location_change_m", rules.location_change_m},
-        {"optional_filter_km", rules.optional_filter_km},
+        {"optional_max_detour_minutes", rules.optional_max_detour_minutes},
+        {"optional_spare_ratio", rules.optional_spare_ratio},
         {"inserted_overtime_minutes", rules.inserted_overtime_minutes},
         {"stop_group_max_wait_minutes", rules.stop_group_max_wait_minutes},
         {"current_task_minutes", rules.current_task_minutes},

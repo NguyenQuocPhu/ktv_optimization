@@ -1900,12 +1900,30 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
 **UAT sau sửa** (`tests/uat/report.txt`): case 4 Vật lý P1 trước; 17 Cam được chèn, Thu bill `NO_CAPACITY`; 25 Thu hồi thuận tuyến thắng Thu bill cùng 3 ngày; 27 hiển thị đủ 8 ca (5 số thứ tự + 1 seq 0 + 2 `NEXT_DAY`); 29 ca vừa check-in là dòng seq 0; 41 Vật lý 16:30 về ON_TIME, 3 Thu bill không kịp `NO_CAPACITY`.
 
 **Chưa làm (người dùng để sau / chờ PO, OA).**
-- Case 14 (Thu bill gần, KTV trống 2h cuối ngày vẫn bị lọc: gate 1 theo km 4 km) — đổi điều kiện theo phút đi thêm + có khoảng trống.
+- (Case 14 xong ở 8.7.)
 - Case 25 / 41: ca chèn đẩy ca hẹn xuống AT_RISK — cân nhắc trọng số giảm AT_RISK.
 - Case 31 / 42: ngày không thể kịp hết thì hy sinh 1 ca hay giữ trình tự khung (PO); ca hẹn đã quá hạn xếp ngược giờ hẹn; Thu bill qua ngày thanh toán (`+1 tháng == hôm nay` → `≤`).
-- Case 37: khóa ca "Đang di chuyển" ở đầu tuyến. Case 40: KTV không GPS → OA phải gửi `staff.latlng` (lô / kho).
+- Case 40: KTV không GPS → OA phải gửi `staff.latlng` (lô / kho). (Case 37 xong ở 8.6.)
 - Gsafe chưa có trong danh mục loại tác vụ (đang là loại lạ, ưu tiên mặc định 3).
 - Mã `NO_CAPACITY` + dòng `seq 0` cần OA / Mobix xác nhận (danh sách `insert_reason` workbook còn mở).
+
+### Phase 8.6 — Khóa việc KTV đang di chuyển tới (UAT case 37, người dùng duyệt 2026-10-13) ✅ đã thực thi
+
+- UAT case 37: KTV đang trên đường tới ca đầu tuyến, giao thêm ca gần hơn → Expected "ca đầu tuyến KHÔNG bị thay đổi, ca mới xếp phía sau". Trước: ca mới chen lên #1.
+- Ca có trạng thái **"Đang di chuyển"** (bảng sheet 05: `bao_tri` 7, `trien_khai` 96) → `Problem::first`: QHĐ không cho làm việc nào khác trước nó (`allowed()`; nghỉ trưa trước nó vẫn được, không thì luật nghỉ trưa có thể làm tuyến vô nghiệm). Mọi mode, mọi thuật toán (QHĐ chính xác, tham lam, LNS, cửa sổ) đi qua cùng `allowed()`.
+- Không được bỏ (kể cả ca chèn 8.5b). Nhiều ca "Đang di chuyển" (dữ liệu bẩn) → khóa `task_id` nhỏ nhất + cảnh báo `MULTIPLE_MOVING`.
+- Hệ quả (đúng Expected): ca mới hẹn sớm hơn có thể trễ hẹn vì phải chờ xong ca đang tới (UAT case 37: ca mới hẹn 08:30 → WILL_BREACH).
+- Test `test_plan` (3 mode). ctest 20/20.
+
+### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
+
+- UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.
+- **Phút được phép đi thêm = min(`optional_max_detour_minutes` 20′, `optional_spare_ratio` 0,5 × phút còn trống)**. Phút còn trống của tuyến ca bắt buộc = các khoảng chờ (khung hẹn, nghỉ trưa) + từ việc cuối tới hết ca. Gate 1: cận dưới **phút** đi thêm (chèn rẻ nhất, bảng phút) ≥ mức đó → gạt (thay `optional_filter_km`). Gate 2: `SKIP_OPTIONAL` đổi nghĩa = km tương đương / phút được phép, plan nhân với số phút được phép của KTV: SLA + Kết nối 0,5 km / phút (tối đa 10 km, < 1 ca hẹn P3 trễ ≈ 23 km), Tuyến 0,1 (tối đa 2 km < trễ hẹn P1 4 km). [GIẢ ĐỊNH 20′ / 0,5]
+- **Tuyến bắt buộc có ca hẹn trễ (sẽ / đã vỡ hẹn) → không chèn ca tuỳ chọn** (người dùng: "đang có khách hẹn bị trễ thì không đi làm ca tùy chọn"). Không chặn thì đo 2.000 KTV: ca tuỳ chọn được chèn trong lúc ca hẹn trễ bị đẩy ra sau giờ ca tới +120′ (trễ thêm của ca đã trễ chỉ là `LATE_MINUTES` tầng 2 mode Kết nối).
+- Ca tuỳ chọn cũng chịu mốc cứng 8.5b `inserted_cap` (từ ca tuỳ chọn đầu tiên, không bước nào xong sau max(giờ hết ca, giờ xong tuyến ca bắt buộc) + 15′): luật 7.24 "ca tuỳ chọn xong trong ca" chỉ xét chính nó, ca chính bị đẩy ra sau giờ ca thì không thấy (UAT case 42 từng làm tới 19:24). Khi ca bắt buộc toàn ca chính: dùng luôn giờ xong của lần giải ca bắt buộc (không giải thêm).
+- UAT: case 14 → SPARE_TIME 15:45–16:00; 15, 13 vẫn `BEYOND_K`; 42 không chèn (toàn ca hẹn đã trễ). ctest 20/20.
+- Đo 2.000 KTV (13/10, chim bay) so commit trước Phase 8.5: SPARE_TIME 2.090 → 2.316, km +13% (29.674 → 33.476), vỡ hẹn 796 → 801, quá giờ tổng 92.060 → 89.049 (40 KTV tăng / 180 giảm); 1.112 / 2.085 tuyến đổi; p95 2 ms.
+- **Outlier quá giờ (đã soi):** vài KTV quá giờ tăng tới ~+106′ (VD L1000141: ca Triển khai P3 đã chắc vỡ hẹn bị đẩy xuống 17:45–19:45). Vét cạn 720 thứ tự × mọi chỗ nghỉ trưa: tuyến QHĐ chọn (84,92) **đúng là tối ưu** theo rules — không phải thuật toán bỏ sót. Nguyên nhân là mục tiêu: tầng 1 đếm trễ hẹn có / không (trễ 10′ hay 8 tiếng như nhau), phút trễ chỉ ở tầng 2 (0,1 / phút) → ca đã chắc trễ bị dồn cuối ngày để các ca khác đúng hẹn, đỡ km. Có từ 7.26 (mode SLA tương tự); trước 8.7 bị che vì lần giải thứ 2 có ca tuỳ chọn rơi vào thứ tự khác. Hướng sửa (chờ PO): ca đã chắc trễ nên làm sớm nhất hay được dồn cuối ngày; nếu làm sớm → đưa phút trễ lên tầng 1 trọng số nhỏ (VD 0,05 km / phút).
 
 ### Phase 9 — Reoptimize do KTV yêu cầu (bàn sau khi nối Kafka)
 

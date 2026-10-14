@@ -60,6 +60,8 @@ bool allowed(const Problem& p, Mask mask, const Visit& v) {
     const bool rested = mask & rest_bit(p);
     if (v.task == kBreak) return p.needs_break() && !rested;        // Chỉ nghỉ một lần, khi tuyến cần nghỉ.
     if (p.is_optional(v.task) && v.done > p.shift_end) return false;  // 7.24: ca tuỳ chọn phải xong trong ca (cứng)
+    // 8.6: chưa tới việc đang di chuyển tới thì không được làm việc khác (nghỉ trưa thì được).
+    if (p.first >= 0 && v.task >= 0 && v.task != p.first && !(mask >> p.first & 1)) return false;
     // 8.5b: từ khi tuyến có ca chèn, không bước nào được xong sau inserted_cap (ca chèn không kéo tuyến quá giờ > X′,
     // kể cả khi chính nó xong sớm mà đẩy ca chính ra sau).
     if (v.done > p.inserted_cap && ((mask & p.inserted) || (v.task >= 0 && (p.inserted >> v.task & 1)))) return false;
