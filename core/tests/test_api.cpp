@@ -31,7 +31,7 @@ static json sample() {
           "latlng": "21.0122,105.7995", "handle_minutes": 90, "task_plots_id": 4, "staff_plots_id": 2,
           "staff_role": 1, "block_id": 3434, "location_id": 4}],
         "bao_tri": [], "thu_hoi": [],
-        "hoa_don": [{"task_id": 5454544, "task_group_id": 4, "task_group_name": "hoa_don", "task_type_id": 2,
+        "hoa_don": [{"task_id": 5454544, "task_group_id": 4, "task_group_name": "hoa_don", "task_type_id": 1,
           "task_type_name": "tra_sau", "task_sub_id": 0, "task_sub_name": "", "task_status_id": 6,
           "task_status_name": "check_in", "sla": {"sla_minutes": null, "priority_in_day": 4}, "appointment": "",
           "location": "P1203 CT2 Trung Hòa Nhân Chính, Thanh Xuân", "latlng": "21.0043,105.8021",

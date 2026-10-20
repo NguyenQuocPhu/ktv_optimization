@@ -13,7 +13,7 @@ KINDS = {  # key: group, group_id, type_id, type_name, sla, priority, route stat
     'vatly': ('bao_tri', 2, 1, 'bao_tri_vat_ly', 60, 1, (6, 'Đã nhận ca')),
     'logic': ('bao_tri', 2, 2, 'bao_tri_logic', 60, 2, (6, 'Đã nhận ca')),
     'thuhoi': ('thu_hoi', 3, 1, 'thu_hoi_thiet_bi', None, 4, (0, 'Chưa thu hồi')),
-    'bill': ('hoa_don', 4, 2, 'tra_sau', None, 4, (0, 'Chưa thanh toán')),
+    'bill': ('hoa_don', 4, 1, 'tra_sau', None, 4, (0, 'Chưa thanh toán')),
 }
 
 

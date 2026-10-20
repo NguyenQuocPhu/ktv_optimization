@@ -24,8 +24,9 @@ const std::vector<TaskKind>& task_kinds() {
         {"bao_tri", 2, "bao_tri_logic", 60, O::CheckinBeforeB, 2, 60},
         {"thu_hoi", 1, "thu_hoi_thiet_bi", std::nullopt, O::DoneWithinMonth, 4, 15, true},
         // 7.27: tên theo sheet 05 workbook (6) — "tra_truoc" / "tra_sau" (trước đây "hoa_don_tra_truoc/_sau" theo JSON mẫu).
-        {"hoa_don", 1, "tra_truoc", std::nullopt, O::DoneWithinMonth, 4, 15, true},
-        {"hoa_don", 2, "tra_sau", std::nullopt, O::DoneWithinMonth, 4, 15, true},
+        // Workbook (7) (2026-10-20) đảo id: 1 = tra_sau, 2 = tra_truoc (lệch id chỉ sinh cảnh báo CATALOG_MISMATCH).
+        {"hoa_don", 1, "tra_sau", std::nullopt, O::DoneWithinMonth, 4, 15, true},
+        {"hoa_don", 2, "tra_truoc", std::nullopt, O::DoneWithinMonth, 4, 15, true},
         {"onsite", 1, "phieu_onsite", 60, O::CheckinBeforeB, 2, 60},  // Workbook (4): "rule như bao_tri" (7.15; trước: trong tháng)
         // Workbook API (4) tách nhóm 6 "cscd" (CSKH chủ động): hai loại dưới đây chuyển từ onsite sang (người dùng chốt 7.12).
         // OA còn gửi dưới onsite theo hợp đồng cũ → kind_in_any_group tra ra đây, kèm cảnh báo TASK_TYPE_OTHER_GROUP.

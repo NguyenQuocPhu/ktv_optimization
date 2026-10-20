@@ -219,7 +219,7 @@ int main() {
             CHECK((keys(task) == std::vector<std::string>{
                 "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role", "task_group_id",
                 "task_group_name", "task_type_id", "task_type_name", "task_sub_id", "task_sub_name", "travel_minutes_before",
-                "travel_km_before", "sla_buffer_minutes", "contract_no", "contract_name", "appointment", "complete_date",
+                "travel_km_before", "sla_buffer_minutes", "contract_no", "contract_id", "contract_name", "appointment", "complete_date",
                 "timezone"}));
         } else {
             CHECK(false);

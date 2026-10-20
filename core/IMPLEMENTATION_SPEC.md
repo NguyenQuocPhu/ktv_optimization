@@ -1566,6 +1566,13 @@ Chọn **Q = 5** [GIẢ ĐỊNH, chờ dữ liệu thật]: bớt 7% km so SLA, 
 **File:** `api.hpp/.cpp` (`Task.contract_name/bill_number/timezone`, parse), `plan.cpp` (`echo_datetime`, 4 field ở `deferred_row` + dòng TASK, bộ đếm `seq` chung). **Test:** `test_cluster` + `test_invariants` (seq liên tục qua cụm); `test_plan` (`sla_buffer_minutes`: hẹn 14:00 / B 16:00 check-in 14:00 → 120, không hẹn → 0, chạy 10:30 với B 10:00 → âm đúng số phút trễ + `ALREADY_BREACHED`); `test_pipeline` (thứ tự field sheet 03 thêm 5 field; echo đúng / `""`; ca có `complete_date` chỉ khác đúng field đó); `test_api` (3 field hợp lệ strict, null = "", sai kiểu → lỗi). `ctest` 18/18.
 
 - **Tên loại hóa đơn** (người dùng chốt: theo sheet INPUT / OUTPUT mới nhất): `hoa_don` 1 = `tra_truoc`, 2 = `tra_sau` (sheet 05 workbook (6)); bỏ tên cũ `hoa_don_tra_truoc` / `hoa_don_tra_sau` (JSON mẫu sheet 08 vẫn ghi tên cũ — workbook tự mâu thuẫn). OA gửi tên cũ → `UNKNOWN_TASK_TYPE`, rơi về loại mặc định (check-in trước B, 60′, mất luật hoàn tất trong tháng) — cần OA gửi đúng tên mới. Sửa `task_kinds()` + mọi test / `sample_in.json` / mẫu review_map.
+- **Workbook (7) (2026-10-20):** sheet 05 **đảo id** hóa đơn → `hoa_don` 1 = `tra_sau`, 2 = `tra_truoc`. Core xét luật theo
+  tên nên tuyến không đổi; lệch id chỉ sinh cảnh báo `CATALOG_MISMATCH` → sửa `task_kinds()` + fixture (test,
+  `sample_in.json`, `samples/`, `tests/uat/uat_lib.py`). Sheet 09 thêm `contract_id` vào schedule bản rút gọn Mobix
+  (giữa `contract_no` và `contract_name`) → `mobix_response`. Sheet 03 thêm `data.route_changed` — core đã có. Sheet 09
+  thêm curl Staging / Production path `/bot-management-api/api/v1/worklist/{staff_id}/suggest` (gateway mình
+  `/api/v1/staff/{id}/suggest`) — chờ hỏi proxy có đổi path không. Workbook (7) ghi token + IP host dạng chữ thường: không
+  commit file.
 
 **Chưa làm (chờ chốt):** `action_type` cho API Mobix (sheet 09) — trùng nghĩa `priority_type` 0/1/2 (7.26); chưa chốt transport và việc ghi đè mode của IN.
 
