@@ -171,6 +171,7 @@ struct TaskStatus {
 };
 const std::vector<TaskStatus>& task_statuses();                       // Cả bảng (5 nhóm, workbook API (3) + (4)).
 const TaskStatus* find_status(const std::string& group, int status);  // Không có trong bảng → nullptr.
+inline constexpr int kStatusTransferred = -3;  // 8.9: mọi nhóm — ca đã chuyển cho nhân sự khác → gỡ khỏi KTV này.
 
 // Khóa của tasks (thứ tự = task_group_id 1..6). 5 nhóm đầu bắt buộc; "cscd" (CSKH chủ động, workbook API (4)) không bắt
 // buộc vì sheet 02 vẫn ghi "5 khoá cố định" và JSON mẫu chưa có — gửi thì đọc, không gửi thì không cảnh báo.

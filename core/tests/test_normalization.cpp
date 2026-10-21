@@ -254,6 +254,31 @@ int main() {
         }
     }
 
+    {  // 8.9: -3 = đã chuyển cho nhân sự khác → gỡ ở mọi nhóm (kể cả cscd), không cảnh báo.
+        for (const char* group : {"trien_khai", "bao_tri", "thu_hoi", "hoa_don", "onsite", "cscd"}) {
+            const ktv::NormalizedWorklist w = one(group, ktv::kStatusTransferred, "Chuyển nhân sự khác");
+            CHECK(w.candidates.empty() && w.stats.excluded_status == 1 && w.warnings.empty());
+        }
+    }
+    {  // 8.9: ca -3 trùng current_task → không còn là việc đang làm (không dựng bản tối thiểu); ca khác vẫn xếp + plan.
+        const json bao = json::array({make_task(201, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, ktv::kStatusTransferred,
+                                                "21.03,105.81", ""),
+                                      make_task(202, "bao_tri", 2, "bao_tri_logic", 2, 60, 2, 6, "21.04,105.82", "")});
+        const json current = {{"task_id", 201}, {"task_status_id", 10}, {"task_type_id", 1}};
+        const json empty = json::array();
+        std::vector<ktv::Error> errors;
+        ktv::Message message = ktv::parse_message(make_message("1", current, empty, bao, empty, empty, empty), errors);
+        CHECK(errors.empty());
+        const ktv::NormalizedWorklist w = ktv::normalize_worklist(message);
+        CHECK(!w.current_task && w.candidates.size() == 1 && w.candidates[0]->task_id == 202);
+        const ktv::PlanResult r = ktv::plan(message, ktv::default_rules(), *ktv::parse_datetime("2026-09-10 09:00:00"));
+        CHECK(r.response["statuscode"] == "200" && r.routed == 1);
+        bool has_201 = false;
+        for (const auto& cluster : r.response["data"]["clusters"])
+            for (const auto& row : cluster["schedule"]) has_201 |= row.value("task_id", 0LL) == 201;
+        CHECK(!has_201);
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_normalization: OK\n";
     return failures != 0;

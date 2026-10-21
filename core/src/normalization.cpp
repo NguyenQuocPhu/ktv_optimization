@@ -63,8 +63,17 @@ NormalizedWorklist normalize_worklist(const Message& message) {
     const std::optional<long long> current_id =
         message.staff.current_task ? std::optional<long long>(message.staff.current_task->task_id) : std::nullopt;
 
+    // 8.9: task_status_id -3 = ca đã chuyển cho nhân sự khác (OA gửi lại IN của KTV cũ) → gỡ khỏi KTV này, mọi nhóm,
+    // trước cả việc đang làm (ca đã chuyển không còn là việc đang làm của KTV này). Luồng bình thường: không cảnh báo.
+    bool current_transferred =
+        message.staff.current_task && message.staff.current_task->task_status_id == kStatusTransferred;
     for (const Task& task : message.tasks) {
         ++result.stats.tasks;
+        if (task.task_status_id == kStatusTransferred) {
+            ++result.stats.excluded_status;
+            current_transferred |= current_id && task.task_id == *current_id;
+            continue;
+        }
 
         if (current_id && task.task_id == *current_id) {  // Row của việc đang làm: dùng làm current, không thành stop.
             result.current_task = task;
@@ -104,7 +113,7 @@ NormalizedWorklist normalize_worklist(const Message& message) {
     }
 
     // current_task không có row trong tasks: dựng bản tối thiểu để giữ behavior cũ (điểm/giờ xuất phát).
-    if (!result.current_task && message.staff.current_task) {
+    if (!result.current_task && message.staff.current_task && !current_transferred) {
         Task minimal;
         minimal.task_id = message.staff.current_task->task_id;
         minimal.task_status_id = message.staff.current_task->task_status_id;

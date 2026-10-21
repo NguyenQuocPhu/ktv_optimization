@@ -105,6 +105,7 @@ Hợp đồng chi tiết ở `docs/CONTRACT.md`. Routing kiểm tra request trư
 - **Việc đang làm** (`staff.current_task`, 8.5c): dòng TASK đầu cụm 1, `seq 0`, `end_at` = giờ dự kiến xong; không tính metrics.
 - Dòng `DEFERRED`: `seq 0`, `at`/`start_at`/`end_at` `""`, `task_role inserted`, `projected_sla ""`, chặng 0; nằm cuối `schedule` của cụm có **tâm gần nhất** (sắp theo `task_id`); không đếm vào `task_count`, km, metrics. Chỉ còn ca `DEFERRED` → `200`, một cụm toàn `DEFERRED`, metrics 0. [GIẢ ĐỊNH] gán cụm theo địa lý (cụm của core là đoạn tuyến).
 - Vẫn **không trả**: ca thiếu toạ độ (không gán được cụm), ca đã xong/hủy theo trạng thái.
+- **Ca chuyển cho nhân sự khác** (`task_status_id` -3, mọi nhóm, 8.9): gỡ khỏi tuyến KTV cũ, kể cả khi đang là việc đang làm; không cảnh báo. KTV mới nhận ca qua IN của họ như ca thường.
 
 ## 5. Xử lý dữ liệu nguồn (phần team data sẽ làm thật)
 

@@ -1922,6 +1922,20 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
 - Hệ quả (đúng Expected): ca mới hẹn sớm hơn có thể trễ hẹn vì phải chờ xong ca đang tới (UAT case 37: ca mới hẹn 08:30 → WILL_BREACH).
 - Test `test_plan` (3 mode). ctest 20/20.
 
+### Phase 8.9 — Ca chuyển cho nhân sự khác: `task_status_id` -3 (người dùng duyệt 2026-10-21) ✅ đã thực thi
+
+- Luồng OA khi chuyển ca B từ KTV A sang KTV C: gửi 2 IN — IN của A có B với `task_status_id` **-3**, IN của C có B như
+  ca thường. Trước: -3 không có trong bảng trạng thái → `TASK_STATUS_UNKNOWN`, coi là còn mở → B vẫn nằm trong tuyến A.
+- Luật: **-3 ở mọi nhóm** (kể cả `cscd` chưa có bảng) → gỡ ca khỏi KTV này, đếm `excluded_status`, không cảnh báo (luồng
+  bình thường). Xét **trước** việc đang làm: B trùng `staff.current_task` (hoặc `current_task.task_status_id` = -3) → không
+  còn dòng "đang làm" (seq 0), không dựng bản tối thiểu, không lấy làm điểm xuất phát. Hằng `kStatusTransferred`.
+- Tính lại: IN của A đổi → dấu vân tay đổi → `change_id` "yes"; B từng có trong OUT (TASK / DEFERRED) → `route_changed`
+  "yes". B là ca cuối của A → 422 (như huỷ hết ca). Không cần thêm gì ở worker / gateway.
+- Ngoài core: IN của A và C khác key Kafka (có thể khác partition) → C có thể tới trước, trong khoảnh khắc cả A và C cùng có
+  B — đúng sai do thứ tự OA gửi.
+- Test `test_normalization`: -3 ở 6 nhóm bị gỡ, không cảnh báo; -3 trùng `current_task` → không có việc đang làm, `plan()`
+  chỉ xếp ca còn lại, OUT không có B.
+
 ### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
 
 - UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.
