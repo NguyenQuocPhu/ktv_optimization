@@ -61,7 +61,8 @@ int main(int argc, char** argv) {
         std::cerr << "không mở được " << input << "\n";
         return 2;
     }
-    const std::vector<ktv::json> records = ktv::read_records(in);
+    std::vector<char> trimmed;  // 8.11: record bị bỏ phần JSON lồng quá sâu
+    const std::vector<ktv::json> records = ktv::read_records(in, &trimmed);
 
     // --at giúp test xác định giờ. Sai format phải báo lỗi, không âm thầm dùng giờ máy.
     ktv::Minutes server_now = ktv::vietnam_now();
@@ -87,6 +88,7 @@ int main(int argc, char** argv) {
         std::vector<ktv::Error> errors, warnings;
         // plan: nới lỏng như worker; validate: strict để soát hết chỗ lệch hợp đồng.
         const ktv::Message message = ktv::parse_record(record, envelope, errors, command == "plan" ? &warnings : nullptr);
+        if (trimmed[i]) (command == "plan" ? warnings : errors).push_back(ktv::json_too_deep());
         for (const ktv::Error& warning : warnings) ++issues[ktv::issue_key(warning)];
 
         nlohmann::ordered_json response;

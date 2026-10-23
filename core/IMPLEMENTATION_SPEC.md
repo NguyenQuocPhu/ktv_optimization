@@ -1956,6 +1956,28 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   trước (bỏ `server_time`, `generated_in_ms`). ctest 21/21.
 - QHĐ chính xác, QHĐ cửa sổ, LNS, improve không bị: nhánh hết bước tự bị bỏ / `evaluate` trả `kInfeasible`.
 
+### Phase 8.11 — Đọc IN không làm chết process: xử lý mềm (rà sau 8.10, người dùng duyệt 2026-10-23) ✅ đã thực thi
+
+- **Rà:** fuzz 3.000 IN biên (1–140 ca, ca ngoài K, cùng địa chỉ, nhiều ca đang di chuyển, -3, `current_task` lệch, hẹn qua
+  đêm / hôm qua / mai, ca 900′, ca trực 30′ / 2 khung, chạy 0h / 23h) bản release + 160 IN bản ASan / UBSan: phần thuật toán
+  0 chết, 0 lỗi 500, 0 đọc ngoài mảng. Còn 3 chỗ chết ở **đọc IN** (chạy trước try của `plan()`; worker: `handle()` ném →
+  `fail()` → cả worker thoát, offset không commit → đọc lại → chết tiếp, kẹt partition):
+  1. `latlng` số quá nhỏ (`"0.000…(400 số 0)1,106.7"`): `std::stod` ném `out_of_range` → abort.
+  2. `latlng` ~100k chữ số thập phân: `std::regex` (libstdc++ đệ quy theo độ dài chuỗi) tràn stack → SIGSEGV.
+  3. JSON lồng ~200k tầng (field lạ được bỏ qua ở chế độ nới lỏng): sao chép / dump của nlohmann đệ quy → SIGSEGV.
+- **Sửa (mềm: bỏ riêng phần hỏng + cảnh báo có mã, phần còn lại vẫn xếp):**
+  - `parse_latlng` đọc tay (cùng dạng regex cũ), `strtod` không ném. Quá 17 chữ số thập phân → bỏ phần thừa, **vẫn dùng tọa
+    độ** + `LATLNG_PRECISION`. Số quá nhỏ → 0 → ngoài khung VN: ca → `TASK_DROPPED` (ca khác vẫn xếp), KTV → 400 như cũ.
+  - Mỗi task đọc trong try riêng: ngoại lệ lạ → bỏ task đó + `TASK_PARSE_ERROR`. `parse_record` bọc try: ngoại lệ ngoài
+    task → 400 "lỗi đọc IN: …". Hiện không còn đường ném nào đã biết — lưới an toàn, không có test kích được.
+  - `parse_in` (adapter/file): parse với callback, mảng / object mở ở tầng ≥ `kMaxJsonDepth` = 64 không được dựng (parser
+    nlohmann không đệ quy; trong object thì key bị gỡ) + `JSON_TOO_DEEP`. Dùng ở CLI (`read_records`), worker (IN + đọc
+    `staff_id` chia luồng), gateway (IN đã lưu).
+- **Kiểm:** `test_api` (dạng latlng, 2 lỗi trên ở staff / task, strict vẫn lỗi), `test_adapter` (200k tầng, phần tử bên
+  cạnh giữ, JSONL đánh dấu đúng dòng); 5 IN tái hiện: rc 0 / 400, không chết; fuzz 300 IN: OUT trùng bản trước (bỏ
+  `server_time`, `generated_in_ms`). ctest 21/21.
+- Không đổi: bài 127 ca chạy 8–11 s (LNS theo vòng, tất định) — nếu bên bot có timeout process con ngắn hơn thì bị kill.
+
 ### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
 
 - UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.

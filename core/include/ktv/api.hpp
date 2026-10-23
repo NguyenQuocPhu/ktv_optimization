@@ -189,6 +189,7 @@ std::string issue_key(const Error& warning);
 std::optional<Minutes> parse_datetime(const std::string& text);  // "2026-09-10 14:00:00" → Minutes; sai dạng → không có.
 std::string format_datetime(Minutes value);                      // Minutes → "2026-09-10 14:00:00".
 Minutes vietnam_now();                                           // Giờ VN hiện tại (UTC+7) theo đồng hồ máy.
-std::optional<Point> parse_latlng(const std::string& text);      // "21.02,105.79" → Point; sai dạng/ngoài VN → không có.
+// "21.02,105.79" → Point; sai dạng/ngoài VN → không có. trimmed: có bỏ chữ số thập phân thừa (> 17) không.
+std::optional<Point> parse_latlng(const std::string& text, bool* trimmed = nullptr);
 
 }  // namespace ktv

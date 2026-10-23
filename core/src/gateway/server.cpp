@@ -132,7 +132,7 @@ void suggest(RedisStore& redis, const GatewayOptions& options, const httplib::Re
     const nlohmann::json loc = {{"latlng", *latlng_text}, {"latlng_at", at_text}};
     redis.put_loc(staff_id, loc.dump(), {loc_stamp});
 
-    json in = json::parse(state->json, nullptr, false);
+    json in = parse_in(state->json);  // IN đã lưu (worker đã cắt phần lồng quá sâu); cắt lại cho chắc
     if (in.is_object()) in["priority_type"] = action[0] - '0';
     Envelope envelope = local_envelope(in, staff_id, now);
     envelope.trigger = "MOBIX_SUGGEST";

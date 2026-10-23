@@ -159,6 +159,30 @@ int main() {
         CHECK(line.begin().key() == "ts" && line["event"] == "message");
     }
 
+    {  // 8.11: JSON lồng quá sâu → bỏ phần sâu (trước: tràn stack khi sao chép / dump, process chết), phần còn lại giữ.
+        const int depth = 200000;
+        const std::string deep = "{\"a\":1,\"deep\":" + std::string(depth, '[') + std::string(depth, ']') + ",\"b\":[[1]]}";
+        bool trimmed = false;
+        const json value = parse_in(deep, &trimmed);
+        CHECK(trimmed && value["a"] == 1 && value["b"] == json::parse("[[1]]"));
+        int levels = 0;  // "deep" còn đúng kMaxJsonDepth − 1 tầng mảng (gốc object là tầng 0, mảng tầng 1..63)
+        for (const json* at = &value["deep"]; ++levels, !at->empty(); at = &(*at)[0]) {
+        }
+        CHECK(levels == kMaxJsonDepth - 1);
+        CHECK(!value.dump().empty() && json(value).size() == 3);  // sao chép / dump được
+        const json inner = parse_in(R"({"x":{"y":[{"deep":[[{"k":"v"}]]}]}})", &trimmed);
+        CHECK(!trimmed && inner["x"]["y"][0]["deep"][0][0]["k"] == "v");
+        CHECK(parse_in("{bad", &trimmed).is_discarded() && !trimmed);
+        std::string chain = "{}";  // object lồng object qua key: object quá sâu → key của nó bị gỡ, phần tử bên cạnh giữ
+        for (int k = 0; k < 100; ++k) chain = "{\"k\":" + chain + "}";
+        const json mixed = parse_in("[1," + chain + ",2]", &trimmed);
+        CHECK(trimmed && mixed.size() == 3 && mixed[0] == 1 && mixed[2] == 2 && mixed[1].contains("k"));
+        std::vector<char> marks;  // JSONL: đánh dấu đúng dòng bị cắt
+        std::istringstream in("{\"a\":1}\n" + deep + "\n");
+        CHECK(read_records(in, &marks).size() == 2 && marks == std::vector<char>({0, 1}));
+        CHECK(json_too_deep().code == "JSON_TOO_DEEP");
+    }
+
     if (failures) std::cerr << failures << " lỗi\n";
     else std::cout << "test_adapter: OK\n";
     return failures != 0;

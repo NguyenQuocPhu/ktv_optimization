@@ -8,13 +8,36 @@
 
 namespace ktv {
 
-std::vector<json> read_records(std::istream& in) {
+json parse_in(const std::string& text, bool* trimmed) {
+    bool cut = false;
+    // Mảng / object mở ở tầng ≥ kMaxJsonDepth: không dựng (parser nlohmann không đệ quy; trong object thì key bị gỡ).
+    const json::parser_callback_t keep = [&cut](int depth, json::parse_event_t event, json&) {
+        const bool open = event == json::parse_event_t::object_start || event == json::parse_event_t::array_start;
+        if (!open || depth < kMaxJsonDepth) return true;
+        cut = true;
+        return false;
+    };
+    json value = json::parse(text, keep, false);
+    if (trimmed) *trimmed = cut;
+    return value;
+}
+
+Error json_too_deep() {
+    return {"", "JSON lồng quá " + std::to_string(kMaxJsonDepth) + " tầng, bỏ phần sâu hơn", "JSON_TOO_DEEP"};
+}
+
+std::vector<json> read_records(std::istream& in, std::vector<char>* trimmed) {
     std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (content.find_first_not_of(" \t\r\n") == std::string::npos) return {};  // file rỗng: không có input
+    if (trimmed) trimmed->clear();
 
     // Ưu tiên một object (có thể pretty nhiều dòng). Hợp lệ → đúng một record.
-    json whole = json::parse(content, nullptr, false);
-    if (!whole.is_discarded()) return {std::move(whole)};
+    bool cut = false;
+    json whole = parse_in(content, &cut);
+    if (!whole.is_discarded()) {
+        if (trimmed) trimmed->push_back(cut);
+        return {std::move(whole)};
+    }
 
     // Không phải một JSON hợp lệ: thử đọc như JSONL. Chỉ coi là JSONL khi có ít nhất một dòng tự parse được;
     // dòng hỏng vẫn giữ dạng discarded để main trả 400 cho đúng dòng đó.
@@ -24,13 +47,17 @@ std::vector<json> read_records(std::istream& in) {
     bool any_valid = false;
     while (std::getline(stream, line)) {
         if (line.find_first_not_of(" \t\r\n") == std::string::npos) continue;
-        json value = json::parse(line, nullptr, false);
+        json value = parse_in(line, &cut);
         any_valid |= !value.is_discarded();
         records.push_back(std::move(value));
+        if (trimmed) trimmed->push_back(cut);
     }
     // Không dòng nào parse được: cả nội dung là MỘT input lỗi (thường là object pretty bị hỏng),
     // phải cho đúng một error response thay vì một lỗi mỗi dòng.
-    if (!any_valid) return {std::move(whole)};
+    if (!any_valid) {
+        if (trimmed) trimmed->assign(1, 0);
+        return {std::move(whole)};
+    }
     return records;
 }
 
@@ -53,8 +80,16 @@ Envelope local_envelope(const json& record, const std::string& fallback_id, Minu
 
 Message parse_record(const json& record, const Envelope& envelope, std::vector<Error>& errors, std::vector<Error>* warnings) {
     Message message;
-    if (record.is_discarded()) errors.push_back({"", "JSON hỏng"});
-    else message = parse_message(record, errors, warnings);
+    if (record.is_discarded()) {
+        errors.push_back({"", "JSON hỏng"});
+    } else {
+        try {  // 8.11: lỗi lạ ngoài từng task (staff, phần chung) → 400, không làm chết process / worker
+            message = parse_message(record, errors, warnings);
+        } catch (const std::exception& error) {
+            message = Message{};
+            errors.push_back({"", std::string("lỗi đọc IN: ") + error.what()});
+        }
+    }
     message.message_id = envelope.message_id;  // trace_id = message_id của envelope
     message.planned_at = envelope.planned_at;  // lập tuyến theo đúng planned_at của envelope
     return message;

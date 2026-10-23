@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <regex>
 #include <set>
@@ -137,13 +138,37 @@ void civil_from_days(long long z, int& y, unsigned& m, unsigned& d) {
 
 Minutes vietnam_now() { return static_cast<Minutes>(std::time(nullptr) / 60) + 7 * 60; }
 
-std::optional<Point> parse_latlng(const std::string& text) {
-    static const std::regex pattern(R"(^(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)$)");
-    std::smatch match;
-    if (!std::regex_match(text, match, pattern)) return std::nullopt;
-    Point point{std::stod(match[1]), std::stod(match[2])};
-    if (point.lat < 8 || point.lat > 24 || point.lng < 102 || point.lng > 110) return std::nullopt;  // Khung Việt Nam.
-    return point;
+// 8.11: đọc tay "-?d{1,2}(.d+)?,-?d{1,3}(.d+)?" — không std::regex (đệ quy theo độ dài chuỗi: ~100k chữ số tràn stack)
+// và không std::stod (ném out_of_range khi số quá nhỏ, VD "0.000…01"; parse chạy ngoài try → process chết).
+// Phần thập phân quá kLatlngDigits chữ số bị bỏ (double không giữ hơn được) → *trimmed = true.
+std::optional<Point> parse_latlng(const std::string& text, bool* trimmed) {
+    constexpr size_t kLatlngDigits = 17;
+    size_t at = 0;
+    bool cut = false;
+    auto digit = [&] { return at < text.size() && std::isdigit(static_cast<unsigned char>(text[at])); };
+    auto number = [&](size_t max_whole) -> std::optional<double> {  // chép phần giữ lại rồi strtod (không ném)
+        std::string kept;
+        if (at < text.size() && text[at] == '-') kept += text[at++];
+        const size_t whole = at;
+        while (digit()) kept += text[at++];
+        if (at == whole || at - whole > max_whole) return std::nullopt;
+        if (at < text.size() && text[at] == '.') {
+            kept += text[at++];
+            const size_t fraction = at;
+            for (; digit(); ++at)
+                if (at - fraction < kLatlngDigits) kept += text[at];
+            if (at == fraction) return std::nullopt;
+            cut |= at - fraction > kLatlngDigits;
+        }
+        return std::strtod(kept.c_str(), nullptr);
+    };
+    const std::optional<double> lat = number(2);
+    if (!lat || at >= text.size() || text[at++] != ',') return std::nullopt;
+    const std::optional<double> lng = number(3);
+    if (!lng || at != text.size()) return std::nullopt;
+    if (*lat < 8 || *lat > 24 || *lng < 102 || *lng > 110) return std::nullopt;  // Khung Việt Nam.
+    if (trimmed) *trimmed = cut;
+    return Point{*lat, *lng};
 }
 
 namespace {
@@ -319,9 +344,11 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
             }
         }
         if (staff->contains("latlng")) {
-            auto point = (*staff)["latlng"].is_string() ? parse_latlng((*staff)["latlng"].get<std::string>()) : std::nullopt;
+            bool trimmed = false;
+            auto point = (*staff)["latlng"].is_string() ? parse_latlng((*staff)["latlng"].get<std::string>(), &trimmed) : std::nullopt;
             if (point) s.latlng = *point;
             else r.fail(p + ".latlng", "cần \"lat,lng\" trong Việt Nam");
+            if (point && trimmed) r.tolerate("LATLNG_PRECISION", p + ".latlng", "quá 17 chữ số thập phân, bỏ phần thừa");
         } else {
             r.fail(p + ".latlng", "thiếu field bắt buộc");
         }
@@ -442,150 +469,159 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                      "staff_role", "block_id", "location_id", "contract_id", "contract_no", "contract_name",
                      "bill_number", "timezone"});
             Task t;
-            t.task_id = tr.integer<long long>(item, path, "task_id");
-            t.task_group_id = tr.integer<int>(item, path, "task_group_id");
-            t.task_type_id = tr.integer<int>(item, path, "task_type_id");
-            t.task_sub_id = tr.integer<int>(item, path, "task_sub_id", false);
-            t.task_status_id = tr.integer<int>(item, path, "task_status_id");
-            t.task_plots_id = tr.integer<int>(item, path, "task_plots_id");
-            t.staff_plots_id = tr.integer<int>(item, path, "staff_plots_id");
-            t.block_id = tr.integer<int>(item, path, "block_id");
-            tr.integer<int>(item, path, "location_id", false);
-            t.task_group_name = tr.text(item, path, "task_group_name");
-            t.task_type_name = tr.text(item, path, "task_type_name");
-            t.task_status_name = tr.text(item, path, "task_status_name");
-            t.task_sub_name = tr.text(item, path, "task_sub_name", false);
-            t.location = tr.text(item, path, "location", false);
+            // 8.11: lỗi lạ (ngoại lệ) khi đọc MỘT task → bỏ task đó như task hỏng, không làm chết process / bỏ cả KTV.
+            try {
+                t.task_id = tr.integer<long long>(item, path, "task_id");
+                t.task_group_id = tr.integer<int>(item, path, "task_group_id");
+                t.task_type_id = tr.integer<int>(item, path, "task_type_id");
+                t.task_sub_id = tr.integer<int>(item, path, "task_sub_id", false);
+                t.task_status_id = tr.integer<int>(item, path, "task_status_id");
+                t.task_plots_id = tr.integer<int>(item, path, "task_plots_id");
+                t.staff_plots_id = tr.integer<int>(item, path, "staff_plots_id");
+                t.block_id = tr.integer<int>(item, path, "block_id");
+                tr.integer<int>(item, path, "location_id", false);
+                t.task_group_name = tr.text(item, path, "task_group_name");
+                t.task_type_name = tr.text(item, path, "task_type_name");
+                t.task_status_name = tr.text(item, path, "task_status_name");
+                t.task_sub_name = tr.text(item, path, "task_sub_name", false);
+                t.location = tr.text(item, path, "location", false);
 
-            if (item.contains("appointment")) {
-                const json& value = item["appointment"];
-                if (value.is_string() && value.get_ref<const std::string&>().empty()) {
-                } else if (auto when = value.is_string() ? parse_datetime(value.get<std::string>()) : std::nullopt) {
-                    t.appointment = when;
-                } else {
-                    tr.fail(path + ".appointment", "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
+                if (item.contains("appointment")) {
+                    const json& value = item["appointment"];
+                    if (value.is_string() && value.get_ref<const std::string&>().empty()) {
+                    } else if (auto when = value.is_string() ? parse_datetime(value.get<std::string>()) : std::nullopt) {
+                        t.appointment = when;
+                    } else {
+                        tr.fail(path + ".appointment", "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
+                    }
                 }
-            }
-            // "" = không có; sai định dạng = lỗi của task.
-            auto read_date = [&](const char* key) -> std::optional<Minutes> {
-                if (!item.contains(key)) return std::nullopt;
-                const json& value = item[key];
-                if (value.is_string() && value.get_ref<const std::string&>().empty()) return std::nullopt;
-                if (auto when = value.is_string() ? parse_datetime(value.get<std::string>()) : std::nullopt) return when;
-                tr.fail(path + "." + key, "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
-                return std::nullopt;
-            };
-            // create_date: workbook (3) ghi "CreateDate", staging gửi "create_date" → hai tên là MỘT field, tên nào cũng
-            // nhận. Gửi cả hai mà khác giá trị → lấy create_date + cảnh báo.
-            const std::optional<Minutes> snake = read_date("create_date"), camel = read_date("CreateDate");
-            t.create_date = snake ? snake : camel;
-            if (snake && camel && *snake != *camel)
-                tr.tolerate("CREATE_DATE_CONFLICT", path + ".CreateDate",
-                            "khác create_date (" + format_datetime(*snake) + " ≠ " + format_datetime(*camel) + "), dùng create_date");
-            t.complete_date = read_date("complete_date");
-            if (item.contains("contract_id")) {
-                const json& value = item["contract_id"];
-                if (value.is_null()) {
-                } else if (value.is_number_integer()) {
-                    t.contract_id = value.get<long long>();
-                } else {
-                    tr.fail(path + ".contract_id", "cần số nguyên");
+                // "" = không có; sai định dạng = lỗi của task.
+                auto read_date = [&](const char* key) -> std::optional<Minutes> {
+                    if (!item.contains(key)) return std::nullopt;
+                    const json& value = item[key];
+                    if (value.is_string() && value.get_ref<const std::string&>().empty()) return std::nullopt;
+                    if (auto when = value.is_string() ? parse_datetime(value.get<std::string>()) : std::nullopt) return when;
+                    tr.fail(path + "." + key, "cần \"\" hoặc \"YYYY-MM-DD HH:mm:ss\"");
+                    return std::nullopt;
+                };
+                // create_date: workbook (3) ghi "CreateDate", staging gửi "create_date" → hai tên là MỘT field, tên nào cũng
+                // nhận. Gửi cả hai mà khác giá trị → lấy create_date + cảnh báo.
+                const std::optional<Minutes> snake = read_date("create_date"), camel = read_date("CreateDate");
+                t.create_date = snake ? snake : camel;
+                if (snake && camel && *snake != *camel)
+                    tr.tolerate("CREATE_DATE_CONFLICT", path + ".CreateDate",
+                                "khác create_date (" + format_datetime(*snake) + " ≠ " + format_datetime(*camel) + "), dùng create_date");
+                t.complete_date = read_date("complete_date");
+                if (item.contains("contract_id")) {
+                    const json& value = item["contract_id"];
+                    if (value.is_null()) {
+                    } else if (value.is_number_integer()) {
+                        t.contract_id = value.get<long long>();
+                    } else {
+                        tr.fail(path + ".contract_id", "cần số nguyên");
+                    }
                 }
-            }
-            if (item.contains("contract_no") && !item["contract_no"].is_null()) {  // null = không có, như contract_id
-                if (item["contract_no"].is_string()) t.contract_no = item["contract_no"].get<std::string>();
-                else tr.fail(path + ".contract_no", "cần chuỗi hoặc null");
-            }
-            // 7.27: field chuỗi mới của workbook (6); null = không có.
-            for (auto [key, target] : {std::pair<const char*, std::string*>{"contract_name", &t.contract_name},
-                                       {"bill_number", &t.bill_number}, {"timezone", &t.timezone}}) {
-                if (!item.contains(key) || item[key].is_null()) continue;
-                if (item[key].is_string()) *target = item[key].get<std::string>();
-                else tr.fail(path + "." + key, "cần chuỗi hoặc null");
-            }
-            if (!item.contains("latlng")) {
-                tr.fail(path + ".latlng", "thiếu field bắt buộc");
-            } else if (const json& value = item["latlng"]; !(value.is_string() && value.get_ref<const std::string&>().empty())) {
-                // Thiếu tọa độ ("") là hợp lệ: quy tắc cứng 4 loại việc đó khỏi tuyến.
-                if (auto point = value.is_string() ? parse_latlng(value.get<std::string>()) : std::nullopt) t.latlng = point;
-                else tr.fail(path + ".latlng", "cần \"\" hoặc \"lat,lng\" trong Việt Nam");
-            }
-            if (item.contains("handle_minutes")) {
-                const json& value = item["handle_minutes"];
-                if (value.is_null()) {
-                } else if (value.is_number_integer()) {
-                    if (value.get<int>() > 0) t.handle_minutes = value.get<int>();  // 0 = dùng định mức.
-                    else if (value.get<int>() < 0) tr.fail(path + ".handle_minutes", "cần số nguyên ≥ 0");
-                } else if (value.is_string() && value.get_ref<const std::string&>().empty()) {
-                } else {
-                    tr.fail(path + ".handle_minutes", "cần \"\", null hoặc số nguyên ≥ 0");
+                if (item.contains("contract_no") && !item["contract_no"].is_null()) {  // null = không có, như contract_id
+                    if (item["contract_no"].is_string()) t.contract_no = item["contract_no"].get<std::string>();
+                    else tr.fail(path + ".contract_no", "cần chuỗi hoặc null");
                 }
-            }
-            // 0 default (không khớp lô nào của KTV — workbook (3)) / 1 chính / 2 kiêm nhiệm / 3 hỗ trợ. Không dùng khi xếp
-            // tuyến, nên nới lỏng thì giữ nguyên số lạ.
-            if (item.contains("staff_role")) {
-                const json& value = item["staff_role"];
-                if (value.is_number_integer() && value.get<int>() >= 0 && value.get<int>() <= 3) {
-                    t.staff_role = value.get<int>();
-                } else {
-                    if (value.is_number_integer()) t.staff_role = value.get<int>();
-                    tr.tolerate("STAFF_ROLE", path + ".staff_role", "cần 0, 1, 2 hoặc 3 (đang là " + value.dump() + ")");
+                // 7.27: field chuỗi mới của workbook (6); null = không có.
+                for (auto [key, target] : {std::pair<const char*, std::string*>{"contract_name", &t.contract_name},
+                                           {"bill_number", &t.bill_number}, {"timezone", &t.timezone}}) {
+                    if (!item.contains(key) || item[key].is_null()) continue;
+                    if (item[key].is_string()) *target = item[key].get<std::string>();
+                    else tr.fail(path + "." + key, "cần chuỗi hoặc null");
                 }
-            } else {
-                tr.tolerate("STAFF_ROLE", path + ".staff_role", "thiếu field bắt buộc");
-            }
+                if (!item.contains("latlng")) {
+                    tr.fail(path + ".latlng", "thiếu field bắt buộc");
+                } else if (const json& value = item["latlng"]; !(value.is_string() && value.get_ref<const std::string&>().empty())) {
+                    // Thiếu tọa độ ("") là hợp lệ: quy tắc cứng 4 loại việc đó khỏi tuyến.
+                    bool trimmed = false;
+                    if (auto point = value.is_string() ? parse_latlng(value.get<std::string>(), &trimmed) : std::nullopt) t.latlng = point;
+                    else tr.fail(path + ".latlng", "cần \"\" hoặc \"lat,lng\" trong Việt Nam");
+                    if (t.latlng && trimmed) tr.tolerate("LATLNG_PRECISION", path + ".latlng", "quá 17 chữ số thập phân, bỏ phần thừa");
+                }
+                if (item.contains("handle_minutes")) {
+                    const json& value = item["handle_minutes"];
+                    if (value.is_null()) {
+                    } else if (value.is_number_integer()) {
+                        if (value.get<int>() > 0) t.handle_minutes = value.get<int>();  // 0 = dùng định mức.
+                        else if (value.get<int>() < 0) tr.fail(path + ".handle_minutes", "cần số nguyên ≥ 0");
+                    } else if (value.is_string() && value.get_ref<const std::string&>().empty()) {
+                    } else {
+                        tr.fail(path + ".handle_minutes", "cần \"\", null hoặc số nguyên ≥ 0");
+                    }
+                }
+                // 0 default (không khớp lô nào của KTV — workbook (3)) / 1 chính / 2 kiêm nhiệm / 3 hỗ trợ. Không dùng khi xếp
+                // tuyến, nên nới lỏng thì giữ nguyên số lạ.
+                if (item.contains("staff_role")) {
+                    const json& value = item["staff_role"];
+                    if (value.is_number_integer() && value.get<int>() >= 0 && value.get<int>() <= 3) {
+                        t.staff_role = value.get<int>();
+                    } else {
+                        if (value.is_number_integer()) t.staff_role = value.get<int>();
+                        tr.tolerate("STAFF_ROLE", path + ".staff_role", "cần 0, 1, 2 hoặc 3 (đang là " + value.dump() + ")");
+                    }
+                } else {
+                    tr.tolerate("STAFF_ROLE", path + ".staff_role", "thiếu field bắt buộc");
+                }
 
-            const json* sla = tr.field(item, path, "sla", true);
-            if (sla && !sla->is_object()) {
-                tr.fail(path + ".sla", "cần object {sla_minutes, priority_in_day}");
-                sla = nullptr;
-            } else if (sla) {
-                const std::string sp = path + ".sla";
-                tr.only(*sla, sp, {"sla_minutes", "priority_in_day"});
-                if (const json* value = tr.field(*sla, sp, "sla_minutes", true)) {
-                    if (value->is_number_integer() && value->get<int>() > 0) t.sla_minutes = value->get<int>();
-                    else if (!value->is_null()) tr.fail(sp + ".sla_minutes", "cần số nguyên > 0 hoặc null");
+                const json* sla = tr.field(item, path, "sla", true);
+                if (sla && !sla->is_object()) {
+                    tr.fail(path + ".sla", "cần object {sla_minutes, priority_in_day}");
+                    sla = nullptr;
+                } else if (sla) {
+                    const std::string sp = path + ".sla";
+                    tr.only(*sla, sp, {"sla_minutes", "priority_in_day"});
+                    if (const json* value = tr.field(*sla, sp, "sla_minutes", true)) {
+                        if (value->is_number_integer() && value->get<int>() > 0) t.sla_minutes = value->get<int>();
+                        else if (!value->is_null()) tr.fail(sp + ".sla_minutes", "cần số nguyên > 0 hoặc null");
+                    }
+                    if (const json* value = tr.field(*sla, sp, "priority_in_day", true)) {
+                        if (value->is_number_integer() && value->get<int>() >= 1 && value->get<int>() <= 4) t.priority_in_day = value->get<int>();
+                        else tr.fail(sp + ".priority_in_day", "cần 1–4");
+                    }
                 }
-                if (const json* value = tr.field(*sla, sp, "priority_in_day", true)) {
-                    if (value->is_number_integer() && value->get<int>() >= 1 && value->get<int>() <= 4) t.priority_in_day = value->get<int>();
-                    else tr.fail(sp + ".priority_in_day", "cần 1–4");
-                }
-            }
 
-            // Danh mục (sheet 05) chỉ cho định mức thời gian + kiểu hạn; SLA/ưu tiên xếp tuyến lấy từ input.
-            // Nên nới lỏng: lệch/ngoài danh mục vẫn xếp (loại ngoài danh mục dùng kind_or_default).
-            // Task đã hỏng (sẽ bị bỏ) thì không cảnh báo thêm về danh mục cho đỡ nhiễu.
-            if (!warnings || local.empty()) {
-                if (t.task_group_name != key || t.task_group_id != g + 1) {
-                    tr.tolerate("TASK_GROUP", path, "nằm trong nhóm " + key + " nhưng task_group khác, dùng nhóm " + key);
-                    // plan() tra danh mục theo task_group_name: phải cùng nhóm với lúc kiểm ở đây, không thì
-                    // âm thầm rơi về loại mặc định (sai định mức + kiểu hạn).
-                    t.task_group_name = key;
-                    t.task_group_id = g + 1;
+                // Danh mục (sheet 05) chỉ cho định mức thời gian + kiểu hạn; SLA/ưu tiên xếp tuyến lấy từ input.
+                // Nên nới lỏng: lệch/ngoài danh mục vẫn xếp (loại ngoài danh mục dùng kind_or_default).
+                // Task đã hỏng (sẽ bị bỏ) thì không cảnh báo thêm về danh mục cho đỡ nhiễu.
+                if (!warnings || local.empty()) {
+                    if (t.task_group_name != key || t.task_group_id != g + 1) {
+                        tr.tolerate("TASK_GROUP", path, "nằm trong nhóm " + key + " nhưng task_group khác, dùng nhóm " + key);
+                        // plan() tra danh mục theo task_group_name: phải cùng nhóm với lúc kiểm ở đây, không thì
+                        // âm thầm rơi về loại mặc định (sai định mức + kiểu hạn).
+                        t.task_group_name = key;
+                        t.task_group_id = g + 1;
+                    }
+                    const TaskKind* kind = find_kind(key, t.task_type_name);
+                    if (!kind && (kind = kind_in_any_group(t.task_type_name)))  // loại đã chuyển nhóm: dùng luật nhóm kia
+                        tr.tolerate("TASK_TYPE_OTHER_GROUP", path + ".task_type_name",
+                                    t.task_type_name + " thuộc nhóm " + kind->group + " (workbook API (4)), không phải " + key +
+                                        "; dùng luật nhóm " + kind->group);
+                    if (kind) {
+                        if (t.task_type_id != kind->type_id)
+                            tr.tolerate("CATALOG_MISMATCH", path + ".task_type_id", "danh mục ghi " + std::to_string(kind->type_id));
+                        if (sla && (t.sla_minutes != kind->sla_minutes || t.priority_in_day != kind->priority))
+                            tr.tolerate("CATALOG_MISMATCH", path + ".sla",
+                                        "khác danh mục sheet 05 (" + key + "/" + t.task_type_name + ": input " +
+                                            (t.sla_minutes ? std::to_string(*t.sla_minutes) : "null") + " phút/P" +
+                                            std::to_string(t.priority_in_day) + ", danh mục " +
+                                            (kind->sla_minutes ? std::to_string(*kind->sla_minutes) : "null") + " phút/P" +
+                                            std::to_string(kind->priority) + ")");
+                    } else {  // không có ở nhóm nào
+                        tr.tolerate("UNKNOWN_TASK_TYPE", path + ".task_type_name",
+                                    "không có trong danh mục sheet 05: " + key + "/" + t.task_type_name);
+                    }
                 }
-                const TaskKind* kind = find_kind(key, t.task_type_name);
-                if (!kind && (kind = kind_in_any_group(t.task_type_name)))  // loại đã chuyển nhóm: dùng luật nhóm kia
-                    tr.tolerate("TASK_TYPE_OTHER_GROUP", path + ".task_type_name",
-                                t.task_type_name + " thuộc nhóm " + kind->group + " (workbook API (4)), không phải " + key +
-                                    "; dùng luật nhóm " + kind->group);
-                if (kind) {
-                    if (t.task_type_id != kind->type_id)
-                        tr.tolerate("CATALOG_MISMATCH", path + ".task_type_id", "danh mục ghi " + std::to_string(kind->type_id));
-                    if (sla && (t.sla_minutes != kind->sla_minutes || t.priority_in_day != kind->priority))
-                        tr.tolerate("CATALOG_MISMATCH", path + ".sla",
-                                    "khác danh mục sheet 05 (" + key + "/" + t.task_type_name + ": input " +
-                                        (t.sla_minutes ? std::to_string(*t.sla_minutes) : "null") + " phút/P" +
-                                        std::to_string(t.priority_in_day) + ", danh mục " +
-                                        (kind->sla_minutes ? std::to_string(*kind->sla_minutes) : "null") + " phút/P" +
-                                        std::to_string(kind->priority) + ")");
-                } else {  // không có ở nhóm nào
-                    tr.tolerate("UNKNOWN_TASK_TYPE", path + ".task_type_name",
-                                "không có trong danh mục sheet 05: " + key + "/" + t.task_type_name);
-                }
+                // Strict: kiểm trùng như cũ. Nới lỏng: chỉ task sạch mới giữ chỗ ID, task trùng sau bị bỏ.
+                if ((!warnings || local.empty()) && !seen.insert(t.task_id).second)
+                    tr.fail(path + ".task_id", "trùng với việc khác trong message");
+            } catch (const std::exception& error) {
+                tr.fail(path, std::string("lỗi đọc task: ") + error.what());
+                r.keep(local, "TASK_PARSE_ERROR", path);
+                continue;
             }
-            // Strict: kiểm trùng như cũ. Nới lỏng: chỉ task sạch mới giữ chỗ ID, task trùng sau bị bỏ.
-            if ((!warnings || local.empty()) && !seen.insert(t.task_id).second)
-                tr.fail(path + ".task_id", "trùng với việc khác trong message");
             if (r.keep(local, "TASK_DROPPED", path)) {
                 if (warnings) warnings->insert(warnings->end(), local_warnings.begin(), local_warnings.end());
                 message.tasks.push_back(std::move(t));

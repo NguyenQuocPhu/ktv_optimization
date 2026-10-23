@@ -1,4 +1,5 @@
 // Test đọc/kiểm tra message API. Không dùng framework: lỗi thì in và trả mã khác 0.
+#include <cmath>
 #include <iostream>
 #include <set>
 
@@ -486,6 +487,35 @@ int main() {
         lenient(data);
         CHECK(!errors.empty());
         lenient(json::array());
+        CHECK(!errors.empty());
+    }
+    {  // 8.11: parse_latlng đọc tay — cùng dạng regex cũ, không ném, không đệ quy.
+        CHECK(ktv::parse_latlng("21.0248,105.7961") && ktv::parse_latlng("21,105")->lng == 105);
+        for (const char* bad : {"21.,105.7", "21.0,.7", "121.0,105.7", "21.0,1050.7", "21.0;105.7", "21.0,105.7 ", "-21.0,105.7",
+                                "21.0,105.7,1", "", ",", "21.0,", "a21.0,105.7", "0.5,105.7"})
+            CHECK(!ktv::parse_latlng(bad));
+        const std::string tiny = "0." + std::string(400, '0') + "1,105.7";  // trước: std::stod ném out_of_range → process chết
+        CHECK(!ktv::parse_latlng(tiny));
+        bool trimmed = true;
+        CHECK(ktv::parse_latlng("21.12345678901234567,105.7", &trimmed) && !trimmed);  // 17 chữ số: đủ, không cắt
+        const std::string long_text = "21." + std::string(200000, '1') + ",105.7";  // trước: std::regex tràn stack
+        const auto point = ktv::parse_latlng(long_text, &trimmed);
+        CHECK(point && trimmed && std::abs(point->lat - 21.1111111111) < 1e-9 && point->lng == 105.7);
+
+        json data = sample();  // nới lỏng: tọa độ dài vẫn dùng + LATLNG_PRECISION; strict thì lỗi
+        data["staff"]["latlng"] = long_text;
+        data["tasks"]["hoa_don"][0]["latlng"] = "21." + std::string(30, '5') + ",105.8";
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2 && warned("LATLNG_PRECISION", "staff.latlng") &&
+              warned("LATLNG_PRECISION", "tasks.hoa_don[0].latlng"));
+        CHECK(strict_fails(data));
+        data = sample();  // số quá nhỏ ở task → bỏ riêng task (ngoài VN), task kia vẫn xếp; ở staff → 400, không ném
+        data["tasks"]["hoa_don"][0]["latlng"] = tiny;
+        m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 1 && warned("TASK_DROPPED", "tasks.hoa_don[0]"));
+        data = sample();
+        data["staff"]["latlng"] = tiny;
+        lenient(data);
         CHECK(!errors.empty());
     }
     CHECK(ktv::issue_key({"tasks.bao_tri[12].x", "p", "C"}) == "C tasks.bao_tri[].x — p");

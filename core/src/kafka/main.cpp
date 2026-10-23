@@ -337,14 +337,16 @@ int main(int argc, char** argv) {
         // Thiếu message_id: lấy vị trí Kafka làm ID — không trùng giữa các lần chạy / replica.
         const std::string position =
             record.topic + "-" + std::to_string(record.partition) + "-" + std::to_string(record.offset);
-        const ktv::json in = ktv::json::parse(record.payload, nullptr, false);
+        bool trimmed = false;  // 8.11: bỏ phần JSON lồng quá sâu (tràn stack khi sao chép / dump)
+        const ktv::json in = ktv::parse_in(record.payload, &trimmed);
         const ktv::Envelope envelope = ktv::local_envelope(in, position, now);
         ktv::SendOut send_out;
         if (producer)
             send_out = [&](const std::string& key, const std::string& value) { producer->send(key, value, job.token); };
-        const ktv::Published published = ktv::plan_and_store(in, envelope, now, {record.timestamp_ms, record.offset},
+        ktv::Published published = ktv::plan_and_store(in, envelope, now, {record.timestamp_ms, record.offset},
                                                              rules, osrm_url, stores[index].get(), send_out);
         const double plan_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        if (trimmed) published.warnings.push_back(ktv::json_too_deep());
         const std::string& status = published.status;
         const std::vector<ktv::Error>& warnings = published.warnings;
         if (published.out) {  // IN cũ (STALE): không có response
@@ -534,7 +536,7 @@ int main(int argc, char** argv) {
             // Cùng KTV → cùng luồng (đúng thứ tự). Khóa Kafka (OA đặt = staff_id); trống thì đọc staff_id trong payload.
             std::string who = stash->key;
             if (who.empty()) {
-                const ktv::json in = ktv::json::parse(stash->payload, nullptr, false);
+                const ktv::json in = ktv::parse_in(stash->payload);
                 if (in.is_object() && in.contains("staff") && in["staff"].is_object() && in["staff"].contains("staff_id"))
                     who = in["staff"]["staff_id"].dump();
                 else who = std::to_string(stash->partition);

@@ -25,9 +25,17 @@
 
 namespace ktv {
 
+// 8.11: JSON của IN (CLI, worker, gateway). Phần lồng sâu từ kMaxJsonDepth tầng trở xuống bị bỏ (sao chép / dump của
+// nlohmann đệ quy theo độ sâu: IN lồng ~200k tầng làm tràn stack, process chết); *trimmed = true nếu có bỏ → caller
+// ghi cảnh báo json_too_deep(). Sai cú pháp → discarded như json::parse(text, nullptr, false).
+inline constexpr int kMaxJsonDepth = 64;
+json parse_in(const std::string& text, bool* trimmed = nullptr);
+Error json_too_deep();  // cảnh báo JSON_TOO_DEEP
+
 // Đọc toàn bộ stream: ưu tiên parse cả file thành một JSON object (pretty-printed);
 // không được thì coi là JSONL, mỗi dòng một record (dòng JSON hỏng giữ dạng discarded).
-std::vector<json> read_records(std::istream& in);
+// trimmed (nếu có): trimmed[i] = record i bị bỏ phần lồng quá sâu (parse_in).
+std::vector<json> read_records(std::istream& in, std::vector<char>* trimmed = nullptr);
 
 // Suy envelope từ record. Thiếu message_id → fallback_id (CLI: "local-<n>"; Kafka: "topic-partition-offset"
 // để không trùng giữa các lần chạy/replica). Thiếu planned_at → default_planned_at.
