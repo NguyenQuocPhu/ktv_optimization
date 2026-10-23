@@ -1,5 +1,6 @@
 // QHĐ phải ra đúng thứ tự tốt nhất như khi thử mọi hoán vị; heuristic phải ra hoán vị hợp lệ.
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <numeric>
 #include <random>
@@ -382,6 +383,36 @@ int main() {
             CHECK(now.order == solve_from(p, default_rules(), start).order);
         }
         std::cout << "  Phase 8 LNS: tốt hơn \"improve\" ở " << better << "/72 lần chạy (13–20 việc, 3 cách)\n";
+    }
+
+    {  // 8.5b + sửa 2026-10-23: > max_exact_tasks, ca chèn được bỏ + mốc inserted_cap chặt. Tham lam nhận ca chèn sớm có
+       // thể hết bước hợp lệ (ca chính không xong kịp mốc) — trước đây best_j = -2 lọt vào tuyến → đọc ngoài mảng, process
+       // chết. Phải ra tuyến hợp lệ, đủ ca chính, mọi phần tử là việc hoặc nghỉ trưa, không lặp.
+        std::mt19937 stuck_rng(23);
+        int routes = 0;
+        for (int round = 0; round < 120; ++round) {
+            const int n = 14 + round % 20;
+            Problem p = random_problem(stuck_rng, n);
+            p.skip_cost.assign(n, kNone);
+            p.skip_priority.assign(n, 0);
+            for (int j = 0; j < n; ++j)
+                if (unit(stuck_rng) < 0.4) p.skip_cost[j] = 1 + static_cast<int>(unit(stuck_rng) * 6), p.inserted |= Mask{1} << j;
+            p.shift_end = 240 + unit(stuck_rng) * 120;
+            p.inserted_cap = p.shift_end + 15;
+            if (round % 2) p.break_open = 120, p.break_latest = 165, p.break_minutes = 45;
+            const Solution solution = solve(p, default_rules());
+            std::vector<int> seen(n, 0);
+            bool valid = true;
+            for (int j : solution.order) {
+                if (j == kBreak) continue;
+                valid &= j >= 0 && j < n && !seen[j]++;
+            }
+            for (int j = 0; j < n; ++j) valid &= p.may_drop(j) || seen[j] == 1;
+            CHECK(valid);
+            CHECK(!std::isinf(objective(p, default_rules(), solution.order)[0]));
+            ++routes;
+        }
+        CHECK(routes == 120);
     }
 
     if (failures) std::cerr << failures << " lỗi\n";

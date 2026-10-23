@@ -1936,6 +1936,26 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
 - Test `test_normalization`: -3 ở 6 nhóm bị gỡ, không cảnh báo; -3 trùng `current_task` → không có việc đang làm, `plan()`
   chỉ xếp ca còn lại, OUT không có B.
 
+### Phase 8.10 — Sửa process chết ở tham lam (prod "lõi C++ chết giữa chừng", 2026-10-23) ✅ đã thực thi
+
+- **Triệu chứng:** API bên bot (`/suggest`, process con chạy lõi) trả 500 "lõi C++ chết giữa chừng"; chỉ KTV > 12 điểm
+  dừng (nhánh tham lam). Fuzz 300 IN ngẫu nhiên (14–40 ca, 3 chế độ): **224 / 300 chết** bằng SIGSEGV / SIGABRT / SIGBUS,
+  cả 3 chế độ; 5–12 ca (QHĐ chính xác): 0 / 200.
+- **Gốc (lỗi từ 8.5, `78b5812`):** `heuristic()` giả định "luôn có ứng viên" (đúng tới 8.4). 8.5b thêm ràng buộc cứng
+  `inserted_cap` (tuyến có ca chèn → không bước nào xong quá max(giờ hết ca, giờ xong tuyến ca chính) + 15′) và cho tham lam
+  xếp luôn ca chèn trong K. Tham lam nhận ca chèn sớm → cuối ngày không ca chính nào xong kịp mốc, đã nghỉ trưa → mọi bước bị
+  `allowed()` cấm → `best_j = -2` lọt vào tuyến → `bit_of(-2)`, `travel.km[-1]` → đọc ngoài mảng. Không chết thì tính trên dữ
+  liệu rác (OUT có thể sai mà không báo).
+- **Sửa (A1, người dùng chọn):** tham lam kẹt → dựng lại **chỉ ca bắt buộc** (không có ca chèn thì mốc không áp; chưa nghỉ thì
+  nghỉ được, đã nghỉ thì việc nào cũng được → không kẹt); ca chèn để improve / LNS chèn nếu còn vừa mốc, không thì
+  `NO_CAPACITY`. Tuyến không kẹt giữ nguyên. Lưới an toàn: tham lam chỉ ca bắt buộc vẫn kẹt / `exact()` không có tuyến hợp lệ
+  → `logic_error` (worker và CLI trả 500 "Lỗi xử lý: …"); CLI `ktv_core plan` bọc `plan()` như worker (trước: lỗi → abort).
+  Phương án khác đã loại: nới mốc cho ca chính khi kẹt (giữ ca chèn mà đẩy ca chính quá giờ > 15′, trái luật case 17).
+- **Kiểm:** test `test_dp` (120 bài 14–33 việc, 40% ca chèn, mốc chặt: đủ ca chính, tuyến hợp lệ) — segfault trước sửa, qua
+  sau sửa; fuzz 300 IN: 0 chết; load_2000_1 (2.107 OUT) và load_200_3 (211 OUT, toàn HEURISTIC): **trùng từng byte** với bản
+  trước (bỏ `server_time`, `generated_in_ms`). ctest 21/21.
+- QHĐ chính xác, QHĐ cửa sổ, LNS, improve không bị: nhánh hết bước tự bị bỏ / `evaluate` trả `kInfeasible`.
+
 ### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
 
 - UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.

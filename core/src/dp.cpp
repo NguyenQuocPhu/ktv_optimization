@@ -1,6 +1,7 @@
 #include "ktv/dp.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 #include <array>
 #include <limits>
 #include <optional>
@@ -247,6 +248,8 @@ Solution exact(Search& s) {
             for (int label : dp(mask, last))
                 if (Key k = s.final_key(s.pool[label], mask); best < 0 || k < best_key) best = label, best_key = k;
     }
+    // Không xảy ra: tuyến chỉ ca bắt buộc luôn đi được. Có ràng buộc cứng mới làm nó hỏng → báo lỗi (500), không đọc pool[-1].
+    if (best < 0) throw std::logic_error("dp: không có tuyến hợp lệ cho ca bắt buộc");
     return {s.order_of(best), {}, capped ? Source::Approximate : Source::Optimal};
 }
 
@@ -351,32 +354,43 @@ std::vector<int> improve(Search& s, std::vector<int> order, bool reverse_first, 
 std::vector<int> heuristic(Search& s) {
     const Problem& p = s.p;
     const int n = p.size();
-    std::vector<int> order;
-    int label = 0, i = -1, done = 0;
-    Mask mask = 0;
     // 7.24: tham lam xếp ca bắt buộc + ca chèn trong K (8.5b, improve gỡ nếu đáng); ca tuỳ chọn do improve chèn.
-    const int need = popcount(s.mandatory) + popcount(s.droppable & ~s.optional_tasks);
-    while (done < need) {
-        int best_j = -2;
-        Label best{};
-        Key best_key{};
-        auto consider = [&](int j) {
-            auto candidate = s.extend(label, mask, i, j);
-            if (!candidate) return;
-            if (Key k = s.key(*candidate); best_j == -2 || k < best_key) best_j = j, best = *candidate, best_key = k;
-        };
-        for (int j = 0; j < n; ++j)
-            if (!(mask >> j & 1) && !p.is_optional(j)) consider(j);
-        // Chỉ xét nghỉ khi đã tới giờ nghỉ, hoặc không còn việc nào làm kịp trước giờ chốt:
-        // tránh tham lam chọn "nghỉ" từ sáng sớm rồi đứng chờ tới trưa.
-        if (best_j == -2 || s.pool[label].finish >= p.break_open) consider(kBreak);
-        // Luôn có ứng viên: chưa nghỉ thì nghỉ được; đã nghỉ (hoặc không cần nghỉ) thì việc nào cũng được.
-        s.pool.push_back(best);
-        label = static_cast<int>(s.pool.size()) - 1;
-        order.push_back(best_j);
-        mask |= bit_of(p, best_j);
-        if (best_j != kBreak) i = best_j, ++done;
-    }
+    // Kẹt (không còn bước hợp lệ) → trả rỗng. Mốc inserted_cap (8.5b) cấm mọi bước xong quá mốc khi tuyến đã có ca chèn,
+    // nên ca chèn nhận sớm có thể đẩy ca chính tới chỗ không bước nào hợp lệ (trước 2026-10-23: best_j = -2 lọt vào tuyến
+    // → đọc ngoài mảng, process chết). Khi đó dựng lại chỉ ca bắt buộc — không kẹt: không có ca chèn thì mốc không áp,
+    // chưa nghỉ thì nghỉ được, đã nghỉ thì việc nào cũng được. Ca chèn để improve / LNS chèn nếu còn vừa mốc.
+    const auto greedy = [&](bool with_inserted) {
+        std::vector<int> order;
+        int label = 0, i = -1, done = 0;
+        Mask mask = 0;
+        const int need = popcount(s.mandatory) + (with_inserted ? popcount(s.droppable & ~s.optional_tasks) : 0);
+        while (done < need) {
+            int best_j = -2;
+            Label best{};
+            Key best_key{};
+            auto consider = [&](int j) {
+                auto candidate = s.extend(label, mask, i, j);
+                if (!candidate) return;
+                if (Key k = s.key(*candidate); best_j == -2 || k < best_key) best_j = j, best = *candidate, best_key = k;
+            };
+            for (int j = 0; j < n; ++j)
+                if (!(mask >> j & 1) && !p.is_optional(j) && (with_inserted || !p.may_drop(j))) consider(j);
+            // Chỉ xét nghỉ khi đã tới giờ nghỉ, hoặc không còn việc nào làm kịp trước giờ chốt:
+            // tránh tham lam chọn "nghỉ" từ sáng sớm rồi đứng chờ tới trưa.
+            if (best_j == -2 || s.pool[label].finish >= p.break_open) consider(kBreak);
+            if (best_j == -2) return std::optional<std::vector<int>>{};
+            s.pool.push_back(best);
+            label = static_cast<int>(s.pool.size()) - 1;
+            order.push_back(best_j);
+            mask |= bit_of(p, best_j);
+            if (best_j != kBreak) i = best_j, ++done;
+        }
+        return std::optional<std::vector<int>>{std::move(order)};
+    };
+    std::optional<std::vector<int>> built = greedy(true);
+    if (!built) built = greedy(false);
+    if (!built) throw std::logic_error("dp: tham lam không dựng được tuyến ca bắt buộc");  // không xảy ra (xem trên)
+    const std::vector<int> order = std::move(*built);
     if (n < 3 && s.droppable == 0) return order;
     const std::vector<int> reversed = improve(s, order, true, false, 2);  // điểm xuất phát thứ 2 (2-opt cũ)
     std::vector<int> best;

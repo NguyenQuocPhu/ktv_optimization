@@ -94,13 +94,18 @@ int main(int argc, char** argv) {
             response = ktv::bad_request(errors, envelope.message_id, server_now);
             if (shown++ < 20) std::cerr << "record " << i + 1 << ": " << response["message"].get<std::string>() << "\n";
         } else if (command == "plan") {
-            ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url, explain);
-            response = std::move(result.response);
-            for (const ktv::Error& warning : result.warnings) ++issues[ktv::issue_key(warning)];
-            if (response["success"]) {
-                ++sources[ktv::kSourceNames[static_cast<int>(result.source)]];
-                ++travels[result.travel];
-                times.push_back(response["data"]["metrics"]["generated_in_ms"].get<long long>());
+            try {
+                ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url, explain);
+                response = std::move(result.response);
+                for (const ktv::Error& warning : result.warnings) ++issues[ktv::issue_key(warning)];
+                if (response["success"]) {
+                    ++sources[ktv::kSourceNames[static_cast<int>(result.source)]];
+                    ++travels[result.travel];
+                    times.push_back(response["data"]["metrics"]["generated_in_ms"].get<long long>());
+                }
+            } catch (const std::exception& error) {  // như worker (publish.cpp): lỗi một record → 500, process không chết
+                response = ktv::error_response("500", std::string("Lỗi xử lý: ") + error.what(), envelope.message_id, server_now);
+                if (shown++ < 20) std::cerr << "record " << i + 1 << ": " << response["message"].get<std::string>() << "\n";
             }
         } else {
             response = {{"statuscode", "200"}};
