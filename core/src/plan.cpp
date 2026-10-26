@@ -696,7 +696,12 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     std::vector<int> row_task;         // Với mỗi row: TASK gần nhất tại/trước nó (-1 nếu trước TASK đầu).
     std::vector<TaskStop> task_stops;  // Chỉ TASK, cho summarize_clusters.
     int task_ordinal = -1;
+    // 8.12: phút đi của dòng = giờ tới − giờ xong bước trước, cả hai đã làm tròn (không làm tròn riêng từng chặng) →
+    // timeline, travel_minutes_before và total_travel_minutes khớp nhau từng phút.
+    Minutes last_done = start;
     for (const Visit& v : steps) {
+        const long long leg_minutes = at(v.arrive) - last_done;
+        last_done = at(v.done);
         if (at(v.checkin) > at(v.arrive)) {  // Tới sớm hơn mốc hẹn / giờ nghỉ: chờ.
             idle += at(v.checkin) - at(v.arrive);
             rows.push_back({{"entry_type", "IDLE"}, {"at", hhmm(at(v.arrive))},
@@ -717,7 +722,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         // 7.16.3: một điểm dừng = một hoặc nhiều ca cùng địa chỉ; bung từng ca, giờ nối tiếp, km chỉ ở ca đầu.
         const Stop& stop = routed_stops[v.task];
         km += round_to(v.km, 1);
-        travel += std::llround(v.travel);
+        travel += leg_minutes;
         revisits += static_cast<int>(v.cost[AREA_REENTRY]);
         double offset = 0;  // phút kể từ lúc check-in điểm dừng
         for (size_t k = 0; k < stop.tasks.size(); ++k) {
@@ -756,7 +761,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                          {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
                          {"task_type_name", task.task_type_name}, {"task_sub_id", task.task_sub_id},
                          {"task_sub_name", task.task_sub_name}, {"checkindate", ""}, {"checkoutdate", ""},
-                         {"travel_minutes_before", k == 0 ? std::llround(v.travel) : 0},
+                         {"travel_minutes_before", k == 0 ? leg_minutes : 0},
                          {"travel_km_before", k == 0 ? round_to(v.km, 1) : 0.0},
                          {"handle_minutes", std::llround(service)}, {"projected_sla", sla},
                          {"sla_buffer_minutes", buffer},

@@ -1978,6 +1978,17 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `server_time`, `generated_in_ms`). ctest 21/21.
 - Không đổi: bài 127 ca chạy 8–11 s (LNS theo vòng, tất định) — nếu bên bot có timeout process con ngắn hơn thì bị kill.
 
+### Phase 8.12 — Phút đi khớp giờ trên timeline (feedback staging "tổng thời gian không khớp", 2026-10-26) ✅ đã thực thi
+
+- **Lỗi:** giờ dòng = làm tròn giờ cộng dồn (`at(v.checkin)`), còn `travel_minutes_before` = làm tròn riêng từng chặng
+  (`llround(v.travel)`) → khoảng giữa giờ xong ca trước và giờ bắt đầu ca sau lệch ±1′ so với phút đi ở 12% dòng;
+  `finish_at − start_at` ≠ đi + làm + chờ + nghỉ ở 35% OUT (tới ±7′). Tổng metrics vẫn = tổng dòng.
+- **Sửa (chỉ cách xuất OUT, không đổi thuật toán):** `travel_minutes_before` = giờ tới − giờ xong bước trước (cả hai đã làm
+  tròn); `total_travel_minutes` = tổng các dòng.
+- **Kiểm:** `test_invariants` thêm: giờ bắt đầu dòng = giờ xong dòng trước (hoặc `start_at`) + phút đi (dòng IDLE: tới nơi
+  rồi chờ) — fail trên code cũ, qua trên code mới. Fuzz 298 OUT: thứ tự và giờ mọi dòng giữ nguyên, `finish_at − start_at`
+  = đi + làm + chờ + nghỉ ở 278/278; `total_travel_minutes` đổi −4…+5′ ở 87 OUT. ctest 21/21.
+
 ### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
 
 - UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.

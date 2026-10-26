@@ -150,6 +150,9 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
     auto tenth = [](const ojson& value) { return std::llround(value.get<double>() * 10); };
     std::set<long long> seen;
     std::string last_time;
+    // 8.12: giờ trên timeline khớp phút từng dòng: bắt đầu = xong dòng trước (hoặc start_at) + phút đi (+ chờ ở dòng IDLE).
+    ktv::Minutes prev_end = *ktv::parse_datetime(metrics["start_at"].get<std::string>());
+    long long leg_before_idle = -1;  // phút đi trước dòng IDLE đang chờ
     int expected_seq = 1;  // 7.27: seq tăng liên tục qua mọi cụm (workbook (6))
     for (size_t c = 0; c < clusters.size(); ++c) {
         const auto& cluster = clusters[c];
@@ -198,6 +201,17 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
             const std::string start = row["start_at"].get<std::string>();
             if (!last_time.empty()) CHECK(!(start < last_time));  // thời gian không lùi
             last_time = row["end_at"].get<std::string>();
+            const ktv::Minutes row_start = *ktv::parse_datetime(start);
+            if (entry == "IDLE") {  // tới nơi (sau chặng đi) rồi chờ: chặng đi ghi ở dòng TASK ngay sau
+                CHECK(row_start >= prev_end);
+                leg_before_idle = row_start - prev_end;
+            } else {
+                const long long leg = entry == "TASK" ? row["travel_minutes_before"].get<long long>() : 0;
+                if (leg_before_idle >= 0) CHECK(leg == leg_before_idle && row_start == prev_end);
+                else CHECK(row_start == prev_end + leg);
+                leg_before_idle = -1;
+            }
+            prev_end = *ktv::parse_datetime(row["end_at"].get<std::string>());
             if (entry == "TASK") {
                 ++task_rows;
                 CHECK(seen.insert(row["task_id"].get<long long>()).second);  // không lặp
