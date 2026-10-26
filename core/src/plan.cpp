@@ -51,6 +51,12 @@ double priority_score(const Task& task, const TaskKind& kind, const Deadlines& d
 // Cùng field với dòng TASK; giờ/SLA/chặng rỗng hoặc 0. reason: NEXT_DAY (hẹn ngày sau) / BEYOND_K (còn > K ngày).
 // 7.27: echo mốc giờ của IN ra OUT (workbook (6) sheet 03) — "" khi không có.
 std::string echo_datetime(const std::optional<Minutes>& when) { return when ? format_datetime(*when) : ""; }
+// 8.13 (Mobix, EC mục E): ca thu bill không hẹn → appointment OUT = ngày thu kỳ này (bill_date), Mobix hiện "Hẹn …";
+// tháng trước không có lịch sử → "" (Mobix hiện "Hẹn N/A"). complete_date OUT vẫn là ngày gốc của IN.
+std::string appointment_out(const Task& task, Minutes now) {
+    if (task.appointment || task.task_group_name != "hoa_don") return echo_datetime(task.appointment);
+    return echo_datetime(bill_date(task, now));
+}
 
 ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rules& rules) {
     const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
@@ -65,7 +71,7 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
             {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))}, {"projected_sla", ""},
             {"sla_buffer_minutes", 0}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
             {"contract_no", task.contract_no.value_or("")}, {"contract_name", task.contract_name},
-            {"timezone", task.timezone}, {"appointment", echo_datetime(task.appointment)},
+            {"timezone", task.timezone}, {"appointment", appointment_out(task, now)},
             {"complete_date", echo_datetime(task.complete_date)}};
 }
 
@@ -770,7 +776,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                          {"contract_no", task.contract_no.value_or("")},
                          // 7.27 (workbook (6)): echo từ IN để Mobix hiển thị; appointment / complete_date dạng ngày giờ đầy đủ.
                          {"contract_name", task.contract_name}, {"timezone", task.timezone},
-                         {"appointment", echo_datetime(task.appointment)},
+                         {"appointment", appointment_out(task, now)},
                          {"complete_date", echo_datetime(task.complete_date)}};
             rows.push_back(std::move(row));
             row_task.push_back(task_ordinal);

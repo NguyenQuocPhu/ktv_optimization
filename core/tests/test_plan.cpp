@@ -216,6 +216,19 @@ int main() {
         CHECK(due_today.unplaced.empty());
         CHECK(due_today.response["data"]["metrics"]["tasks_total"] == 2);
         CHECK(due_today.response["data"]["score"]["tiers"][3]["rules"]["DEADLINE_URGENCY"].get<double>() > 0);
+        // 8.13: Mobix hiện "Hẹn …" của thu bill từ appointment OUT = ngày thu kỳ này; complete_date giữ ngày gốc.
+        const auto bill_row = [](const ktv::PlanResult& r) {
+            for (const auto& cluster : r.response["data"]["clusters"])
+                for (const auto& row : cluster["schedule"])
+                    if (row["task_id"] == 5454544) return row;
+            return nlohmann::ordered_json();
+        };
+        CHECK(bill_row(due_today)["appointment"] == "2026-09-10 00:00:00");
+        CHECK(bill_row(due_today)["complete_date"] == "2026-08-10 16:00:00");
+        paid["tasks"]["hoa_don"][0]["complete_date"] = "2026-07-10 16:00:00";  // không phải tháng trước → "Hẹn N/A"
+        errors.clear();
+        CHECK(bill_row(ktv::plan(ktv::parse_message(paid, errors), ktv::default_rules(), server_now, ""))["appointment"] == "");
+        CHECK(bill_row(result)["appointment"] == "");  // không complete_date
     }
     // Ngày 28/09 (2 ngày làm việc ≤ K) thì hóa đơn vẫn xếp, không ca nào bị lọc — đã kiểm ở trên.
     CHECK(result.unplaced.empty());

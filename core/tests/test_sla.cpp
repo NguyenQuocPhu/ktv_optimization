@@ -157,6 +157,22 @@ int main() {
         CHECK(when(resolve_deadlines(no_paid, *bill, *parse_datetime("2026-10-12 09:00:00")).complete_by) == "2026-10-31 23:59:00");
     }
 
+    {  // 8.13 bill_date (Mobix "Hẹn …"): cùng ngày trong tháng với lần thanh toán THÁNG TRƯỚC; không có → nullopt.
+        const auto date = [](const char* paid, const char* run) {
+            Task t;
+            if (*paid) t.complete_date = parse_datetime(paid);
+            return when(bill_date(t, *parse_datetime(run)));
+        };
+        CHECK(date("2026-09-24 15:28:18", "2026-10-23 16:10:00") == "2026-10-24 00:00:00");  // chưa tới ngày: vẫn có
+        CHECK(date("2026-09-12 10:00:00", "2026-10-23 16:10:00") == "2026-10-12 00:00:00");  // đã qua ngày: vẫn có
+        CHECK(date("2026-10-31 10:00:00", "2026-11-05 09:00:00") == "2026-11-30 00:00:00");  // 31 → cuối tháng 30 ngày
+        CHECK(date("2027-01-31 10:00:00", "2027-02-01 09:00:00") == "2027-02-28 00:00:00");  // tháng 2
+        CHECK(date("2026-12-05 10:00:00", "2027-01-20 09:00:00") == "2027-01-05 00:00:00");  // qua năm
+        CHECK(date("2026-07-25 10:00:00", "2026-10-23 09:00:00") == "(none)");  // cũ hơn tháng trước → không có lịch sử
+        CHECK(date("2026-10-02 10:00:00", "2026-10-23 09:00:00") == "(none)");  // cùng tháng → không phải tháng trước
+        CHECK(date("", "2026-10-23 09:00:00") == "(none)");
+    }
+
     {  // workdays_until (7.16.1): T2–T6, không tính ngày bắt đầu, tính ngày hạn; hạn hôm nay/đã qua → 0.
         const auto at = [](const char* text) { return *ktv::parse_datetime(text); };
         CHECK(ktv::workdays_until(at("2026-09-10 09:00:00"), at("2026-09-10 23:00:00")) == 0);  // cùng ngày (thứ Năm)

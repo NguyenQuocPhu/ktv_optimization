@@ -23,14 +23,13 @@ int month_index(Minutes t) {  // năm × 12 + tháng: tháng liền trước = i
     return std::stoi(text.substr(0, 4)) * 12 + std::stoi(text.substr(5, 2));
 }
 
-// Mục E (thu bill): complete_date + 1 tháng == ngày chạy — KH thanh toán ĐÚNG THÁNG TRƯỚC, cùng ngày-trong-tháng
-// (7.17b, người dùng chốt). Ngày 31 ở tháng 30 ngày → quy về ngày cuối tháng này (catalogue).
-bool paid_day_today(Minutes paid, Minutes now) {
-    return month_index(paid) + 1 == month_index(now) &&
-           std::min(day_of_month(paid), day_of_month(end_of_month(now))) == day_of_month(now);
-}
-
 }  // namespace
+
+std::optional<Minutes> bill_date(const Task& task, Minutes planned_at) {
+    if (!task.complete_date || month_index(*task.complete_date) + 1 != month_index(planned_at)) return std::nullopt;
+    const int day = std::min(day_of_month(*task.complete_date), day_of_month(end_of_month(planned_at)));
+    return start_of_day(planned_at) + static_cast<Minutes>(day - day_of_month(planned_at)) * 1440;
+}
 
 Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes planned_at) {
     Deadlines d;
@@ -46,9 +45,10 @@ Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes plan
     const Minutes base = task.create_date.value_or(planned_at);
     if (kind.on_time == OnTime::DoneSameCreatedDay || kind.on_time == OnTime::DoneSameAppointmentDay)
         d.complete_by = start_of_day(base) + 1439;
-    else if (kind.on_time == OnTime::DoneWithinMonth && std::string(kind.group) == "hoa_don" && task.complete_date &&
-             paid_day_today(*task.complete_date, planned_at))
-        d.complete_by = start_of_day(planned_at) + 1439;  // Mục E: còn 0 ngày → chèn ngay trong ngày.
+    else if (kind.on_time == OnTime::DoneWithinMonth && std::string(kind.group) == "hoa_don" &&
+             bill_date(task, planned_at) == start_of_day(planned_at))
+        // Mục E (7.17b): KH thanh toán tháng trước đúng ngày này → còn 0 ngày → chèn ngay trong ngày.
+        d.complete_by = start_of_day(planned_at) + 1439;
     else if (kind.on_time == OnTime::DoneWithinMonth)
         d.complete_by = end_of_month(base);
     return d;  // Loại "check-in trước B" mà không hẹn: chưa có B, không tính trễ.

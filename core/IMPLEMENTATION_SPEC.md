@@ -1989,6 +1989,19 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   rồi chờ) — fail trên code cũ, qua trên code mới. Fuzz 298 OUT: thứ tự và giờ mọi dòng giữ nguyên, `finish_at − start_at`
   = đi + làm + chờ + nghỉ ở 278/278; `total_travel_minutes` đổi −4…+5′ ở 87 OUT. ctest 21/21.
 
+### Phase 8.13 — Ngày hẹn thu bill ra `appointment` OUT (Mobix, EC mục E, người dùng chốt 2026-10-26) ✅ đã thực thi
+
+- Mobix (qua tin nhắn, workbook (9) sheet 09 chưa sửa — vẫn ghi `complete_date`) muốn core trả ngày hẹn thu bill ở
+  `appointment`. Trước: `appointment` / `complete_date` OUT chỉ echo IN → Mobix hiện ngày thanh toán KỲ TRƯỚC.
+- **Luật (EC mục E):** ca `hoa_don` không hẹn → `appointment` OUT = cùng ngày trong tháng với lần thanh toán THÁNG TRƯỚC
+  (`complete_date`), quy về ngày cuối tháng nếu tháng này ngắn hơn, `00:00:00`. Tháng trước không có lịch sử (rỗng / cũ
+  hơn / cùng tháng) → `""` (Mobix "Hẹn N/A", UAT (e)). IN có `appointment` → giữ của IN. `complete_date` OUT vẫn echo IN.
+  Nhóm khác không đổi. Áp cho dòng TASK, DEFERRED, việc đang làm.
+- `bill_date()` (sla) dùng chung với luật "đến hạn hôm nay" của mục E (thay `paid_day_today`, cùng nghĩa).
+- **Kiểm:** `test_sla` (tháng trước chưa / đã tới ngày, 31 → 30, tháng 2, qua năm, cũ hơn, cùng tháng, rỗng), `test_plan`
+  (OUT `appointment` / `complete_date`). Staging 00119223: ca 42 (`complete_date` 24/09) → `2026-10-24 00:00:00`; 43, 44 →
+  `""`. ctest 21/21.
+
 ### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
 
 - UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.

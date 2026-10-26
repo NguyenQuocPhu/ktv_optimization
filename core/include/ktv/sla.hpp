@@ -39,6 +39,10 @@ Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes plan
 const char* projected_sla(double checkin, double done, double due, double complete_by, double service, double now,
                           const Rules& rules);
 
+// Mục E: ngày thu bill kỳ này của KH = cùng ngày trong tháng với lần thanh toán THÁNG TRƯỚC (complete_date), quy về ngày
+// cuối tháng nếu tháng này ngắn hơn (31 → 30). Tháng trước không có lịch sử (rỗng / cũ hơn) → không có. 00:00 của ngày đó.
+std::optional<Minutes> bill_date(const Task& task, Minutes planned_at);
+
 // Số ngày làm việc (T2–T6) từ ngày của `from` tới ngày của `deadline`: không tính ngày `from`, tính ngày `deadline`.
 // Hạn đã tới/qua trong ngày `from` → 0. Chưa có danh sách ngày lễ [GIẢ ĐỊNH 7.16.1].
 int workdays_until(Minutes from, Minutes deadline);
