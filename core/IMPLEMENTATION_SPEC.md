@@ -2002,6 +2002,25 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   (OUT `appointment` / `complete_date`). Staging 00119223: ca 42 (`complete_date` 24/09) → `2026-10-24 00:00:00`; 43, 44 →
   `""`. ctest 21/21.
 
+### Phase 8.14 — Mốc hẹn A = đầu khung `timezone` (vấn đề 7, người dùng chốt 2026-10-26) ✅ đã thực thi
+
+- **Lỗi:** OA gửi `appointment` = CUỐI khung (data staging 25/25 ca hẹn: `timezone` "13:30 - 15:30" ↔ `appointment` 15:30),
+  core coi là đầu khung A → hạn B = A + SLA muộn 2 giờ, báo kịp hẹn sai (case 00119223: 3 ca), xếp theo hạn sai.
+- **Luật (người dùng):** khung là ô thời gian, mỗi ca vẫn theo SLA: **A = đầu `timezone`** vào NGÀY của `appointment`, tới
+  sớm thì chờ; **B = A + SLA** (bảo trì SLA 60 → giữa khung; triển khai 120 → cuối khung). Giờ trong `appointment` không
+  dùng (chỉ lấy ngày: NEXT_DAY, "hoàn tất trong ngày hẹn", echo OUT). Một khung có thể có nhiều ca; core không kiểm năng lực
+  khung (1 triển khai / 2 bảo trì) — ca vượt năng lực tự thành trễ.
+- **Thiếu / sai `timezone`** (lựa chọn (a)): A = `appointment` − 120′ (khung chuẩn 2 giờ) + cảnh báo `TIMEZONE_MISSING`
+  (chỉ nới lỏng; strict không lỗi vì workbook không bắt buộc).
+- Code: `parse_window` (api), `appointment_start` (sla) dùng ở `resolve_deadlines`, nhóm cùng địa chỉ (`group_servable`,
+  `stop_anchor`).
+- **Kiểm:** `test_sla` (khung → A / B bảo trì, triển khai; "13:30-15:30"; thiếu / sai → −2 giờ; khung không chứa giờ
+  appointment), `test_api` (cảnh báo); fixture test có hẹn thêm `timezone` giữ nguyên A cũ. UAT (`uat_lib` gửi như OA:
+  `appointment` cuối khung + `timezone`): 510 / 510 dòng giữ nguyên lịch so với trước. Staging 00119223: bảo trì 1195763616
+  (khung 15:30–17:30, hạn 16:30) thành trễ, triển khai 1080808616 lên 16:59 kịp hẹn. Bộ load 2.000 KTV là export cũ không có
+  `timezone` → không so được. ctest 21/21.
+- Chưa sửa: agent `get_route` (Phase 9.1a, chưa commit) còn ghép khung từ `appointment` → cần đổi sang `timezone`.
+
 ### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
 
 - UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.

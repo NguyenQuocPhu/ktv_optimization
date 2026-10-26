@@ -171,6 +171,14 @@ std::optional<Point> parse_latlng(const std::string& text, bool* trimmed) {
     return Point{*lat, *lng};
 }
 
+std::optional<std::pair<int, int>> parse_window(const std::string& text) {
+    int h1, m1, h2, m2, used = 0;
+    if (std::sscanf(text.c_str(), " %d:%d - %d:%d %n", &h1, &m1, &h2, &m2, &used) != 4 || used != static_cast<int>(text.size()))
+        return std::nullopt;
+    if (h1 < 0 || h1 > 23 || m1 < 0 || m1 > 59 || h2 < 0 || h2 > 24 || m2 < 0 || m2 > 59) return std::nullopt;
+    return std::make_pair(h1 * 60 + m1, h2 * 60 + m2);
+}
+
 namespace {
 
 std::optional<std::vector<std::pair<int, int>>> parse_available(const std::string& text) {
@@ -532,6 +540,11 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                     if (item[key].is_string()) *target = item[key].get<std::string>();
                     else tr.fail(path + "." + key, "cần chuỗi hoặc null");
                 }
+                // 8.14: ca hẹn mà timezone (khung) thiếu / sai → mốc A = appointment − 2 giờ (sla appointment_start). Chỉ cảnh
+                // báo ở chế độ nới lỏng; strict (validate) không báo lỗi vì workbook không bắt buộc timezone.
+                if (t.appointment && !parse_window(t.timezone) && tr.warnings)
+                    tr.tolerate("TIMEZONE_MISSING", path + ".timezone",
+                                "ca hẹn thiếu khung \"HH:MM - HH:MM\" (đang là \"" + t.timezone + "\"), coi khung 2 giờ kết thúc ở appointment");
                 if (!item.contains("latlng")) {
                     tr.fail(path + ".latlng", "thiếu field bắt buộc");
                 } else if (const json& value = item["latlng"]; !(value.is_string() && value.get_ref<const std::string&>().empty())) {

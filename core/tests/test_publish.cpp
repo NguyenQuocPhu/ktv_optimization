@@ -190,9 +190,11 @@ int main() {
             base["staff"]["staff_id"] = "S2";
             json& first = base["tasks"]["trien_khai"][0];
             first["appointment"] = "2026-10-01 10:00:00";  // ca đầu chờ tới 10:00 → giờ đến ca đầu = 10:00
+            first["timezone"] = "10:00 - 12:00";
             json second = first;
             second["task_id"] = 2;
             second["appointment"] = "2026-10-01 14:00:00";
+            second["timezone"] = "14:00 - 16:00";
             second["latlng"] = "21.04,105.82";
             base["tasks"]["trien_khai"].push_back(second);
             const auto at = [&](const std::string& id, const char* planned, json payload) {
@@ -308,6 +310,7 @@ int main() {
             CHECK(!r2.cached && sla_of(r1) != sla_of(r2) && data_of(r2)["route_changed"] == "no");
             json moved = at("m-s5c", "09:02", tight);
             moved["tasks"]["trien_khai"][1]["appointment"] = "2026-10-02 14:00:00";  // ca 2 sang ngày mai → gỡ khỏi tuyến
+            moved["tasks"]["trien_khai"][1]["timezone"] = "14:00 - 16:00";
             CHECK(data_of(go(moved))["route_changed"] == "yes");
             json back = at("m-s5d", "09:03", tight);  // ca 2 về lại hôm nay → được chèn lại vào tuyến
             CHECK(data_of(go(back))["route_changed"] == "yes");

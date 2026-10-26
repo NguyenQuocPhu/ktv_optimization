@@ -28,7 +28,7 @@ static json sample() {
         "trien_khai": [{"task_id": 5454541, "task_group_id": 1, "task_group_name": "trien_khai", "task_type_id": 3,
           "task_type_name": "trien_khai_net", "task_sub_id": 12, "task_sub_name": "gsafe", "task_status_id": 6,
           "task_status_name": "check_in", "sla": {"sla_minutes": 120, "priority_in_day": 3},
-          "appointment": "2026-09-10 14:00:00", "location": "Số 12, ngõ 45 Trần Duy Hưng, Cầu Giấy",
+          "appointment": "2026-09-10 14:00:00", "timezone": "14:00 - 16:00", "location": "Số 12, ngõ 45 Trần Duy Hưng, Cầu Giấy",
           "latlng": "21.0122,105.7995", "handle_minutes": 90, "task_plots_id": 4, "staff_plots_id": 2,
           "staff_role": 1, "block_id": 3434, "location_id": 4}],
         "bao_tri": [], "thu_hoi": [],
@@ -472,6 +472,16 @@ int main() {
         auto m = lenient(data);
         CHECK(errors.empty() && m.tasks.size() == 1);
         CHECK(warnings.size() == 1 && warned("TASK_DROPPED", "tasks.hoa_don[0]"));
+    }
+    {  // 8.14: ca hẹn thiếu / sai timezone → cảnh báo TIMEZONE_MISSING (nới lỏng), strict không lỗi; ca không hẹn thì không.
+        json data = sample();
+        data["tasks"]["trien_khai"][0]["timezone"] = "";
+        auto m = lenient(data);
+        CHECK(errors.empty() && m.tasks.size() == 2 && warnings.size() == 1 && warned("TIMEZONE_MISSING", "tasks.trien_khai[0].timezone"));
+        CHECK(!strict_fails(data));
+        data["tasks"]["trien_khai"][0]["appointment"] = "";
+        lenient(data);
+        CHECK(warnings.empty());
     }
     {  // Không xếp được tuyến → vẫn 400 ở cả chế độ nới lỏng.
         json data = sample();

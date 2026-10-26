@@ -3,7 +3,7 @@
 // ============================================================================
 // Hiểu nhanh:
 //   Từ loại việc (sheet 05) + giờ hẹn + ngày tạo phiếu, tính ra các mốc:
-//     opens       – mốc hẹn đầu A (tới sớm thì chờ)
+//     opens       – mốc hẹn đầu A = đầu khung timezone (tới sớm thì chờ)
 //     due         – hạn check-in B = A + sla_minutes
 //     complete_by – hạn hoàn tất (cuối ngày hẹn / ngày tạo phiếu / trong tháng)
 //   Rồi dự báo projected_sla: ON_TIME / AT_RISK / WILL_BREACH / ALREADY_BREACHED.
@@ -38,6 +38,11 @@ Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes plan
 // tương đối so với lúc xuất phát (như Problem của dp); `now` cũng tương đối. NaN = không có.
 const char* projected_sla(double checkin, double done, double due, double complete_by, double service, double now,
                           const Rules& rules);
+
+// 8.14: mốc hẹn A = ĐẦU khung timezone vào NGÀY của appointment (appointment OA gửi = cuối khung, chỉ lấy ngày).
+// Thiếu / sai timezone → appointment − kDefaultWindowMinutes (khung chuẩn 2 giờ) [GIẢ ĐỊNH (a)]. Không hẹn → không có.
+inline constexpr int kDefaultWindowMinutes = 120;
+std::optional<Minutes> appointment_start(const Task& task);
 
 // Mục E: ngày thu bill kỳ này của KH = cùng ngày trong tháng với lần thanh toán THÁNG TRƯỚC (complete_date), quy về ngày
 // cuối tháng nếu tháng này ngắn hơn (31 → 30). Tháng trước không có lịch sử (rỗng / cũ hơn) → không có. 00:00 của ngày đó.

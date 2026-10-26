@@ -28,7 +28,12 @@ def ll(p):
 def T(tid, name, kind, xy, appt='', sla=None, handle=0, addr=None, complete_date='', status=None, create=None):
     g, gid, tyid, tyname, dsla, prio, st = KINDS[kind]
     st = status or st
-    return {'_name': name, 'task_id': tid, 'task_group_id': gid, 'task_group_name': g, 'task_type_id': tyid,
+    tz = ''
+    if appt:  # 8.14: như OA gửi — appointment = CUỐI khung 2 giờ, timezone = khung (mốc A = đầu khung)
+        h, mi = int(appt[11:13]), appt[14:16]
+        tz = f'{h:02d}:{mi} - {h + 2:02d}:{mi}'
+        appt = f'{appt[:11]}{h + 2:02d}:{mi}:00'
+    return {'_name': name, 'task_id': tid, 'timezone': tz, 'task_group_id': gid, 'task_group_name': g, 'task_type_id': tyid,
             'task_type_name': tyname, 'task_sub_id': 0, 'task_sub_name': '', 'task_status_id': st[0],
             'task_status_name': st[1], 'sla': {'sla_minutes': sla if sla is not None else dsla, 'priority_in_day': prio},
             'appointment': appt, 'create_date': create or '', 'complete_date': complete_date,
@@ -63,7 +68,7 @@ def run(case, at, tasks, staff_xy=(0, 0), available='08:00-17:30', mode=0, curre
         elif r['entry_type'] == 'TASK':
             nm = names.get(r['task_id'], r['task_id'])
             lines.append(f"   #{r['seq']} {r['at']}-{r['end_at'][11:16]} {nm} ({r['task_type_name']}"
-                         f"{', hẹn ' + r['appointment'][11:16] if r['appointment'] else ''}) đi {r['travel_minutes_before']}′/"
+                         f"{', hẹn ' + r['timezone'] if r['timezone'] else ''}) đi {r['travel_minutes_before']}′/"
                          f"{r['travel_km_before']}km role={r['task_role']}{'/' + r['insert_reason'] if r['insert_reason'] else ''}"
                          f" sla={r['projected_sla']}")
         elif r['entry_type'] == 'DEFERRED':

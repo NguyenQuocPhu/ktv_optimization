@@ -269,9 +269,9 @@ std::vector<Stop> build_stops(const std::vector<const Task*>& tasks, const Rules
 bool group_servable(const Stop& stop, const Rules& rules, Minutes now) {
     const Task* anchor = nullptr;
     for (const Task* task : stop.tasks)
-        if (task->appointment && (!anchor || *task->appointment < *anchor->appointment)) anchor = task;
+        if (task->appointment && (!anchor || *appointment_start(*task) < *appointment_start(*anchor))) anchor = task;
     if (!anchor) return true;  // không ca nào có hẹn → phục vụ liền nhau luôn được
-    Minutes clock = *anchor->appointment;
+    Minutes clock = *appointment_start(*anchor);
     for (const Task* task : stop.tasks) {
         const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);
         const Deadlines d = resolve_deadlines(*task, kind, now);
@@ -288,7 +288,7 @@ bool group_servable(const Stop& stop, const Rules& rules, Minutes now) {
 const Task& stop_anchor(const Stop& stop) {
     const Task* anchor = stop.tasks.front();
     for (const Task* task : stop.tasks)
-        if (task->appointment && (!anchor->appointment || *task->appointment < *anchor->appointment)) anchor = task;
+        if (task->appointment && (!anchor->appointment || *appointment_start(*task) < *appointment_start(*anchor))) anchor = task;
     return *anchor;
 }
 

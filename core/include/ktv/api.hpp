@@ -105,7 +105,7 @@ struct Task {
     // 7.27 (workbook (6) sheet 02): chỉ để echo ra OUT (contract_name, timezone) / tra cứu (bill_number). Không gửi / null = "".
     std::string contract_name;  // Tên khách hàng.
     std::string bill_number;    // Mã hóa đơn (mã bill).
-    std::string timezone;       // Múi giờ hẹn (định dạng chưa chốt; chưa dùng để đổi giờ).
+    std::string timezone;       // Khung hẹn "HH:MM - HH:MM": đầu khung = mốc A (8.14, sla::appointment_start).
 };
 
 // Cả message = input của một lần gọi AI cho một KTV.
@@ -191,5 +191,7 @@ std::string format_datetime(Minutes value);                      // Minutes → 
 Minutes vietnam_now();                                           // Giờ VN hiện tại (UTC+7) theo đồng hồ máy.
 // "21.02,105.79" → Point; sai dạng/ngoài VN → không có. trimmed: có bỏ chữ số thập phân thừa (> 17) không.
 std::optional<Point> parse_latlng(const std::string& text, bool* trimmed = nullptr);
+// 8.14: khung hẹn "HH:MM - HH:MM" (field timezone) → (phút đầu, phút cuối) trong ngày. Sai dạng / rỗng → không có.
+std::optional<std::pair<int, int>> parse_window(const std::string& text);
 
 }  // namespace ktv

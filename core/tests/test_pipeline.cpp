@@ -1,4 +1,5 @@
 // Pipeline end-to-end: nhiều kịch bản ETA/SLA, ca làm, current task, create_date, heuristic, biên.
+#include <cstdio>
 #include <cmath>
 #include <iostream>
 #include <map>
@@ -18,6 +19,15 @@ static int failures = 0;
 using ktv::json;
 using ojson = nlohmann::ordered_json;
 
+// 8.14: mốc hẹn A = đầu khung timezone; fixture hẹn "… HH:MM" → khung 2 giờ bắt đầu từ HH:MM (giữ nghĩa A cũ).
+static std::string window_of(const std::string& appointment) {
+    if (appointment.size() < 16) return "";
+    const int h = std::stoi(appointment.substr(11, 2));
+    char text[16];
+    std::snprintf(text, sizeof text, "%s - %02d:%s", appointment.substr(11, 5).c_str(), h + 2, appointment.substr(14, 2).c_str());
+    return text;
+}
+
 // Một task hợp lệ; appointment/create_date/handle để trống thì truyền "".
 static json task(long long id, const char* group, int gid, const char* type, int tid, json sla_minutes, int prio,
                  const char* appointment, const char* latlng, json handle, const char* create_date = "") {
@@ -26,7 +36,7 @@ static json task(long long id, const char* group, int gid, const char* type, int
         {"task_type_id", tid}, {"task_type_name", type}, {"task_sub_id", 0}, {"task_sub_name", ""},
         {"task_status_id", 6}, {"task_status_name", ""},
         {"sla", {{"sla_minutes", sla_minutes}, {"priority_in_day", prio}}},
-        {"appointment", appointment}, {"create_date", create_date}, {"complete_date", ""},
+        {"appointment", appointment}, {"timezone", window_of(appointment)}, {"create_date", create_date}, {"complete_date", ""},
         {"location", ""}, {"latlng", latlng}, {"handle_minutes", handle},
         {"task_plots_id", 1}, {"staff_plots_id", 1}, {"staff_role", 1}, {"block_id", 1}};
 }

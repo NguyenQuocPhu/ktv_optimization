@@ -29,6 +29,7 @@ int main() {
     {  // Hẹn + SLA: due = A + sla, không có complete_by.
         Task t;
         t.appointment = parse_datetime("2026-09-10 14:00:00");
+        t.timezone = "14:00 - 16:00";
         t.sla_minutes = 120;
         Deadlines d = resolve_deadlines(t, *checkin, planned);
         CHECK(when(d.opens) == "2026-09-10 14:00:00");
@@ -38,6 +39,7 @@ int main() {
     {  // Hẹn nhưng loại "trong ngày/tháng": complete_by = cuối ngày hẹn.
         Task t;
         t.appointment = parse_datetime("2026-09-10 14:00:00");
+        t.timezone = "14:00 - 16:00";
         Deadlines d = resolve_deadlines(t, *month, planned);
         CHECK(when(d.opens) == "2026-09-10 14:00:00" && !d.due);
         CHECK(when(d.complete_by) == "2026-09-10 23:59:00");
@@ -64,6 +66,7 @@ int main() {
         CHECK(onsite && onsite->on_time == OnTime::CheckinBeforeB && onsite->sla_minutes == 60 && onsite->priority == 2);
         Task t;
         t.appointment = parse_datetime("2026-09-10 14:00:00");
+        t.timezone = "14:00 - 16:00";
         t.sla_minutes = 60;
         Deadlines d = resolve_deadlines(t, *onsite, planned);
         CHECK(when(d.due) == "2026-09-10 15:00:00" && !d.complete_by);
@@ -112,7 +115,7 @@ int main() {
                 for (int has_created = 0; has_created < 2; ++has_created) {
                     Task t;
                     t.sla_minutes = 60;
-                    if (has_appt) t.appointment = parse_datetime("2026-06-03 14:00:00");
+                    if (has_appt) t.appointment = parse_datetime("2026-06-03 14:00:00"), t.timezone = "14:00 - 16:00";
                     if (has_created) t.create_date = parse_datetime("2026-06-03 08:00:00");
                     Deadlines d = resolve_deadlines(t, *kind, planned);
                     if (has_appt) {
@@ -140,7 +143,7 @@ int main() {
             Task t;
             t.create_date = parse_datetime("2026-10-01 08:00:00");
             t.complete_date = parse_datetime(paid);
-            if (appointment) t.appointment = parse_datetime(std::string(run).substr(0, 10) + " 14:00:00");
+            if (appointment) t.appointment = parse_datetime(std::string(run).substr(0, 10) + " 14:00:00"), t.timezone = "14:00 - 16:00";
             return when(resolve_deadlines(t, kind, *parse_datetime(run)).complete_by);
         };
         CHECK(deadline(*bill, "2026-09-12 10:00:00", "2026-10-12 09:00:00") == "2026-10-12 23:59:00");  // trùng 12
@@ -156,7 +159,31 @@ int main() {
         no_paid.create_date = parse_datetime("2026-10-01 08:00:00");
         CHECK(when(resolve_deadlines(no_paid, *bill, *parse_datetime("2026-10-12 09:00:00")).complete_by) == "2026-10-31 23:59:00");
     }
-
+    {  // 8.14: A = đầu khung timezone vào ngày của appointment (OA gửi appointment = cuối khung); B = A + SLA.
+        const TaskKind* logic = find_kind("bao_tri", "bao_tri_logic");
+        const TaskKind* net = find_kind("trien_khai", "trien_khai_net");
+        Task t;
+        t.appointment = parse_datetime("2026-10-23 15:30:00");
+        t.timezone = "13:30 - 15:30";
+        t.sla_minutes = 60;
+        Deadlines d = resolve_deadlines(t, *logic, *parse_datetime("2026-10-23 08:00:00"));
+        CHECK(when(d.opens) == "2026-10-23 13:30:00" && when(d.due) == "2026-10-23 14:30:00");  // bảo trì: hạn giữa khung
+        t.sla_minutes = 120;
+        d = resolve_deadlines(t, *net, *parse_datetime("2026-10-23 08:00:00"));
+        CHECK(when(d.due) == "2026-10-23 15:30:00");  // triển khai: hạn = cuối khung
+        t.timezone = "13:30-15:30";
+        CHECK(when(appointment_start(t)) == "2026-10-23 13:30:00");
+        for (const char* bad : {"", "+07:00", "13h30 - 15h30", "25:00 - 26:00"}) {  // thiếu / sai → appointment − 2 giờ (a)
+            t.timezone = bad;
+            CHECK(when(appointment_start(t)) == "2026-10-23 13:30:00");
+        }
+        t.appointment = parse_datetime("2026-10-23 17:30:00");
+        t.timezone = "08:00 - 10:00";  // khung không chứa giờ appointment: vẫn tin khung, chỉ lấy NGÀY của appointment
+        CHECK(when(appointment_start(t)) == "2026-10-23 08:00:00");
+        t.appointment.reset();
+        CHECK(!appointment_start(t));
+        CHECK(parse_window(" 15:30 - 17:30 ") == std::make_pair(930, 1050) && !parse_window("15:30 - 17:30x"));
+    }
     {  // 8.13 bill_date (Mobix "Hẹn …"): cùng ngày trong tháng với lần thanh toán THÁNG TRƯỚC; không có → nullopt.
         const auto date = [](const char* paid, const char* run) {
             Task t;

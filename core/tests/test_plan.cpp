@@ -1,4 +1,5 @@
 // Một message API đi hết đường: đọc → xếp → output đúng dạng file API (sheet 03, 04).
+#include <cstdio>
 #include <cmath>
 #include <algorithm>
 #include <iostream>
@@ -18,6 +19,15 @@ static int failures = 0;
 using ktv::json;
 
 // JSON mẫu sheet 08 (rút gọn): KTV ở Trung Kính lúc 09:20; việc triển khai hẹn 14:00, hóa đơn không hẹn.
+// 8.14: mốc hẹn A = đầu khung timezone; fixture hẹn "… HH:MM" → khung 2 giờ bắt đầu từ HH:MM (giữ nghĩa A cũ).
+static std::string window_of(const std::string& appointment) {
+    if (appointment.size() < 16) return "";
+    const int h = std::stoi(appointment.substr(11, 2));
+    char text[16];
+    std::snprintf(text, sizeof text, "%s - %02d:%s", appointment.substr(11, 5).c_str(), h + 2, appointment.substr(14, 2).c_str());
+    return text;
+}
+
 static json message() {
     return json::parse(R"({
       "message_id": "M1", "planned_at": "2026-09-28 09:20:00", "trigger": "DAY_START",
@@ -28,7 +38,7 @@ static json message() {
         "trien_khai": [{"task_id": 5454541, "task_group_id": 1, "task_group_name": "trien_khai", "task_type_id": 3,
           "task_type_name": "trien_khai_net", "task_sub_id": 0, "task_sub_name": "", "task_status_id": 6,
           "task_status_name": "check_in", "sla": {"sla_minutes": 120, "priority_in_day": 3},
-          "appointment": "2026-09-28 14:00:00", "location": "Trần Duy Hưng", "latlng": "21.0122,105.7995",
+          "appointment": "2026-09-28 14:00:00", "timezone": "14:00 - 16:00", "location": "Trần Duy Hưng", "latlng": "21.0122,105.7995",
           "handle_minutes": 90, "task_plots_id": 2, "staff_plots_id": 2, "staff_role": 1, "block_id": 3434}],
         "bao_tri": [], "thu_hoi": [],
         "hoa_don": [{"task_id": 5454544, "task_group_id": 4, "task_group_name": "hoa_don", "task_type_id": 1,
@@ -73,6 +83,7 @@ int main() {
         overdue["priority_type"] = 1;
         overdue["planned_at"] = "2026-09-28 10:30:00";
         overdue["tasks"]["trien_khai"][0]["appointment"] = "2026-09-28 09:00:00";
+        overdue["tasks"]["trien_khai"][0]["timezone"] = "09:00 - 11:00";
         overdue["tasks"]["trien_khai"][0]["sla"]["sla_minutes"] = 60;
         errors.clear();
         const ktv::PlanResult late_run = ktv::plan(ktv::parse_message(overdue, errors), ktv::default_rules(), server_now);
@@ -145,6 +156,7 @@ int main() {
     json early = message();
     early["planned_at"] = "2026-09-10 09:20:00";
     early["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 14:00:00";
+    early["tasks"]["trien_khai"][0]["timezone"] = "14:00 - 16:00";
     early["tasks"]["hoa_don"][0]["latlng"] = "21.1000,105.9000";
     early["priority_type"] = 1;  // chỉ số tầng [3] dưới là bố cục mode SLA (mặc định Kết nối chỉ có 2 tầng, 7.26)
     errors.clear();
@@ -199,6 +211,7 @@ int main() {
         json late = near;
         late["staff"]["available"] = "08:00-09:35";
         late["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 09:00:00";
+        late["tasks"]["trien_khai"][0]["timezone"] = "09:00 - 11:00";
         errors.clear();
         const ktv::PlanResult tight = ktv::plan(ktv::parse_message(late, errors), ktv::default_rules(), server_now, "");
         CHECK(tight.unplaced.size() == 1 && tight.unplaced[0] == 5454544);
@@ -237,6 +250,7 @@ int main() {
         const auto run = [&](const char* appointment) {
             json data = message();
             data["tasks"]["trien_khai"][0]["appointment"] = appointment;
+            data["tasks"]["trien_khai"][0]["timezone"] = window_of(appointment);
             errors.clear();
             ktv::PlanResult out = ktv::plan(ktv::parse_message(data, errors), ktv::default_rules(), server_now, "");
             CHECK(errors.empty());
@@ -268,6 +282,7 @@ int main() {
         // Chỉ còn ca ngày sau → 7.20.2: 200, một cụm chỉ có DEFERRED, metrics = 0 (trước: 422).
         json only = message();
         only["tasks"]["trien_khai"][0]["appointment"] = "2026-09-30 09:00:00";
+        only["tasks"]["trien_khai"][0]["timezone"] = "09:00 - 11:00";
         only["tasks"]["hoa_don"] = json::array();
         errors.clear();
         const json lone = ktv::plan(ktv::parse_message(only, errors), ktv::default_rules(), server_now, "").response;
@@ -291,12 +306,14 @@ int main() {
         far["task_id"] = 5454600;
         far["latlng"] = "21.0500,105.8500";  // ca xếp hôm nay thứ 2, xa > 2 km → cụm riêng
         far["appointment"] = "2026-09-28 16:00:00";
+        far["timezone"] = "16:00 - 18:00";
         data["tasks"]["trien_khai"].push_back(far);
         for (long long id : {5454702LL, 5454701LL}) {  // 2 ca hẹn mai sát ca "far" → vào cụm của "far"
             json next = far;
             next["task_id"] = id;
             next["latlng"] = "21.0505,105.8505";
             next["appointment"] = "2026-09-29 09:00:00";
+            next["timezone"] = "09:00 - 11:00";
             data["tasks"]["trien_khai"].push_back(next);
         }
         errors.clear();
@@ -318,6 +335,7 @@ int main() {
         json data = message();
         data["planned_at"] = "2026-09-10 09:20:00";
         data["tasks"]["trien_khai"][0]["appointment"] = "2026-09-10 14:00:00";
+        data["tasks"]["trien_khai"][0]["timezone"] = "14:00 - 16:00";
         json& hoa = data["tasks"]["hoa_don"][0];
         hoa["latlng"] = "21.0122,105.7995";  // trùng toạ độ với việc triển khai
         hoa["location"] = "Trần Duy Hưng";
@@ -409,6 +427,7 @@ int main() {
         CHECK(score.at(5454544) == 24.5);
         json urgent = message();  // B còn 30′: hẹn 09:00 + SLA 50 → B 09:50, chạy 09:20 → S = 1 − 30/240 = 0,875
         urgent["tasks"]["trien_khai"][0]["appointment"] = "2026-09-28 09:00:00";
+        urgent["tasks"]["trien_khai"][0]["timezone"] = "09:00 - 11:00";
         urgent["tasks"]["trien_khai"][0]["sla"] = {{"sla_minutes", 50}, {"priority_in_day", 1}};
         errors.clear();
         const json u = ktv::plan(ktv::parse_message(urgent, errors), ktv::default_rules(), server_now, "").response;
@@ -426,7 +445,7 @@ int main() {
         return json{{"task_id", id}, {"task_group_id", group_id}, {"task_group_name", group}, {"task_type_id", type_id},
                     {"task_type_name", type}, {"task_sub_id", 0}, {"task_sub_name", ""}, {"task_status_id", status},
                     {"task_status_name", ""}, {"sla", {{"sla_minutes", sla ? json(sla) : json(nullptr)}, {"priority_in_day", priority}}},
-                    {"appointment", appointment}, {"complete_date", complete_date}, {"location", "Nhà " + std::to_string(id)},
+                    {"appointment", appointment}, {"timezone", window_of(appointment)}, {"complete_date", complete_date}, {"location", "Nhà " + std::to_string(id)},
                     {"latlng", ll}, {"handle_minutes", handle}, {"task_plots_id", 2}, {"staff_plots_id", 2}, {"staff_role", 1},
                     {"block_id", 3434}};
     };
