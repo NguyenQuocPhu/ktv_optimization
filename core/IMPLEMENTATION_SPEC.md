@@ -2021,6 +2021,16 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `timezone` → không so được. ctest 21/21.
 - Chưa sửa: agent `get_route` (Phase 9.1a, chưa commit) còn ghép khung từ `appointment` → cần đổi sang `timezone`.
 
+### Phase 8.15 — `isblue` + `task_status_*` trên OUT (workbook (10), người dùng duyệt 2026-10-26) ✅ đã thực thi
+
+- Workbook (10): IN task thêm `isblue` (màu khung hẹn do hệ thống tích hẹn trả: 0 đỏ, 1 xanh, −1 không hẹn; UAT 12 có cả
+  xám); OUT (sheet 03, 09) thêm `task_status_id` / `task_status_name` và `isblue`.
+- Chỉ nhận rồi trả, không dùng khi xếp (UAT 12: Mobix chỉ hiển thị lại màu). `isblue` theo từng ca; số nguyên nào cũng giữ;
+  không gửi / null → −1 (kể cả ca có hẹn); sai kiểu → −1 + `ISBLUE`.
+- OUT: dòng TASK / DEFERRED / việc đang làm — `task_status_*` giữa `checkindate` và `checkoutdate` (sheet 03), sau
+  `task_sub_name` ở bản Mobix (sheet 09); `isblue` cuối dòng.
+- Kiểm: `test_api`, `test_pipeline`, `test_adapter`, `test_gateway_replan` (thứ tự field). ctest 21/21.
+
 ### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
 
 - UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.

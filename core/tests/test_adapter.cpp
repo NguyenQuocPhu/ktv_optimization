@@ -104,9 +104,9 @@ int main() {
                 {"seq": 2, "entry_type": "TASK", "at": "08:05", "start_at": "b", "end_at": "c", "task_id": 7, "location": "L",
                  "latlng": "1,1", "task_role": "main", "priority": 50.0, "insert_reason": "", "task_group_id": 2,
                  "task_group_name": "bao_tri", "task_type_id": 1, "task_type_name": "bao_tri_vat_ly", "task_sub_id": 0,
-                 "task_sub_name": "", "checkindate": "", "checkoutdate": "", "travel_minutes_before": 3, "travel_km_before": 1.0,
+                 "task_sub_name": "", "checkindate": "", "task_status_id": 0, "task_status_name": "Chưa xử lý", "checkoutdate": "", "travel_minutes_before": 3, "travel_km_before": 1.0,
                  "handle_minutes": 60, "projected_sla": "ON_TIME", "sla_buffer_minutes": 20, "contract_id": "", "contract_no": "",
-                 "contract_name": "K", "timezone": "+07:00", "appointment": "", "complete_date": ""}]}],
+                 "contract_name": "K", "timezone": "+07:00", "appointment": "", "complete_date": "", "isblue": 1}]}],
             "metrics": {"total_distance_km": 1.0, "total_travel_minutes": 3, "total_handle_minutes": 60, "tasks_total": 1}}]})");
         const nlohmann::ordered_json view = ktv::mobix_response(full);
         const auto keys = [](const nlohmann::ordered_json& o) {
@@ -117,7 +117,8 @@ int main() {
         CHECK((keys(view) == std::vector<std::string>{"success", "statuscode", "message", "data"}));
         const auto& schedule = view["data"][0]["clusters"][0]["schedule"];
         CHECK((keys(schedule[0]) == std::vector<std::string>{"seq", "entry_type", "at", "start_at", "end_at"}));
-        CHECK(keys(schedule[1]).back() == "timezone" && !schedule[1].contains("priority") && schedule[1]["contract_name"] == "K");
+        CHECK(schedule[1]["task_status_id"] == 0 && schedule[1]["isblue"] == 1);
+        CHECK(keys(schedule[1]).back() == "isblue" && !schedule[1].contains("priority") && schedule[1]["contract_name"] == "K");
         CHECK((keys(view["data"][0]["metrics"]) == std::vector<std::string>{"total_distance_km", "total_travel_minutes", "tasks_total"}));
         CHECK(full["data"][0].contains("change_id"));  // bản gốc không đổi
         nlohmann::ordered_json failed = {{"success", false}, {"statuscode", "422"}, {"message", "x"}, {"data", nullptr}};

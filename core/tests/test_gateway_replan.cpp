@@ -218,9 +218,9 @@ int main() {
             const auto& task = item["clusters"][0]["schedule"][0];
             CHECK((keys(task) == std::vector<std::string>{
                 "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role", "task_group_id",
-                "task_group_name", "task_type_id", "task_type_name", "task_sub_id", "task_sub_name", "travel_minutes_before",
-                "travel_km_before", "sla_buffer_minutes", "contract_no", "contract_id", "contract_name", "appointment", "complete_date",
-                "timezone"}));
+                "task_group_name", "task_type_id", "task_type_name", "task_sub_id", "task_sub_name", "task_status_id", "task_status_name",
+                "travel_minutes_before", "travel_km_before", "sla_buffer_minutes", "contract_no", "contract_id", "contract_name",
+                "appointment", "complete_date", "timezone", "isblue"}));
         } else {
             CHECK(false);
         }

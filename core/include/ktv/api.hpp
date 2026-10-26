@@ -106,6 +106,7 @@ struct Task {
     std::string contract_name;  // Tên khách hàng.
     std::string bill_number;    // Mã hóa đơn (mã bill).
     std::string timezone;       // Khung hẹn "HH:MM - HH:MM": đầu khung = mốc A (8.14, sla::appointment_start).
+    int isblue = -1;            // 8.15 (workbook (10)): màu khung hẹn (0 đỏ, 1 xanh, −1 không hẹn…) — chỉ echo. Không gửi = −1.
 };
 
 // Cả message = input của một lần gọi AI cho một KTV.

@@ -67,12 +67,13 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
             {"task_group_id", task.task_group_id}, {"task_group_name", task.task_group_name},
             {"task_type_id", task.task_type_id}, {"task_type_name", task.task_type_name},
             {"task_sub_id", task.task_sub_id}, {"task_sub_name", task.task_sub_name},
-            {"checkindate", ""}, {"checkoutdate", ""}, {"travel_minutes_before", 0}, {"travel_km_before", 0.0},
+            {"checkindate", ""}, {"task_status_id", task.task_status_id}, {"task_status_name", task.task_status_name},
+            {"checkoutdate", ""}, {"travel_minutes_before", 0}, {"travel_km_before", 0.0},
             {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))}, {"projected_sla", ""},
             {"sla_buffer_minutes", 0}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
             {"contract_no", task.contract_no.value_or("")}, {"contract_name", task.contract_name},
             {"timezone", task.timezone}, {"appointment", appointment_out(task, now)},
-            {"complete_date", echo_datetime(task.complete_date)}};
+            {"complete_date", echo_datetime(task.complete_date)}, {"isblue", task.isblue}};
 }
 
 // 8.5c: việc đang làm (staff.current_task) — workbook (6) sheet 01/06 "khóa ở đầu tuyến": dòng TASK đầu cụm 1, seq 0
@@ -766,7 +767,10 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                          {"task_group_id", task.task_group_id},
                          {"task_group_name", task.task_group_name}, {"task_type_id", task.task_type_id},
                          {"task_type_name", task.task_type_name}, {"task_sub_id", task.task_sub_id},
-                         {"task_sub_name", task.task_sub_name}, {"checkindate", ""}, {"checkoutdate", ""},
+                         {"task_sub_name", task.task_sub_name}, {"checkindate", ""},
+                         // 8.15 (workbook (10) sheet 03): trạng thái hiện tại + màu khung hẹn, echo IN.
+                         {"task_status_id", task.task_status_id}, {"task_status_name", task.task_status_name},
+                         {"checkoutdate", ""},
                          {"travel_minutes_before", k == 0 ? leg_minutes : 0},
                          {"travel_km_before", k == 0 ? round_to(v.km, 1) : 0.0},
                          {"handle_minutes", std::llround(service)}, {"projected_sla", sla},
@@ -777,7 +781,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                          // 7.27 (workbook (6)): echo từ IN để Mobix hiển thị; appointment / complete_date dạng ngày giờ đầy đủ.
                          {"contract_name", task.contract_name}, {"timezone", task.timezone},
                          {"appointment", appointment_out(task, now)},
-                         {"complete_date", echo_datetime(task.complete_date)}};
+                         {"complete_date", echo_datetime(task.complete_date)}, {"isblue", task.isblue}};
             rows.push_back(std::move(row));
             row_task.push_back(task_ordinal);
             offset += service;

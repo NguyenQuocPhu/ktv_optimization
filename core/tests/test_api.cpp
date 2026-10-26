@@ -473,6 +473,14 @@ int main() {
         CHECK(errors.empty() && m.tasks.size() == 1);
         CHECK(warnings.size() == 1 && warned("TASK_DROPPED", "tasks.hoa_don[0]"));
     }
+    {  // 8.15: isblue — số nguyên nào cũng giữ; không gửi → -1; sai kiểu → cảnh báo, -1.
+        json data = sample();
+        CHECK(lenient(data).tasks[0].isblue == -1 && warnings.empty());
+        data["tasks"]["trien_khai"][0]["isblue"] = 2;
+        CHECK(lenient(data).tasks[0].isblue == 2 && warnings.empty() && !strict_fails(data));
+        data["tasks"]["trien_khai"][0]["isblue"] = "đỏ";
+        CHECK(lenient(data).tasks[0].isblue == -1 && warned("ISBLUE", "tasks.trien_khai[0].isblue"));
+    }
     {  // 8.14: ca hẹn thiếu / sai timezone → cảnh báo TIMEZONE_MISSING (nới lỏng), strict không lỗi; ca không hẹn thì không.
         json data = sample();
         data["tasks"]["trien_khai"][0]["timezone"] = "";

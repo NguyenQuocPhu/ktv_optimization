@@ -249,6 +249,7 @@ int main() {
         a["contract_no"] = "SGABP0236";
         a["contract_name"] = "Nguyễn Văn A";  // 7.27: echo ra OUT
         a["timezone"] = "+07:00";
+        a["isblue"] = 0;
         a["complete_date"] = "2026-08-10 16:00:00";
         json b = task(2, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", "21.0301,105.8013", "");
         b["contract_id"] = nullptr;  // null → ""; contract_no không gửi → ""
@@ -272,14 +273,15 @@ int main() {
             CHECK(ra["contract_name"] == "Nguyễn Văn A" && ra["timezone"] == "+07:00");
             CHECK(ra["appointment"] == "" && ra["complete_date"] == "2026-08-10 16:00:00");
             CHECK(rows[2]["contract_name"] == "" && rows[2]["timezone"] == "" && rows[2]["complete_date"] == "");
+            CHECK(ra["isblue"] == 0 && rows[2]["isblue"] == -1 && ra["task_status_id"].is_number_integer());  // 8.15 echo
             std::vector<std::string> keys;  // thứ tự field theo sheet 03
             for (auto it = ra.begin(); it != ra.end(); ++it) keys.push_back(it.key());
             const std::vector<std::string> expected = {
                 "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role",
                 "priority", "insert_reason", "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id",
-                "task_sub_name", "checkindate", "checkoutdate", "travel_minutes_before", "travel_km_before",
+                "task_sub_name", "checkindate", "task_status_id", "task_status_name", "checkoutdate", "travel_minutes_before", "travel_km_before",
                 "handle_minutes", "projected_sla", "sla_buffer_minutes", "contract_id", "contract_no", "contract_name", "timezone",
-                "appointment", "complete_date"};
+                "appointment", "complete_date", "isblue"};
             if (keys != expected) {
                 std::cerr << "  thứ tự field TASK:";
                 for (const auto& k : keys) std::cerr << " " << k;

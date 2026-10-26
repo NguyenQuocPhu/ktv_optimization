@@ -78,8 +78,9 @@ nlohmann::ordered_json mobix_response(const nlohmann::ordered_json& out) {
     static const char* const kRowFields[] = {
         "seq", "entry_type", "at", "start_at", "end_at", "task_id", "location", "latlng", "task_role",
         "task_group_id", "task_group_name", "task_type_id", "task_type_name", "task_sub_id", "task_sub_name",
+        "task_status_id", "task_status_name",  // 8.15 (workbook (10))
         "travel_minutes_before", "travel_km_before", "sla_buffer_minutes", "contract_no", "contract_id", "contract_name",
-        "appointment", "complete_date", "timezone"};
+        "appointment", "complete_date", "timezone", "isblue"};
     static const char* const kMetrics[] = {"total_distance_km", "total_travel_minutes", "tasks_total"};
     nlohmann::ordered_json view;
     view["success"] = out.value("success", false);

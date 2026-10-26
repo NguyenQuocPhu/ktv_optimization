@@ -475,7 +475,7 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                      "task_sub_name", "task_status_id", "task_status_name", "sla", "appointment", "create_date",
                      "CreateDate", "complete_date", "location", "latlng", "handle_minutes", "task_plots_id", "staff_plots_id",
                      "staff_role", "block_id", "location_id", "contract_id", "contract_no", "contract_name",
-                     "bill_number", "timezone"});
+                     "bill_number", "timezone", "isblue"});
             Task t;
             // 8.11: lỗi lạ (ngoại lệ) khi đọc MỘT task → bỏ task đó như task hỏng, không làm chết process / bỏ cả KTV.
             try {
@@ -539,6 +539,10 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                     if (!item.contains(key) || item[key].is_null()) continue;
                     if (item[key].is_string()) *target = item[key].get<std::string>();
                     else tr.fail(path + "." + key, "cần chuỗi hoặc null");
+                }
+                if (item.contains("isblue") && !item["isblue"].is_null()) {  // 8.15: số nguyên nào cũng giữ (UAT 12 có màu xám)
+                    if (const std::optional<int> color = whole_number(item["isblue"])) t.isblue = *color;
+                    else tr.tolerate("ISBLUE", path + ".isblue", "cần số nguyên (đang là " + item["isblue"].dump() + "), dùng -1");
                 }
                 // 8.14: ca hẹn mà timezone (khung) thiếu / sai → mốc A = appointment − 2 giờ (sla appointment_start). Chỉ cảnh
                 // báo ở chế độ nới lỏng; strict (validate) không báo lỗi vì workbook không bắt buộc timezone.
