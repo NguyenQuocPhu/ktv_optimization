@@ -355,6 +355,24 @@ int main() {
         CHECK(task_rows[0]["insert_reason"] == "" && task_rows[1]["insert_reason"] == "SAME_ADDRESS");  // 7.20.3: chữ hoa
         CHECK(task_rows[0]["end_at"] == task_rows[1]["start_at"]);
         CHECK(task_rows[1]["travel_km_before"] == 0.0);  // km chỉ tính ở ca đầu của điểm dừng
+        // 8.19: gom theo chuỗi — hoá đơn cách việc triển khai ~80 m, thu hồi nằm giữa (~40 m mỗi bên). Trước: chỉ so với ca
+        // triển khai (tâm) → hoá đơn bị tách.
+        hoa["latlng"] = "21.0122,105.80027";
+        hoa["location"] = "Ngõ 80";
+        json collect = hoa;
+        collect["task_id"] = 5454550;
+        collect["task_group_id"] = 3, collect["task_group_name"] = "thu_hoi";
+        collect["task_type_id"] = 1, collect["task_type_name"] = "thu_hoi_thiet_bi";
+        collect["latlng"] = "21.0122,105.79988";
+        collect["location"] = "Ngõ 40";
+        data["tasks"]["thu_hoi"] = json::array({collect});
+        errors.clear();
+        const json chain = ktv::plan(ktv::parse_message(data, errors), ktv::default_rules(), server_now, "").response;
+        int zero_legs = 0;
+        for (const auto& cluster : chain["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row["entry_type"] == "TASK") zero_legs += row["travel_km_before"] == 0.0 && row["insert_reason"] == "SAME_ADDRESS";
+        CHECK(zero_legs == 2);  // hoá đơn + thu hồi đều gom theo ca triển khai
     }
 
     {  // 7.23: chế độ sắp xếp priority_type ở gốc IN → echo ra data.priority_type; 2 = bộ tầng Tuyến (km tầng 1, 7.26).

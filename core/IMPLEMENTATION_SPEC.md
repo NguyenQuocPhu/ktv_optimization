@@ -2031,6 +2031,17 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `task_sub_name` ở bản Mobix (sheet 09); `isblue` cuối dòng.
 - Kiểm: `test_api`, `test_pipeline`, `test_adapter`, `test_gateway_replan` (thứ tự field). ctest 21/21.
 
+### Phase 8.19 — Gom điểm dừng theo chuỗi (UAT case 28)
+
+Trước: `build_stops` lấy ca đầu làm tâm, chỉ gom ca cách TÂM ≤ 50 m → A–B 40 m, B–C 40 m (A–C 80 m): B đứng đầu IN thì gom
+cả 3, A đứng đầu thì C bị tách — kết quả đổi theo thứ tự OA gửi. Nay (người dùng: "50 m là ngưỡng để nối gần"): ca cách
+BẤT KỲ ca nào đã trong nhóm ≤ `stop_group_radius_m` thì nối vào (thành phần liên thông). Không trần độ trải nhóm
+(`ponytail:` trong code). Không đổi: trùng toạ độ (≤ 1 m) mà địa chỉ khác → không gom (EC: đối chiếu chuỗi địa chỉ);
+nhóm có 2 hẹn không làm liền nhau được → tách (`STOP_GROUP_SPLIT`).
+
+**Đo.** 2.000 KTV: 0 / 2.085 tuyến đổi; UAT 42 / 42 không đổi. **Test.** `test_plan`: hoá đơn cách ca triển khai 80 m, thu
+hồi ở giữa → cả 3 một điểm dừng. Còn mở: ca thiếu `latlng` bị loại hẳn khỏi OUT (không TASK / DEFERRED).
+
 ### Phase 8.18 — Ca chèn ngày tràn ca: mốc cứng chỉ cho chính ca chèn + rule mềm OVERTIME_MINUTES
 
 **Lỗi (staging `00182951-46`, ảnh UAT SGABP4536 / SGH317472).** 8.5b `inserted_cap` = max(hết ca, giờ xong tuyến chỉ

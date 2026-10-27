@@ -258,11 +258,15 @@ std::vector<Stop> build_stops(const std::vector<const Task*>& tasks, const Rules
         if (used[i]) continue;
         Stop stop{{tasks[i]}};
         used[i] = true;
-        for (size_t j = i + 1; j < tasks.size(); ++j)
-            if (!used[j] && same_address(*tasks[i], *tasks[j], radius_km)) {
-                stop.tasks.push_back(tasks[j]);
-                used[j] = true;
-            }
+        // 8.19: gom theo chuỗi — ca cách BẤT KỲ ca nào đã trong nhóm ≤ bán kính thì nối vào (A–B 40 m, B–C 40 m → A, B, C).
+        // Trước chỉ so với ca đầu → kết quả đổi theo thứ tự IN. ponytail: chuỗi không giới hạn độ trải (nhiều ca nối nhau có
+        // thể trải vài trăm m, km nội bộ nhóm tính 0); thêm trần đường kính nhóm nếu gặp.
+        for (size_t k = 0; k < stop.tasks.size(); ++k)
+            for (size_t j = 0; j < tasks.size(); ++j)
+                if (!used[j] && same_address(*stop.tasks[k], *tasks[j], radius_km)) {
+                    stop.tasks.push_back(tasks[j]);
+                    used[j] = true;
+                }
         stops.push_back(std::move(stop));
     }
     for (Stop& stop : stops)
