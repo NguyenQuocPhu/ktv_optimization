@@ -19,12 +19,13 @@ static int failures = 0;
 using ktv::json;
 using ojson = nlohmann::ordered_json;
 
-// 8.14: mốc hẹn A = đầu khung timezone; fixture hẹn "… HH:MM" → khung 2 giờ bắt đầu từ HH:MM (giữ nghĩa A cũ).
-static std::string window_of(const std::string& appointment) {
+// 8.14: mốc hẹn A = đầu khung timezone; fixture hẹn "… HH:MM" → khung bắt đầu từ HH:MM (giữ nghĩa A cũ).
+// 8.16: hạn B = cuối khung → khung dài `minutes` (= SLA của fixture: giữ nghĩa B = A + SLA cũ).
+static std::string window_of(const std::string& appointment, int minutes = 120) {
     if (appointment.size() < 16) return "";
-    const int h = std::stoi(appointment.substr(11, 2));
+    const int end = std::stoi(appointment.substr(11, 2)) * 60 + std::stoi(appointment.substr(14, 2)) + minutes;
     char text[16];
-    std::snprintf(text, sizeof text, "%s - %02d:%s", appointment.substr(11, 5).c_str(), h + 2, appointment.substr(14, 2).c_str());
+    std::snprintf(text, sizeof text, "%s - %02d:%02d", appointment.substr(11, 5).c_str(), end / 60, end % 60);
     return text;
 }
 
@@ -36,7 +37,7 @@ static json task(long long id, const char* group, int gid, const char* type, int
         {"task_type_id", tid}, {"task_type_name", type}, {"task_sub_id", 0}, {"task_sub_name", ""},
         {"task_status_id", 6}, {"task_status_name", ""},
         {"sla", {{"sla_minutes", sla_minutes}, {"priority_in_day", prio}}},
-        {"appointment", appointment}, {"timezone", window_of(appointment)}, {"create_date", create_date}, {"complete_date", ""},
+        {"appointment", appointment}, {"timezone", window_of(appointment, sla_minutes.is_number() ? sla_minutes.get<int>() : 120)}, {"create_date", create_date}, {"complete_date", ""},
         {"location", ""}, {"latlng", latlng}, {"handle_minutes", handle},
         {"task_plots_id", 1}, {"staff_plots_id", 1}, {"staff_role", 1}, {"block_id", 1}};
 }

@@ -31,6 +31,12 @@ std::optional<Minutes> appointment_start(const Task& task) {
     return *task.appointment - kDefaultWindowMinutes;
 }
 
+std::optional<Minutes> appointment_end(const Task& task) {
+    if (!task.appointment) return std::nullopt;
+    if (const auto window = parse_window(task.timezone)) return start_of_day(*task.appointment) + window->second;
+    return task.appointment;
+}
+
 std::optional<Minutes> bill_date(const Task& task, Minutes planned_at) {
     if (!task.complete_date || month_index(*task.complete_date) + 1 != month_index(planned_at)) return std::nullopt;
     const int day = std::min(day_of_month(*task.complete_date), day_of_month(end_of_month(planned_at)));
@@ -41,7 +47,7 @@ Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes plan
     Deadlines d;
     if (task.appointment) {
         d.opens = appointment_start(task);  // 8.14: A = đầu khung timezone
-        if (task.sla_minutes) d.due = *d.opens + *task.sla_minutes;  // Check-in ≤ B = A + SLA.
+        if (task.sla_minutes) d.due = appointment_end(task);  // 8.16: check-in ≤ B = cuối khung timezone
         // Xong trong ngày hẹn: không có SLA, hoặc loại "hoàn tất trong ngày hẹn" (Giao TB Cam) dù input có SLA (8.5b).
         if (!task.sla_minutes || kind.on_time == OnTime::DoneSameAppointmentDay)
             d.complete_by = start_of_day(*task.appointment) + 1439;

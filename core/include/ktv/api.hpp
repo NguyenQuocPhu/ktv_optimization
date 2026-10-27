@@ -90,7 +90,7 @@ struct Task {
     long long task_id = 0;
     int task_group_id = 0, task_type_id = 0, task_sub_id = 0, task_status_id = 0;
     std::string task_group_name, task_type_name, task_sub_name, task_status_name;
-    std::optional<int> sla_minutes;      // Hẹn A → hạn check-in B = A + sla_minutes. Không có = hạn không tính theo phút.
+    std::optional<int> sla_minutes;      // Có thì ca hẹn tính trễ theo check-in ≤ B (cuối khung, 8.16); không thì theo ngày. Không có = hạn không tính theo phút.
     int priority_in_day = 0;             // 1 gấp nhất … 4.
     std::optional<Minutes> appointment;  // Mốc hẹn A. Không có = khách không hẹn.
     std::optional<Minutes> create_date;  // Ngày phát sinh ca vụ. Input tên "create_date" hoặc "CreateDate" (cùng một field).

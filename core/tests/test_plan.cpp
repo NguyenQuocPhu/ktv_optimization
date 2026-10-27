@@ -19,12 +19,13 @@ static int failures = 0;
 using ktv::json;
 
 // JSON mẫu sheet 08 (rút gọn): KTV ở Trung Kính lúc 09:20; việc triển khai hẹn 14:00, hóa đơn không hẹn.
-// 8.14: mốc hẹn A = đầu khung timezone; fixture hẹn "… HH:MM" → khung 2 giờ bắt đầu từ HH:MM (giữ nghĩa A cũ).
-static std::string window_of(const std::string& appointment) {
+// 8.14: mốc hẹn A = đầu khung timezone; fixture hẹn "… HH:MM" → khung bắt đầu từ HH:MM (giữ nghĩa A cũ).
+// 8.16: hạn B = cuối khung → khung dài `minutes` (= SLA của fixture: giữ nghĩa B = A + SLA cũ).
+static std::string window_of(const std::string& appointment, int minutes = 120) {
     if (appointment.size() < 16) return "";
-    const int h = std::stoi(appointment.substr(11, 2));
+    const int end = std::stoi(appointment.substr(11, 2)) * 60 + std::stoi(appointment.substr(14, 2)) + minutes;
     char text[16];
-    std::snprintf(text, sizeof text, "%s - %02d:%s", appointment.substr(11, 5).c_str(), h + 2, appointment.substr(14, 2).c_str());
+    std::snprintf(text, sizeof text, "%s - %02d:%02d", appointment.substr(11, 5).c_str(), end / 60, end % 60);
     return text;
 }
 
@@ -83,7 +84,7 @@ int main() {
         overdue["priority_type"] = 1;
         overdue["planned_at"] = "2026-09-28 10:30:00";
         overdue["tasks"]["trien_khai"][0]["appointment"] = "2026-09-28 09:00:00";
-        overdue["tasks"]["trien_khai"][0]["timezone"] = "09:00 - 11:00";
+        overdue["tasks"]["trien_khai"][0]["timezone"] = "09:00 - 10:00";
         overdue["tasks"]["trien_khai"][0]["sla"]["sla_minutes"] = 60;
         errors.clear();
         const ktv::PlanResult late_run = ktv::plan(ktv::parse_message(overdue, errors), ktv::default_rules(), server_now);
@@ -427,7 +428,7 @@ int main() {
         CHECK(score.at(5454544) == 24.5);
         json urgent = message();  // B còn 30′: hẹn 09:00 + SLA 50 → B 09:50, chạy 09:20 → S = 1 − 30/240 = 0,875
         urgent["tasks"]["trien_khai"][0]["appointment"] = "2026-09-28 09:00:00";
-        urgent["tasks"]["trien_khai"][0]["timezone"] = "09:00 - 11:00";
+        urgent["tasks"]["trien_khai"][0]["timezone"] = "09:00 - 09:50";
         urgent["tasks"]["trien_khai"][0]["sla"] = {{"sla_minutes", 50}, {"priority_in_day", 1}};
         errors.clear();
         const json u = ktv::plan(ktv::parse_message(urgent, errors), ktv::default_rules(), server_now, "").response;
@@ -445,7 +446,7 @@ int main() {
         return json{{"task_id", id}, {"task_group_id", group_id}, {"task_group_name", group}, {"task_type_id", type_id},
                     {"task_type_name", type}, {"task_sub_id", 0}, {"task_sub_name", ""}, {"task_status_id", status},
                     {"task_status_name", ""}, {"sla", {{"sla_minutes", sla ? json(sla) : json(nullptr)}, {"priority_in_day", priority}}},
-                    {"appointment", appointment}, {"timezone", window_of(appointment)}, {"complete_date", complete_date}, {"location", "Nhà " + std::to_string(id)},
+                    {"appointment", appointment}, {"timezone", window_of(appointment, sla ? sla : 120)}, {"complete_date", complete_date}, {"location", "Nhà " + std::to_string(id)},
                     {"latlng", ll}, {"handle_minutes", handle}, {"task_plots_id", 2}, {"staff_plots_id", 2}, {"staff_role", 1},
                     {"block_id", 3434}};
     };

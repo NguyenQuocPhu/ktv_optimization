@@ -2031,6 +2031,18 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `task_sub_name` ở bản Mobix (sheet 09); `isblue` cuối dòng.
 - Kiểm: `test_api`, `test_pipeline`, `test_adapter`, `test_gateway_replan` (thứ tự field). ctest 21/21.
 
+### Phase 8.16 — Hạn check-in B = cuối khung timezone
+
+Người dùng chốt (2026-10-27): ca hẹn **trễ = check-in sau cuối khung timezone**; SLA không dùng tính hạn (UAT case 35:
+khung 15:30–17:30, "còn 15–30 phút tới Mốc B" lúc 17:00–17:15 → B = 17:30). Trước (8.14): B = A + `sla_minutes` → bảo
+trì (SLA 60, khung 2 giờ) hạn giữa khung. Nay `appointment_end`: B = giờ cuối `timezone` vào ngày của `appointment`; thiếu /
+sai timezone → B = `appointment` (OA gửi = cuối khung). `sla_minutes` vẫn quyết định ca hẹn tính theo check-in (có) hay
+theo ngày hẹn (không) như cũ. Triển khai không đổi (SLA 120 = khung 2 giờ); bảo trì nới 60′.
+
+**Test.** `test_sla` (B cuối khung, fallback B = appointment); fixture có hẹn đặt khung dài = SLA để giữ nghĩa cũ
+(`window_of(appointment, minutes)`, publish khung 10:00 - 10:01). UAT: 5 / 42 case đổi (17, 22, 30, 31, 37) — bảo trì
+không còn trễ giả, VD case 30/31 mode 0 trễ hẹn 2 → 1, case 37 1 → 0. ctest 20/20.
+
 ### Phase 8.7 — Ca tuỳ chọn theo giờ trống (UAT case 14, người dùng duyệt 2026-10-13) ✅ đã thực thi
 
 - UAT case 14: KTV hết ca hẹn 15:30, còn ~2h, Thu bill (> K) gần đó đi 15′ (7,5 km) → Expected "được chèn vào cuối tuyến". Trước: 2 gate 7.24 chỉ đo **km** (gate 1 ≥ 4 km gạt, gate 2 `SKIP_OPTIONAL` 3 km) → DEFERRED `BEYOND_K`, không nhìn giờ trống. Case 15 (rảnh nhưng ca xa 90′) phải vẫn **không** chèn → cần trần.

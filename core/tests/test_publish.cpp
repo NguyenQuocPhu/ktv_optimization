@@ -298,7 +298,7 @@ int main() {
             s5["staff"]["staff_id"] = "S5";
             const ktv::Published r1 = go(at("m-s5a", "09:00", s5));
             json tight = at("m-s5b", "09:01", s5);
-            tight["tasks"]["trien_khai"][0]["sla"]["sla_minutes"] = 1;  // ca đầu (hẹn 10:00) hạn B 10:01: ON_TIME → AT_RISK, thứ tự giữ
+            tight["tasks"]["trien_khai"][0]["timezone"] = "10:00 - 10:01";  // 8.16: ca đầu hạn B = cuối khung 10:01: ON_TIME → AT_RISK, thứ tự giữ
             const ktv::Published r2 = go(tight);
             const auto sla_of = [&](const ktv::Published& r) {
                 const auto data = data_of(r);  // giữ bản sao: lặp trên data_of(r)[…] tạm sẽ treo
