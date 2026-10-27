@@ -154,6 +154,10 @@ const TaskKind* find_kind(const std::string& group, const std::string& name);  /
 const TaskKind& kind_or_default(const std::string& group, const std::string& name);
 // Tìm theo tên ở mọi nhóm (loại đã chuyển nhóm, VD ngung_ket_noi_4h onsite → cscd). Không thấy → nullptr.
 const TaskKind* kind_in_any_group(const std::string& name);
+// 8.17 (workbook (10) sheet 05: swap / Cam là task_sub của trien_khai_box): tra theo task_sub_name trước, không có thì
+// theo task_type_name như cũ.
+const TaskKind* find_kind(const Task& task);
+const TaskKind& kind_or_default(const Task& task);
 
 // Trạng thái task theo nhóm (sheet 05, workbook API (3)). Cùng mã khác nghĩa theo nhóm:
 // VD 0 ở bao_tri = "Đã phân công" (xếp), ở trien_khai = check_in (đang làm); 97 ở trien_khai = "Đã nhận tuyến" (xếp),

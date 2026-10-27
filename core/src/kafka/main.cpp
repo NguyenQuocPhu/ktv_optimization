@@ -237,7 +237,9 @@ int main(int argc, char** argv) {
 
     ktv::KafkaConfig config;
     try {
-        config = ktv::kafka_config_from_env(ktv::kafka_env(env_path));
+        const auto env = ktv::kafka_env(env_path);
+        config = ktv::kafka_config_from_env(env);
+        if (osrm_url.empty() && env.count("OSRM_URL")) osrm_url = env.at("OSRM_URL");  // --osrm đè OSRM_URL
     } catch (const std::exception& error) {
         return fatal(error.what(), 2);
     }

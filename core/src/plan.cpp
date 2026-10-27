@@ -59,8 +59,12 @@ std::string appointment_out(const Task& task, Minutes now) {
 }
 
 ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rules& rules) {
-    const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
-    const double priority = priority_score(task, kind, resolve_deadlines(task, kind, now), now, rules);
+    const TaskKind& kind = kind_or_default(task);
+    const Deadlines d = resolve_deadlines(task, kind, now);
+    const double priority = priority_score(task, kind, d, now, rules);
+    // 8.17: hạn đã qua lúc chạy → ALREADY_BREACHED (trước luôn ""), buffer = hạn − lúc chạy (chỉ ca hẹn, như dòng TASK).
+    const std::optional<Minutes> deadline = d.due ? d.due : d.complete_by;
+    const bool overdue = deadline && *deadline < now;
     return {{"seq", 0}, {"entry_type", "DEFERRED"}, {"at", ""}, {"start_at", ""}, {"end_at", ""},
             {"task_id", task.task_id}, {"location", task.location}, {"latlng", task.latlng ? latlng(*task.latlng, 6) : ""},
             {"task_role", "inserted"}, {"priority", priority}, {"insert_reason", reason},
@@ -69,8 +73,8 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
             {"task_sub_id", task.task_sub_id}, {"task_sub_name", task.task_sub_name},
             {"checkindate", ""}, {"task_status_id", task.task_status_id}, {"task_status_name", task.task_status_name},
             {"checkoutdate", ""}, {"travel_minutes_before", 0}, {"travel_km_before", 0.0},
-            {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))}, {"projected_sla", ""},
-            {"sla_buffer_minutes", 0}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
+            {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))},
+            {"projected_sla", overdue ? "ALREADY_BREACHED" : ""}, {"sla_buffer_minutes", overdue && task.appointment ? *deadline - now : 0}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
             {"contract_no", task.contract_no.value_or("")}, {"contract_name", task.contract_name},
             {"timezone", task.timezone}, {"appointment", appointment_out(task, now)},
             {"complete_date", echo_datetime(task.complete_date)}, {"isblue", task.isblue}};
@@ -83,7 +87,9 @@ ojson current_row(const Task& task, Minutes done, Minutes now, const Rules& rule
     ojson row = deferred_row(task, "", now, rules);
     row["entry_type"] = "TASK";
     row["end_at"] = format_datetime(done);
-    row["task_role"] = kind_or_default(task.task_group_name, task.task_type_name).extra ? "inserted" : "main";
+    row["projected_sla"] = "";  // việc đang làm: không dự báo
+    row["sla_buffer_minutes"] = 0;
+    row["task_role"] = kind_or_default(task).extra ? "inserted" : "main";
     return row;
 }
 
@@ -202,7 +208,7 @@ struct Stop {
 };
 
 int stop_service(const Task& task) {
-    const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
+    const TaskKind& kind = kind_or_default(task);
     return task.handle_minutes.value_or(kind.handle_minutes);
 }
 
@@ -274,7 +280,7 @@ bool group_servable(const Stop& stop, const Rules& rules, Minutes now) {
     if (!anchor) return true;  // không ca nào có hẹn → phục vụ liền nhau luôn được
     Minutes clock = *appointment_start(*anchor);
     for (const Task* task : stop.tasks) {
-        const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);
+        const TaskKind& kind = kind_or_default(*task);
         const Deadlines d = resolve_deadlines(*task, kind, now);
         Minutes checkin = clock;
         if (d.opens && *d.opens > checkin) checkin = *d.opens;
@@ -295,7 +301,7 @@ const Task& stop_anchor(const Stop& stop) {
 
 // Ca "hoàn tất trong tháng" còn hơn K ngày làm việc → không xếp (7.16.1; nhóm cùng địa chỉ được xét ở ngoài).
 bool beyond_k(const Task& task, Minutes now, const Rules& rules) {
-    const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
+    const TaskKind& kind = kind_or_default(task);
     if (kind.on_time != OnTime::DoneWithinMonth) return false;
     const Deadlines d = resolve_deadlines(task, kind, now);
     return d.complete_by && workdays_until(now, *d.complete_by) > rules.k_month_days;
@@ -385,7 +391,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     // không có row → thiếu tên nhóm/loại, hoặc loại ngoài danh mục) → rules.current_task_minutes như cũ.
     if (worklist.current_task) {
         const Task& current = *worklist.current_task;
-        const TaskKind* kind = find_kind(current.task_group_name, current.task_type_name);
+        const TaskKind* kind = find_kind(current);
         const double remaining = current.handle_minutes ? *current.handle_minutes / 2.0
                                  : kind                 ? kind->handle_minutes / 2.0
                                                         : rules.current_task_minutes;
@@ -401,7 +407,11 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         const ClusterSummary summary = summarize_clusters(spots, staff.plots, 1e9).front();  // một cụm duy nhất
         ojson schedule = ojson::array();
         if (worklist.current_task) schedule.push_back(current_row(*worklist.current_task, start, now, rules));
-        for (const auto& [task, reason] : deferred) schedule.push_back(deferred_row(*task, reason, now, rules));
+        int deferred_breach = 0;
+        for (const auto& [task, reason] : deferred) {
+            schedule.push_back(deferred_row(*task, reason, now, rules));
+            deferred_breach += schedule.back()["projected_sla"] == "ALREADY_BREACHED";
+        }
         ojson clusters = ojson::array({{{"cluster_seg", 1}, {"cluster_code", summary.code}, {"name", summary.name},
                                         {"center", latlng(summary.center)}, {"radius_m", std::llround(summary.radius_km * 1000)},
                                         {"task_count", 0}, {"travel_km_inbound", 0.0}, {"travel_km_internal", 0.0},
@@ -410,7 +420,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - clock).count();
         ojson metrics = {{"total_distance_km", 0.0}, {"total_travel_minutes", 0}, {"total_handle_minutes", 0},
                          {"start_at", format_datetime(start)}, {"finish_at", format_datetime(start)},
-                         {"on_time_rate_forecast", 100.0}, {"at_risk_count", 0}, {"breach_forecast_count", 0},
+                         {"on_time_rate_forecast", 100.0}, {"at_risk_count", 0}, {"breach_forecast_count", deferred_breach},
                          {"cluster_count", 1}, {"revisit_count", 0}, {"idle_minutes", 0}, {"break_minutes", 0},
                          {"tasks_total", 0}, {"tasks_forecast_completed", 0}, {"shift_end_at", format_datetime(shift_end)},
                          {"overload_minutes", 0}, {"generated_in_ms", ms}};
@@ -434,7 +444,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     auto spare_rank = [&](const Stop& stop) {  // catalogue mục B: ít ngày làm việc còn lại → ưu tiên trong ngày cao
         int days = 1 << 20, level = 9;
         for (const Task* task : stop.tasks) {
-            const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);
+            const TaskKind& kind = kind_or_default(*task);
             const Deadlines d = resolve_deadlines(*task, kind, now);
             if (d.complete_by) days = std::min(days, workdays_until(now, *d.complete_by));
             if (task->priority_in_day > 0) level = std::min(level, task->priority_in_day);
@@ -459,7 +469,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         double weight = 0, urgency = 0, skip = 0, skip_priority = 0;
         bool inserted = true;  // 8.5b: điểm dừng toàn ca chèn → được bỏ khi hết chỗ
         for (const Task* task : stop.tasks) {
-            const TaskKind& kind = kind_or_default(task->task_group_name, task->task_type_name);  // Ngoài danh mục: chỉ lọt qua khi nới lỏng.
+            const TaskKind& kind = kind_or_default(*task);  // Ngoài danh mục: chỉ lọt qua khi nới lỏng.
             const Deadlines d = resolve_deadlines(*task, kind, now);
             service += task->handle_minutes.value_or(kind.handle_minutes);
             if (d.opens && (!opens || *d.opens < *opens)) opens = d.opens;
@@ -734,7 +744,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         double offset = 0;  // phút kể từ lúc check-in điểm dừng
         for (size_t k = 0; k < stop.tasks.size(); ++k) {
             const Task& task = *stop.tasks[k];
-            const TaskKind& kind = kind_or_default(task.task_group_name, task.task_type_name);
+            const TaskKind& kind = kind_or_default(task);
             const Deadlines d = resolve_deadlines(task, kind, now);
             const double service = task.handle_minutes.value_or(kind.handle_minutes);
             const double checkin = v.checkin + offset;
@@ -812,12 +822,14 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
 
     // 7.20.2: ca tồn không xếp → DEFERRED cuối schedule của cụm có TÂM GẦN NHẤT (cụm của core là đoạn tuyến, ca không
     // xếp không thuộc đoạn nào → suy theo địa lý). Không đếm vào task_count / km / handle / metrics.
+    int deferred_breach = 0;  // 8.17: ca DEFERRED đã quá hạn — đếm vào breach_forecast_count, không vào on_time_rate
     for (const auto& [task, reason] : deferred) {
         int nearest = 0;
         for (int c = 1; c < static_cast<int>(summaries.size()); ++c)
             if (distance_km(summaries[c].center, *task->latlng) < distance_km(summaries[nearest].center, *task->latlng))
                 nearest = c;
         cluster_schedule[nearest].push_back(deferred_row(*task, reason, now, rules));
+        deferred_breach += cluster_schedule[nearest].back()["projected_sla"] == "ALREADY_BREACHED";
     }
 
     ojson clusters = ojson::array();
@@ -843,7 +855,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         {"finish_at", format_datetime(finish)},
         {"on_time_rate_forecast", round_to(100.0 * (total - breach) / total, 1)},
         {"at_risk_count", at_risk},
-        {"breach_forecast_count", breach},
+        {"breach_forecast_count", breach + deferred_breach},
         {"cluster_count", static_cast<int>(summaries.size())},
         {"revisit_count", revisits},
         {"idle_minutes", idle},

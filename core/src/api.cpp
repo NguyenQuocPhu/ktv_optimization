@@ -103,6 +103,18 @@ const TaskKind* kind_in_any_group(const std::string& name) {
     return nullptr;
 }
 
+const TaskKind* find_kind(const Task& task) {
+    if (!task.task_sub_name.empty())
+        if (const TaskKind* kind = find_kind(task.task_group_name, task.task_sub_name)) return kind;
+    return find_kind(task.task_group_name, task.task_type_name);
+}
+
+const TaskKind& kind_or_default(const Task& task) {
+    if (!task.task_sub_name.empty())
+        if (const TaskKind* kind = find_kind(task.task_group_name, task.task_sub_name)) return *kind;
+    return kind_or_default(task.task_group_name, task.task_type_name);
+}
+
 const TaskKind& kind_or_default(const std::string& group, const std::string& name) {
     static const TaskKind unknown{"", 0, "", std::nullopt, OnTime::CheckinBeforeB, 3, 60};  // [GIẢ ĐỊNH]
     const TaskKind* kind = find_kind(group, name);
@@ -611,13 +623,15 @@ Message parse_message(const json& data, std::vector<Error>& errors, std::vector<
                         t.task_group_name = key;
                         t.task_group_id = g + 1;
                     }
-                    const TaskKind* kind = find_kind(key, t.task_type_name);
+                    const TaskKind* kind = t.task_sub_name.empty() ? nullptr : find_kind(key, t.task_sub_name);
+                    const bool by_sub = kind;  // 8.17: loại theo task_sub → task_type_id là của loại cha, không so
+                    if (!kind) kind = find_kind(key, t.task_type_name);
                     if (!kind && (kind = kind_in_any_group(t.task_type_name)))  // loại đã chuyển nhóm: dùng luật nhóm kia
                         tr.tolerate("TASK_TYPE_OTHER_GROUP", path + ".task_type_name",
                                     t.task_type_name + " thuộc nhóm " + kind->group + " (workbook API (4)), không phải " + key +
                                         "; dùng luật nhóm " + kind->group);
                     if (kind) {
-                        if (t.task_type_id != kind->type_id)
+                        if (!by_sub && t.task_type_id != kind->type_id)
                             tr.tolerate("CATALOG_MISMATCH", path + ".task_type_id", "danh mục ghi " + std::to_string(kind->type_id));
                         if (sla && (t.sla_minutes != kind->sla_minutes || t.priority_in_day != kind->priority))
                             tr.tolerate("CATALOG_MISMATCH", path + ".sla",

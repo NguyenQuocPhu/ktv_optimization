@@ -47,7 +47,9 @@ Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes plan
     Deadlines d;
     if (task.appointment) {
         d.opens = appointment_start(task);  // 8.14: A = đầu khung timezone
-        if (task.sla_minutes) d.due = appointment_end(task);  // 8.16: check-in ≤ B = cuối khung timezone
+        // 8.16: check-in ≤ B = cuối khung timezone. 8.17: loại "hoàn tất trong ngày hẹn" (Cam) không có B dù input có SLA
+        // (workbook (10) sheet 05: SLA 60 của Cam chỉ là định mức, hạn là cuối ngày hẹn).
+        if (task.sla_minutes && kind.on_time != OnTime::DoneSameAppointmentDay) d.due = appointment_end(task);
         // Xong trong ngày hẹn: không có SLA, hoặc loại "hoàn tất trong ngày hẹn" (Giao TB Cam) dù input có SLA (8.5b).
         if (!task.sla_minutes || kind.on_time == OnTime::DoneSameAppointmentDay)
             d.complete_by = start_of_day(*task.appointment) + 1439;

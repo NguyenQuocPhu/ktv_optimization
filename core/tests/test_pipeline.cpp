@@ -24,7 +24,7 @@ using ojson = nlohmann::ordered_json;
 static std::string window_of(const std::string& appointment, int minutes = 120) {
     if (appointment.size() < 16) return "";
     const int end = std::stoi(appointment.substr(11, 2)) * 60 + std::stoi(appointment.substr(14, 2)) + minutes;
-    char text[16];
+    char text[32];
     std::snprintf(text, sizeof text, "%s - %02d:%02d", appointment.substr(11, 5).c_str(), end / 60, end % 60);
     return text;
 }

@@ -24,7 +24,7 @@ using ktv::json;
 static std::string window_of(const std::string& appointment, int minutes = 120) {
     if (appointment.size() < 16) return "";
     const int end = std::stoi(appointment.substr(11, 2)) * 60 + std::stoi(appointment.substr(14, 2)) + minutes;
-    char text[16];
+    char text[32];
     std::snprintf(text, sizeof text, "%s - %02d:%02d", appointment.substr(11, 5).c_str(), end / 60, end % 60);
     return text;
 }
@@ -511,6 +511,36 @@ int main() {
             const Outcome roomy = day("08:00-17:30", mode);  // đủ chỗ → không bỏ ca nào
             CHECK(roomy.deferred.empty() && roomy.order.size() == 3);
         }
+    }
+    {  // 8.17: Cam = "hoàn tất trong ngày hẹn" (workbook (10)): không có hạn B; ca DEFERRED quá hạn → ALREADY_BREACHED.
+        const auto find_row = [](const json& out, long long id) {
+            for (const auto& cluster : out["data"]["clusters"])
+                for (const auto& row : cluster["schedule"])
+                    if (row.value("task_id", 0LL) == id) return row;
+            return json();
+        };
+        // Cam hẹn 08:00–10:00 hôm nay, chạy 14:00, chiều trống → vẫn xếp, đúng hẹn (trước: trễ B → NO_CAPACITY).
+        const Outcome late = run_day(day_message(
+            "2026-09-14 14:00:00",
+            json::array({task(8, "trien_khai", 1, 6, "giao_thiet_bi_cam", 97, 3, 60, "2026-09-14 08:00:00", 1, 0, 25)}),
+            json::array(), json::array(), 0));
+        CHECK(late.order == std::vector<long long>{8} && find_row(late.out, 8)["projected_sla"] == "ON_TIME");
+        // Cam hẹn 12/09 (2 ngày trước), ca trực chỉ đủ ca bảo trì → DEFERRED, ALREADY_BREACHED, buffer âm, đếm vào số trễ.
+        json m = day_message(
+            "2026-09-14 07:30:00",
+            json::array({task(8, "trien_khai", 1, 6, "giao_thiet_bi_cam", 97, 3, 60, "2026-09-12 08:00:00", 2.5, 0.5, 25)}),
+            json::array({task(1, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 60, "2026-09-14 08:00:00", 2, 0, 60)}),
+            json::array(), 0);
+        m["staff"]["available"] = "08:00-09:10";
+        const Outcome old = run_day(m);
+        const json cam = find_row(old.out, 8);
+        CHECK(cam["entry_type"] == "DEFERRED" && cam["projected_sla"] == "ALREADY_BREACHED" && cam["sla_buffer_minutes"] < 0);
+        CHECK(old.out["data"]["metrics"]["breach_forecast_count"] == 1 && old.out["data"]["metrics"]["on_time_rate_forecast"] == 100.0);
+        // Cam gửi theo workbook (10): task_sub của trien_khai_box → tra theo task_sub_name (ca chèn, định mức 60′).
+        json box = task(8, "trien_khai", 1, 4, "trien_khai_box", 97, 3, 60, "2026-09-14 08:00:00", 1, 0, 0);
+        box["task_sub_name"] = "giao_thiet_bi_cam";
+        const json sub = find_row(run_day(day_message("2026-09-14 14:00:00", json::array({box}), json::array(), json::array(), 0)).out, 8);
+        CHECK(sub["task_role"] == "inserted" && sub["handle_minutes"] == 60 && sub["projected_sla"] == "ON_TIME");
     }
     {  // 8.6 (case 37): KTV đang di chuyển tới VL (status 7) → VL đứng đầu dù có ca mới gần hơn, hẹn sớm hơn.
         for (int mode : {0, 1, 2}) {

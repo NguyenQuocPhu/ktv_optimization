@@ -142,7 +142,7 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
     CHECK(!clusters.empty());
     const auto& metrics = data["metrics"];
 
-    long long task_rows = 0;
+    long long task_rows = 0, breached = 0;  // 8.17: breach_forecast_count = dòng TASK trễ + dòng DEFERRED đã quá hạn
     long long cluster_tasks = 0;
     // 7.19.3: tổng metrics/cụm = tổng dòng (km tính theo phần mười để tránh sai số float).
     long long tenths = 0, travel = 0, handle = 0, idle = 0, rest = 0;
@@ -191,7 +191,13 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
             if (entry == "DEFERRED") {  // 7.20.2: seq 0, không giờ, cuối schedule, không tính vào tổng
                 deferred_tail = true;
                 CHECK(row["seq"] == 0 && row["at"] == "" && row["start_at"] == "" && row["end_at"] == "");
-                CHECK(row["task_role"] == "inserted" && row["projected_sla"] == "" && row["travel_km_before"] == 0.0);
+                // 8.17: hạn đã qua lúc chạy → ALREADY_BREACHED + buffer ≤ 0; còn lại "" + 0. Hẹn ngày sau không bao giờ trễ.
+                const std::string ps = row["projected_sla"].get<std::string>();
+                const long long buffer = row["sla_buffer_minutes"].get<long long>();
+                CHECK((ps == "" && buffer == 0) || (ps == "ALREADY_BREACHED" && buffer <= 0));
+                CHECK(row["insert_reason"] != "NEXT_DAY" || ps == "");
+                CHECK(row["task_role"] == "inserted" && row["travel_km_before"] == 0.0);
+                breached += ps == "ALREADY_BREACHED";
                 CHECK(deferred.emplace(row["task_id"].get<long long>(), row["insert_reason"].get<std::string>()).second);
                 continue;
             }
@@ -217,6 +223,7 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
                 CHECK(seen.insert(row["task_id"].get<long long>()).second);  // không lặp
                 const std::string ps = row["projected_sla"].get<std::string>();
                 CHECK(ps == "ON_TIME" || ps == "AT_RISK" || ps == "WILL_BREACH" || ps == "ALREADY_BREACHED");
+                if (row["seq"] != 0) breached += ps == "WILL_BREACH" || ps == "ALREADY_BREACHED";
             }
         }
         CHECK(tenth(cluster["travel_km_inbound"]) == std::max<long long>(first_tenths, 0));  // cụm toàn DEFERRED: 0
@@ -224,6 +231,7 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
         CHECK(cluster["handle_minutes"].get<long long>() == cluster_handle);
     }
     CHECK(tenth(metrics["total_distance_km"]) == tenths);
+    CHECK(metrics["breach_forecast_count"].get<long long>() == breached);
     CHECK(metrics["total_travel_minutes"].get<long long>() == travel);
     CHECK(metrics["total_handle_minutes"].get<long long>() == handle);
     CHECK(metrics["idle_minutes"].get<long long>() == idle);

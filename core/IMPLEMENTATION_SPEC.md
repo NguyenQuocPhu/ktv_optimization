@@ -2031,6 +2031,24 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `task_sub_name` ở bản Mobix (sheet 09); `isblue` cuối dòng.
 - Kiểm: `test_api`, `test_pipeline`, `test_adapter`, `test_gateway_replan` (thứ tự field). ctest 21/21.
 
+### Phase 8.17 — projected_sla của ca DEFERRED, Cam không có hạn B, tra loại theo task_sub
+
+- **DEFERRED quá hạn** (UAT: ca "dự kiến trễ 2 ngày" không ra ALREADY_BREACHED): `deferred_row` (7.20.2) ghi cứng
+  `projected_sla ""` / buffer 0 — từ 8.5b ca chèn đã quá hạn cũng bị đẩy ra DEFERRED. Nay hạn (B, không thì hạn hoàn tất)
+  đã qua lúc chạy → `ALREADY_BREACHED`, `sla_buffer_minutes` = hạn − lúc chạy (chỉ ca hẹn, như dòng TASK); còn lại "" / 0.
+  Đếm vào `breach_forecast_count` (người dùng duyệt), KHÔNG vào `on_time_rate_forecast` (chỉ ca xếp tuyến, EC mục D).
+  Dòng việc đang làm (seq 0) vẫn "" / 0.
+- **Cam** (workbook (10) sheet 05: SLA 60, "Hoàn tất trong ngày hẹn"): loại `DoneSameAppointmentDay` không đặt hạn B dù
+  input có SLA — trước bị chấm theo cuối khung → Cam hẹn sáng, chiều trống vẫn bị bỏ `NO_CAPACITY`.
+- **task_sub** (workbook (10): swap / Cam là task_sub của `trien_khai_box`): `find_kind(Task)` / `kind_or_default(Task)` tra
+  theo `task_sub_name` trước, không có thì theo `task_type_name` (OA đang gửi Cam ở task_type). Kiểm danh mục: loại theo
+  task_sub không so `task_type_id` (là id loại cha).
+
+**Test.** `test_plan` (Cam hẹn sáng chạy 14:00 → xếp ON_TIME; Cam hẹn 2 ngày trước + ca trực hẹp → DEFERRED
+ALREADY_BREACHED, buffer âm, đếm vào số trễ, on_time_rate giữ; Cam gửi dạng task_sub → ca chèn 60′), `test_sla` (Cam không
+B), `test_invariants` (DEFERRED: "" + 0 hoặc ALREADY_BREACHED + buffer ≤ 0; NEXT_DAY không trễ; breach_forecast_count =
+dòng TASK trễ + DEFERRED quá hạn). UAT 42 / 42 không đổi. ctest 20/20.
+
 ### Phase 8.16 — Hạn check-in B = cuối khung timezone
 
 Người dùng chốt (2026-10-27): ca hẹn **trễ = check-in sau cuối khung timezone**; SLA không dùng tính hạn (UAT case 35:

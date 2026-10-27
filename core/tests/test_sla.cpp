@@ -171,6 +171,8 @@ int main() {
         t.sla_minutes = 120;
         d = resolve_deadlines(t, *net, *parse_datetime("2026-10-23 08:00:00"));
         CHECK(when(d.due) == "2026-10-23 15:30:00");  // triển khai: hạn = cuối khung
+        d = resolve_deadlines(t, *find_kind("trien_khai", "giao_thiet_bi_cam"), *parse_datetime("2026-10-23 08:00:00"));
+        CHECK(!d.due && when(d.complete_by) == "2026-10-23 23:59:00");  // 8.17: Cam chỉ hạn cuối ngày hẹn
         t.timezone = "13:30-15:30";
         CHECK(when(appointment_start(t)) == "2026-10-23 13:30:00");
         for (const char* bad : {"", "+07:00", "13h30 - 15h30", "25:00 - 26:00"}) {  // thiếu / sai → appointment − 2 giờ (a)

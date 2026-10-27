@@ -156,6 +156,11 @@ int main(int argc, char** argv) {
     auto server = ktv::make_gateway_server(*store, options, redis);
     if (!server->bind_to_port(options.host, options.port))
         return fatal("không listen được " + options.host + ":" + std::to_string(options.port), 1);
+    if (options.osrm_url.empty()) {  // --osrm đè OSRM_URL (biến môi trường thật > .env của --env)
+        const auto env = ktv::kafka_env(env_path);
+        if (env.count("OSRM_URL")) options.osrm_url = env.at("OSRM_URL");
+    }
+    start["osrm"] = options.osrm_url.empty() ? nlohmann::ordered_json(nullptr) : nlohmann::ordered_json(options.osrm_url);
     start["listen"] = options.host + ":" + std::to_string(options.port);
     start["token"] = !options.token.empty();
     if (!start.contains("redis")) start["redis"] = nullptr;  // không Redis: /suggest trả 503
