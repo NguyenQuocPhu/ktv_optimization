@@ -43,7 +43,7 @@ std::optional<Minutes> bill_date(const Task& task, Minutes planned_at) {
     return start_of_day(planned_at) + static_cast<Minutes>(day - day_of_month(planned_at)) * 1440;
 }
 
-Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes planned_at) {
+Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes planned_at, int day_end) {
     Deadlines d;
     if (task.appointment) {
         d.opens = appointment_start(task);  // 8.14: A = đầu khung timezone
@@ -52,19 +52,19 @@ Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes plan
         if (task.sla_minutes && kind.on_time != OnTime::DoneSameAppointmentDay) d.due = appointment_end(task);
         // Xong trong ngày hẹn: không có SLA, hoặc loại "hoàn tất trong ngày hẹn" (Giao TB Cam) dù input có SLA (8.5b).
         if (!task.sla_minutes || kind.on_time == OnTime::DoneSameAppointmentDay)
-            d.complete_by = start_of_day(*task.appointment) + 1439;
+            d.complete_by = start_of_day(*task.appointment) + day_end;
         return d;
     }
     // Không hẹn: "trong ngày tạo phiếu / trong tháng" lấy theo create_date nếu có, không thì planned_at.
     const Minutes base = task.create_date.value_or(planned_at);
     if (kind.on_time == OnTime::DoneSameCreatedDay || kind.on_time == OnTime::DoneSameAppointmentDay)
-        d.complete_by = start_of_day(base) + 1439;
+        d.complete_by = start_of_day(base) + day_end;
     else if (kind.on_time == OnTime::DoneWithinMonth && std::string(kind.group) == "hoa_don" &&
              bill_date(task, planned_at) == start_of_day(planned_at))
         // Mục E (7.17b): KH thanh toán tháng trước đúng ngày này → còn 0 ngày → chèn ngay trong ngày.
-        d.complete_by = start_of_day(planned_at) + 1439;
+        d.complete_by = start_of_day(planned_at) + day_end;
     else if (kind.on_time == OnTime::DoneWithinMonth)
-        d.complete_by = end_of_month(base);
+        d.complete_by = start_of_day(end_of_month(base)) + day_end;
     return d;  // Loại "check-in trước B" mà không hẹn: chưa có B, không tính trễ.
 }
 

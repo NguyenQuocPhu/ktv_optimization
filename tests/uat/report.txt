@@ -137,16 +137,16 @@
 === Case 16 — Xét số ngày còn lại (Gsafe 0 ngày vs Thu hồi 12 ngày)
   [c16] statuscode 200
    #1 08:04-09:04 Hẹn 08:00 (xong 09:00) (bao_tri_logic, hẹn 08:00 - 10:00) đi 4′/2.0km role=main sla=ON_TIME
-   #2 09:05-09:30 Gsafe (hạn trong ngày hẹn) (gsafe, hẹn 08:00 - 10:00) đi 1′/0.7km role=main sla=ON_TIME
+   #2 09:05-09:30 Gsafe (hạn trong ngày hẹn) (gsafe, hẹn 08:00 - 10:00) đi 1′/0.7km role=main sla=AT_RISK
    DEFERRED Thu hồi (12 ngày LV) (thu_hoi_thiet_bi) lý do=BEYOND_K
-   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-14 08:00:00", "finish_at": "2026-10-14 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 0, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-14 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
+   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-14 08:00:00", "finish_at": "2026-10-14 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 1, "breach_forecast_count": 0, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-14 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
 
 === Case 17 — Hoà số ngày — xét ưu tiên (Cam ưt3 vs Thu bill trúng ngày ưt4)
   [c17] statuscode 200
    #1 08:04-09:04 Hẹn 08:00 (xong 09:00) (bao_tri_logic, hẹn 08:00 - 10:00) đi 4′/2.0km role=main sla=ON_TIME
-   #2 09:05-09:30 Giao TB Cam (hạn trong ngày hẹn) (giao_thiet_bi_cam, hẹn 08:00 - 10:00) đi 1′/0.7km role=inserted sla=ON_TIME
+   #2 09:05-09:30 Giao TB Cam (hạn trong ngày hẹn) (giao_thiet_bi_cam, hẹn 08:00 - 10:00) đi 1′/0.7km role=inserted sla=AT_RISK
    DEFERRED Thu bill trúng ngày TT tháng trước (tra_sau) lý do=NO_CAPACITY
-   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-14 08:00:00", "finish_at": "2026-10-14 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 1, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-14 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
+   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-14 08:00:00", "finish_at": "2026-10-14 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 1, "breach_forecast_count": 1, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-14 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
 
 === Case 18 — Thu bill vs Thu hồi — xét thuận tuyến
   [c18] statuscode 200
@@ -182,9 +182,9 @@
 === Case 22 — Chưa tới ngày TT, KTV kín lịch, tranh với Giao TB Cam
   [c22] statuscode 200
    #1 08:04-09:04 Hẹn 08:00 (xong 09:00) (bao_tri_logic, hẹn 08:00 - 10:00) đi 4′/2.0km role=main sla=ON_TIME
-   #2 09:05-09:30 Giao TB Cam (hạn trong ngày) (giao_thiet_bi_cam, hẹn 08:00 - 10:00) đi 1′/0.7km role=inserted sla=ON_TIME
+   #2 09:05-09:30 Giao TB Cam (hạn trong ngày) (giao_thiet_bi_cam, hẹn 08:00 - 10:00) đi 1′/0.7km role=inserted sla=AT_RISK
    DEFERRED Thu bill (TT 25/09) (tra_sau) lý do=BEYOND_K
-   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-12 08:00:00", "finish_at": "2026-10-12 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 0, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-12 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
+   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-12 08:00:00", "finish_at": "2026-10-12 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 1, "breach_forecast_count": 0, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-12 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
 
 === Case 23 — Khách không có lịch sử thanh toán, KTV có khoảng trống
   [c23] statuscode 200
@@ -199,9 +199,9 @@
 === Case 24 — Còn nhiều ngày — nhường chỗ (09/10, Thu hồi 15 ngày vs Gsafe)
   [c24] statuscode 200
    #1 08:04-09:04 Hẹn 08:00 (xong 09:00) (bao_tri_logic, hẹn 08:00 - 10:00) đi 4′/2.0km role=main sla=ON_TIME
-   #2 09:05-09:30 Gsafe (hạn trong ngày hẹn) (gsafe, hẹn 08:00 - 10:00) đi 1′/0.7km role=main sla=ON_TIME
+   #2 09:05-09:30 Gsafe (hạn trong ngày hẹn) (gsafe, hẹn 08:00 - 10:00) đi 1′/0.7km role=main sla=AT_RISK
    DEFERRED Thu hồi (15 ngày LV) (thu_hoi_thiet_bi) lý do=BEYOND_K
-   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-09 08:00:00", "finish_at": "2026-10-09 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 0, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-09 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
+   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-09 08:00:00", "finish_at": "2026-10-09 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 1, "breach_forecast_count": 0, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-09 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
 
 === Case 25 — Còn ít ngày — được tranh (27/10, Thu hồi 3 ngày thuận tuyến hơn vs Thu bill 3 ngày xa hơn)
   [c25] statuscode 200

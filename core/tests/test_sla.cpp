@@ -173,6 +173,13 @@ int main() {
         CHECK(when(d.due) == "2026-10-23 15:30:00");  // triển khai: hạn = cuối khung
         d = resolve_deadlines(t, *find_kind("trien_khai", "giao_thiet_bi_cam"), *parse_datetime("2026-10-23 08:00:00"));
         CHECK(!d.due && when(d.complete_by) == "2026-10-23 23:59:00");  // 8.17: Cam chỉ hạn cuối ngày hẹn
+        // 8.21: hạn trong ngày / trong tháng = giờ hết ca truyền vào (17:30), không phải 23:59.
+        d = resolve_deadlines(t, *find_kind("trien_khai", "giao_thiet_bi_cam"), *parse_datetime("2026-10-23 08:00:00"), 1050);
+        CHECK(when(d.complete_by) == "2026-10-23 17:30:00");
+        Task month;
+        month.create_date = parse_datetime("2026-10-05 08:00:00");
+        d = resolve_deadlines(month, *find_kind("thu_hoi", "thu_hoi_thiet_bi"), *parse_datetime("2026-10-23 08:00:00"), 1050);
+        CHECK(when(d.complete_by) == "2026-10-31 17:30:00");
         t.timezone = "13:30-15:30";
         CHECK(when(appointment_start(t)) == "2026-10-23 13:30:00");
         for (const char* bad : {"", "+07:00", "13h30 - 15h30", "25:00 - 26:00"}) {  // thiếu / sai → appointment − 2 giờ (a)

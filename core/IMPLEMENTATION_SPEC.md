@@ -2031,6 +2031,17 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `task_sub_name` ở bản Mobix (sheet 09); `isblue` cuối dòng.
 - Kiểm: `test_api`, `test_pipeline`, `test_adapter`, `test_gateway_replan` (thứ tự field). ctest 21/21.
 
+### Phase 8.21 — Hạn "trong ngày / trong tháng" = giờ hết ca (trước 23:59)
+
+Người dùng chốt: hạn hoàn tất trong ngày hẹn / ngày tạo / trong tháng (cuối tháng) / ngày thu bill tính tới **giờ hết ca
+của KTV** (giờ cuối `staff.available`), không phải 23:59. `resolve_deadlines(…, day_end)` (mặc định 1439); `plan` gán
+`rules.day_end_minute` (không đọc từ rules.json). Hạn B ca hẹn (cuối khung) không đổi.
+
+**Đo.** 2.000 KTV: 0 / 2.085 tuyến đổi. UAT: 4 case (16, 17, 22, 24 — ca trực tới 09:40) Cam / Gsafe xong 09:30 đổi
+ON_TIME → AT_RISK (còn 10′ tới hết ca). Ví dụ 31/10 (ca tới 17:30): Cam không hẹn trước làm 16:34–17:34 (ON_TIME vì hạn
+23:59), nay được dời lên 14:34–15:34, ca Net không hẹn ra sau. Oracle độc lập 600 IN: 0 lệch. **Test.** `test_sla` (Cam /
+thu hồi với hết ca 17:30), `test_plan` 8.20 đổi kịch bản (chạy trước giờ hết ca). ctest 20/20.
+
 ### Phase 8.20 — Ca DEFERRED có hạn trong hôm nay → WILL_BREACH
 
 Kiểm độc lập theo workbook (10) (subagent không đọc code): DEFERRED có hạn chưa qua nhưng trong hôm nay (VD Cam hẹn hôm

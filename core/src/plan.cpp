@@ -60,7 +60,7 @@ std::string appointment_out(const Task& task, Minutes now) {
 
 ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rules& rules) {
     const TaskKind& kind = kind_or_default(task);
-    const Deadlines d = resolve_deadlines(task, kind, now);
+    const Deadlines d = resolve_deadlines(task, kind, now, rules.day_end_minute);
     const double priority = priority_score(task, kind, d, now, rules);
     // 8.17: hạn đã qua lúc chạy → ALREADY_BREACHED (trước luôn ""), buffer = hạn − lúc chạy (chỉ ca hẹn, như dòng TASK).
     // 8.20: hạn chưa qua nhưng trong hôm nay → không được làm hôm nay thì chắc trễ → WILL_BREACH, buffer 0 (không có giờ
@@ -289,7 +289,7 @@ bool group_servable(const Stop& stop, const Rules& rules, Minutes now) {
     Minutes clock = *appointment_start(*anchor);
     for (const Task* task : stop.tasks) {
         const TaskKind& kind = kind_or_default(*task);
-        const Deadlines d = resolve_deadlines(*task, kind, now);
+        const Deadlines d = resolve_deadlines(*task, kind, now, rules.day_end_minute);
         Minutes checkin = clock;
         if (d.opens && *d.opens > checkin) checkin = *d.opens;
         if (checkin - clock > rules.stop_group_max_wait_minutes) return false;
@@ -311,7 +311,7 @@ const Task& stop_anchor(const Stop& stop) {
 bool beyond_k(const Task& task, Minutes now, const Rules& rules) {
     const TaskKind& kind = kind_or_default(task);
     if (kind.on_time != OnTime::DoneWithinMonth) return false;
-    const Deadlines d = resolve_deadlines(task, kind, now);
+    const Deadlines d = resolve_deadlines(task, kind, now, rules.day_end_minute);
     return d.complete_by && workdays_until(now, *d.complete_by) > rules.k_month_days;
 }
 
@@ -348,6 +348,8 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     if (message.priority_type == 2) rules.tiers = base_rules.route_tiers;
     PlanResult result;
     const Staff& staff = message.staff;
+    // 8.21: hạn "trong ngày / trong tháng" = giờ hết ca của KTV (trước 23:59).
+    if (!staff.available.empty()) rules.day_end_minute = staff.available.back().second;
     const Minutes now = message.planned_at.value_or(server_now);
     const Minutes day = start_of_day(now);
     const NormalizedWorklist worklist = normalize_worklist(message);
@@ -453,7 +455,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         int days = 1 << 20, level = 9;
         for (const Task* task : stop.tasks) {
             const TaskKind& kind = kind_or_default(*task);
-            const Deadlines d = resolve_deadlines(*task, kind, now);
+            const Deadlines d = resolve_deadlines(*task, kind, now, rules.day_end_minute);
             if (d.complete_by) days = std::min(days, workdays_until(now, *d.complete_by));
             if (task->priority_in_day > 0) level = std::min(level, task->priority_in_day);
         }
@@ -478,7 +480,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         bool inserted = true;  // 8.5b: điểm dừng toàn ca chèn → được bỏ khi hết chỗ
         for (const Task* task : stop.tasks) {
             const TaskKind& kind = kind_or_default(*task);  // Ngoài danh mục: chỉ lọt qua khi nới lỏng.
-            const Deadlines d = resolve_deadlines(*task, kind, now);
+            const Deadlines d = resolve_deadlines(*task, kind, now, rules.day_end_minute);
             service += task->handle_minutes.value_or(kind.handle_minutes);
             if (d.opens && (!opens || *d.opens < *opens)) opens = d.opens;
             // min B (chặt hơn câu chữ catalogue "mốc B của ca neo"): tuyến tới muộn vẫn không vi phạm B của ca nào trong nhóm.
@@ -754,7 +756,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         for (size_t k = 0; k < stop.tasks.size(); ++k) {
             const Task& task = *stop.tasks[k];
             const TaskKind& kind = kind_or_default(task);
-            const Deadlines d = resolve_deadlines(task, kind, now);
+            const Deadlines d = resolve_deadlines(task, kind, now, rules.day_end_minute);
             const double service = task.handle_minutes.value_or(kind.handle_minutes);
             const double checkin = v.checkin + offset;
             const double done = checkin + service;

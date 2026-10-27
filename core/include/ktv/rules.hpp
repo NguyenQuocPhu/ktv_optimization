@@ -111,6 +111,9 @@ struct Rules {
     // Không chèn được → DEFERRED NO_CAPACITY.
     double inserted_overtime_minutes = 30;
     std::vector<std::string> force_recompute_triggers;  // Trigger luôn tính lại dù IN không đổi. Mặc định rỗng.
+    // 8.21: giờ trong ngày (phút) của hạn "trong ngày / trong tháng". Không đọc từ rules.json: plan() gán = giờ hết ca
+    // của KTV (staff.available) cho từng lần tính.
+    int day_end_minute = 1439;
 };
 
 Rules default_rules();                              // Bộ mặc định.

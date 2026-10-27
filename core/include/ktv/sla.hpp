@@ -32,7 +32,9 @@ struct Deadlines {
 inline Minutes start_of_day(Minutes t) { return t - ((t % 1440) + 1440) % 1440; }
 
 // Hạn của một việc theo loại việc (sheet 05), giờ hẹn và ngày tạo phiếu.
-Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes planned_at);
+// day_end (8.21): giờ trong ngày (phút) của hạn "trong ngày / trong tháng" — plan truyền giờ hết ca của KTV
+// (rules.day_end_minute); mặc định 23:59.
+Deadlines resolve_deadlines(const Task& task, const TaskKind& kind, Minutes planned_at, int day_end = 1439);
 
 // Dự báo đúng hẹn của một điểm dừng. `checkin`/`done`/`due`/`complete_by`/`service` tính bằng phút
 // tương đối so với lúc xuất phát (như Problem của dp); `now` cũng tương đối. NaN = không có.
