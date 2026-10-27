@@ -559,6 +559,16 @@ int main() {
         const json cam = find_row(old.out, 8);
         CHECK(cam["entry_type"] == "DEFERRED" && cam["projected_sla"] == "ALREADY_BREACHED" && cam["sla_buffer_minutes"] < 0);
         CHECK(old.out["data"]["metrics"]["breach_forecast_count"] == 1 && old.out["data"]["metrics"]["on_time_rate_forecast"] == 100.0);
+        // 8.20: Cam hẹn HÔM NAY (hạn cuối ngày chưa qua), chạy 16:00 sau giờ ca 15:00 → DEFERRED WILL_BREACH, buffer 0, đếm trễ.
+        json today = day_message(
+            "2026-09-14 16:00:00",
+            json::array({task(8, "trien_khai", 1, 6, "giao_thiet_bi_cam", 97, 3, 60, "2026-09-14 08:00:00", 2.5, 0.5, 25)}),
+            json::array(), json::array(), 0);
+        today["staff"]["available"] = "08:00-15:00";
+        const Outcome missed = run_day(today);
+        const json cam_today = find_row(missed.out, 8);
+        CHECK(cam_today["entry_type"] == "DEFERRED" && cam_today["projected_sla"] == "WILL_BREACH" && cam_today["sla_buffer_minutes"] == 0);
+        CHECK(missed.out["data"]["metrics"]["breach_forecast_count"] == 1);
         // Cam gửi theo workbook (10): task_sub của trien_khai_box → tra theo task_sub_name (ca chèn, định mức 60′).
         json box = task(8, "trien_khai", 1, 4, "trien_khai_box", 97, 3, 60, "2026-09-14 08:00:00", 1, 0, 0);
         box["task_sub_name"] = "giao_thiet_bi_cam";

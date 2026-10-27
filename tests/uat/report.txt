@@ -146,7 +146,7 @@
    #1 08:04-09:04 Hẹn 08:00 (xong 09:00) (bao_tri_logic, hẹn 08:00 - 10:00) đi 4′/2.0km role=main sla=ON_TIME
    #2 09:05-09:30 Giao TB Cam (hạn trong ngày hẹn) (giao_thiet_bi_cam, hẹn 08:00 - 10:00) đi 1′/0.7km role=inserted sla=ON_TIME
    DEFERRED Thu bill trúng ngày TT tháng trước (tra_sau) lý do=NO_CAPACITY
-   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-14 08:00:00", "finish_at": "2026-10-14 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 0, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-14 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
+   metrics: {"total_distance_km": 2.7, "total_travel_minutes": 5, "total_handle_minutes": 85, "start_at": "2026-10-14 08:00:00", "finish_at": "2026-10-14 09:30:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 1, "cluster_count": 1, "revisit_count": 0, "idle_minutes": 0, "break_minutes": 0, "tasks_total": 2, "tasks_forecast_completed": 2, "shift_end_at": "2026-10-14 09:40:00", "overload_minutes": 0, "generated_in_ms": 0}
 
 === Case 18 — Thu bill vs Thu hồi — xét thuận tuyến
   [c18] statuscode 200
@@ -490,7 +490,7 @@
    DEFERRED Thu bill 5 trúng ngày (tra_sau) lý do=NO_CAPACITY
    #11 16:48-17:48 VL hẹn 16:30 (bao_tri_vat_ly, hẹn 16:30 - 18:30) đi 4′/2.2km role=main sla=ON_TIME
    DEFERRED Thu bill 1 trúng ngày (tra_sau) lý do=NO_CAPACITY
-   metrics: {"total_distance_km": 26.4, "total_travel_minutes": 53, "total_handle_minutes": 480, "start_at": "2026-10-13 08:00:00", "finish_at": "2026-10-13 17:48:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 0, "cluster_count": 9, "revisit_count": 0, "idle_minutes": 10, "break_minutes": 45, "tasks_total": 9, "tasks_forecast_completed": 8, "shift_end_at": "2026-10-13 17:30:00", "overload_minutes": 18, "generated_in_ms": 20}
+   metrics: {"total_distance_km": 26.4, "total_travel_minutes": 53, "total_handle_minutes": 480, "start_at": "2026-10-13 08:00:00", "finish_at": "2026-10-13 17:48:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 3, "cluster_count": 9, "revisit_count": 0, "idle_minutes": 10, "break_minutes": 45, "tasks_total": 9, "tasks_forecast_completed": 8, "shift_end_at": "2026-10-13 17:30:00", "overload_minutes": 18, "generated_in_ms": 20}
 
 === Case 42 — Sang ngày hôm sau (14/10, ca hôm trước chưa làm)
   [c42] statuscode 200

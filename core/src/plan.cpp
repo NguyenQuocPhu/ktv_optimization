@@ -63,8 +63,12 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
     const Deadlines d = resolve_deadlines(task, kind, now);
     const double priority = priority_score(task, kind, d, now, rules);
     // 8.17: hạn đã qua lúc chạy → ALREADY_BREACHED (trước luôn ""), buffer = hạn − lúc chạy (chỉ ca hẹn, như dòng TASK).
+    // 8.20: hạn chưa qua nhưng trong hôm nay → không được làm hôm nay thì chắc trễ → WILL_BREACH, buffer 0 (không có giờ
+    // check-in để tính phút trễ). Hạn sau hôm nay (NEXT_DAY, BEYOND_K…) → "".
     const std::optional<Minutes> deadline = d.due ? d.due : d.complete_by;
     const bool overdue = deadline && *deadline < now;
+    const bool due_today = deadline && !overdue && *deadline < start_of_day(now) + 1440;
+    const char* sla = overdue ? "ALREADY_BREACHED" : due_today ? "WILL_BREACH" : "";
     return {{"seq", 0}, {"entry_type", "DEFERRED"}, {"at", ""}, {"start_at", ""}, {"end_at", ""},
             {"task_id", task.task_id}, {"location", task.location}, {"latlng", task.latlng ? latlng(*task.latlng, 6) : ""},
             {"task_role", "inserted"}, {"priority", priority}, {"insert_reason", reason},
@@ -74,7 +78,7 @@ ojson deferred_row(const Task& task, const char* reason, Minutes now, const Rule
             {"checkindate", ""}, {"task_status_id", task.task_status_id}, {"task_status_name", task.task_status_name},
             {"checkoutdate", ""}, {"travel_minutes_before", 0}, {"travel_km_before", 0.0},
             {"handle_minutes", std::llround(task.handle_minutes.value_or(kind.handle_minutes))},
-            {"projected_sla", overdue ? "ALREADY_BREACHED" : ""}, {"sla_buffer_minutes", overdue && task.appointment ? *deadline - now : 0}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
+            {"projected_sla", sla}, {"sla_buffer_minutes", overdue && task.appointment ? *deadline - now : 0}, {"contract_id", task.contract_id ? std::to_string(*task.contract_id) : ""},
             {"contract_no", task.contract_no.value_or("")}, {"contract_name", task.contract_name},
             {"timezone", task.timezone}, {"appointment", appointment_out(task, now)},
             {"complete_date", echo_datetime(task.complete_date)}, {"isblue", task.isblue}};
@@ -414,7 +418,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         int deferred_breach = 0;
         for (const auto& [task, reason] : deferred) {
             schedule.push_back(deferred_row(*task, reason, now, rules));
-            deferred_breach += schedule.back()["projected_sla"] == "ALREADY_BREACHED";
+            deferred_breach += schedule.back()["projected_sla"] != "";
         }
         ojson clusters = ojson::array({{{"cluster_seg", 1}, {"cluster_code", summary.code}, {"name", summary.name},
                                         {"center", latlng(summary.center)}, {"radius_m", std::llround(summary.radius_km * 1000)},
@@ -834,7 +838,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             if (distance_km(summaries[c].center, *task->latlng) < distance_km(summaries[nearest].center, *task->latlng))
                 nearest = c;
         cluster_schedule[nearest].push_back(deferred_row(*task, reason, now, rules));
-        deferred_breach += cluster_schedule[nearest].back()["projected_sla"] == "ALREADY_BREACHED";
+        deferred_breach += cluster_schedule[nearest].back()["projected_sla"] != "";
     }
 
     ojson clusters = ojson::array();

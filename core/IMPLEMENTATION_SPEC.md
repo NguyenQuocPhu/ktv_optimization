@@ -2031,6 +2031,17 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `task_sub_name` ở bản Mobix (sheet 09); `isblue` cuối dòng.
 - Kiểm: `test_api`, `test_pipeline`, `test_adapter`, `test_gateway_replan` (thứ tự field). ctest 21/21.
 
+### Phase 8.20 — Ca DEFERRED có hạn trong hôm nay → WILL_BREACH
+
+Kiểm độc lập theo workbook (10) (subagent không đọc code): DEFERRED có hạn chưa qua nhưng trong hôm nay (VD Cam hẹn hôm
+nay bị `NO_CAPACITY`, Thu bill trúng ngày thu bị bỏ) trả `projected_sla ""` — không được làm hôm nay thì chắc trễ. Nay:
+hạn < 24:00 hôm nay → `WILL_BREACH`, `sla_buffer_minutes` 0 (không có giờ check-in để tính phút trễ); đếm vào
+`breach_forecast_count` như DEFERRED quá hạn (8.17), không vào `on_time_rate_forecast`. Hạn sau hôm nay (NEXT_DAY, BEYOND_K) giữ "".
+
+**Test.** `test_plan` (Cam hẹn hôm nay, chạy sau giờ ca → DEFERRED WILL_BREACH, đếm trễ), `test_invariants` (DEFERRED: ""
+/ WILL_BREACH + 0 / ALREADY_BREACHED + ≤ 0). UAT: case 17 / 41 `breach_forecast_count` 0 → 1 / 3 (Thu bill trúng ngày bị
+NO_CAPACITY). Oracle độc lập (scratchpad) 800 IN: 0 lệch. ctest 20/20.
+
 ### Phase 8.19 — Gom điểm dừng theo chuỗi (UAT case 28)
 
 Trước: `build_stops` lấy ca đầu làm tâm, chỉ gom ca cách TÂM ≤ 50 m → A–B 40 m, B–C 40 m (A–C 80 m): B đứng đầu IN thì gom

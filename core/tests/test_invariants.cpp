@@ -191,13 +191,14 @@ static void check_invariants(const ktv::Message& message, const ojson& response,
             if (entry == "DEFERRED") {  // 7.20.2: seq 0, không giờ, cuối schedule, không tính vào tổng
                 deferred_tail = true;
                 CHECK(row["seq"] == 0 && row["at"] == "" && row["start_at"] == "" && row["end_at"] == "");
-                // 8.17: hạn đã qua lúc chạy → ALREADY_BREACHED + buffer ≤ 0; còn lại "" + 0. Hẹn ngày sau không bao giờ trễ.
+                // 8.17: hạn đã qua lúc chạy → ALREADY_BREACHED + buffer ≤ 0; 8.20: hạn trong hôm nay → WILL_BREACH + 0;
+                // còn lại "" + 0. Hẹn ngày sau không bao giờ trễ.
                 const std::string ps = row["projected_sla"].get<std::string>();
                 const long long buffer = row["sla_buffer_minutes"].get<long long>();
-                CHECK((ps == "" && buffer == 0) || (ps == "ALREADY_BREACHED" && buffer <= 0));
+                CHECK((ps == "" && buffer == 0) || (ps == "WILL_BREACH" && buffer == 0) || (ps == "ALREADY_BREACHED" && buffer <= 0));
                 CHECK(row["insert_reason"] != "NEXT_DAY" || ps == "");
                 CHECK(row["task_role"] == "inserted" && row["travel_km_before"] == 0.0);
-                breached += ps == "ALREADY_BREACHED";
+                breached += ps != "";
                 CHECK(deferred.emplace(row["task_id"].get<long long>(), row["insert_reason"].get<std::string>()).second);
                 continue;
             }
