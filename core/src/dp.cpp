@@ -21,6 +21,7 @@ Visit visit(const Problem& p, Mask done_mask, int i, int j, double clock) {
     if (j == kBreak) {  // Nghỉ: 0 km, không phạt; chưa tới giờ nghỉ thì chờ.
         v.checkin = std::max(clock, p.break_open);
         v.done = v.checkin + p.break_minutes;
+        if (!std::isnan(p.overtime_base)) v.cost[OVERTIME_MINUTES] = std::max(0.0, v.done - std::max(clock, p.overtime_base));
         return v;
     }
     int origin = i < 0 ? 0 : i + 1;  // Điểm trong bảng travel: 0 = xuất phát, việc k = k + 1.
@@ -35,6 +36,9 @@ Visit visit(const Problem& p, Mask done_mask, int i, int j, double clock) {
     }
     if (v.done > p.complete_by[j]) v.cost[LATE_COMPLETION] = 1;
     if (v.done > p.shift_end) v.cost[AFTER_SHIFT] = 1;
+    // 8.18: phút bước này kéo tuyến quá mốc overtime_base — cộng qua các bước = giờ xong cuối − mốc. Ca chính đã quá giờ
+    // sẵn bị đẩy muộn thêm thì vẫn tốn (AFTER_SHIFT chỉ đếm số ca, đẩy thêm không tốn gì).
+    if (!std::isnan(p.overtime_base)) v.cost[OVERTIME_MINUTES] = std::max(0.0, v.done - std::max(clock, p.overtime_base));
     v.cost[KM] = v.km;
     v.cost[TRAVEL_MINUTES] = v.travel;
     // Rời lô của i để vào lô của j, mà lô của j đã từng làm → quay lại khu vực.
@@ -63,9 +67,10 @@ bool allowed(const Problem& p, Mask mask, const Visit& v) {
     if (p.is_optional(v.task) && v.done > p.shift_end) return false;  // 7.24: ca tuỳ chọn phải xong trong ca (cứng)
     // 8.6: chưa tới việc đang di chuyển tới thì không được làm việc khác (nghỉ trưa thì được).
     if (p.first >= 0 && v.task >= 0 && v.task != p.first && !(mask >> p.first & 1)) return false;
-    // 8.5b: từ khi tuyến có ca chèn, không bước nào được xong sau inserted_cap (ca chèn không kéo tuyến quá giờ > X′,
-    // kể cả khi chính nó xong sớm mà đẩy ca chính ra sau).
-    if (v.done > p.inserted_cap && ((mask & p.inserted) || (v.task >= 0 && (p.inserted >> v.task & 1)))) return false;
+    // 8.18: ca chèn / tuỳ chọn tự nó phải xong ≤ inserted_cap (hết ca + X′). Trước (8.5b): mọi bước SAU ca chèn cũng phải
+    // ≤ max(hết ca, giờ xong tuyến chỉ ca chính) + X′ → ngày tràn ca không chèn được vào chỗ trống trong ca, và chèn được
+    // lúc nửa đêm. Đẩy ca khác lùi giờ do OVERTIME_MINUTES (mềm) cân.
+    if (v.done > p.inserted_cap && v.task >= 0 && (p.inserted >> v.task & 1)) return false;
     return rested || !p.needs_break() || v.done <= p.break_latest;  // Chưa nghỉ: phải xong trước giờ chốt.
 }
 

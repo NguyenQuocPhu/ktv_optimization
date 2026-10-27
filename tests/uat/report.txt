@@ -273,10 +273,10 @@
    · IDLE 12:19-13:30 Chờ tới khung hẹn 13:30
    #7 13:30-14:30 Đ3 VL 13:30 (bao_tri_vat_ly, hẹn 13:30 - 15:30) đi 4′/2.2km role=main sla=ON_TIME
    #8 14:58-15:58 T1 Logic 08:30 (bao_tri_logic, hẹn 08:30 - 10:30) đi 28′/14.0km role=main sla=WILL_BREACH
-   #9 16:01-17:01 T2 Logic 10:00 (bao_tri_logic, hẹn 10:00 - 12:00) đi 3′/1.4km role=main sla=WILL_BREACH
-   DEFERRED Thu bill trúng ngày (T) (tra_sau) lý do=NO_CAPACITY
-   #10 17:05-18:05 T3 Swap 14:00 (swap, hẹn 14:00 - 16:00) đi 4′/2.2km role=main sla=WILL_BREACH
-   metrics: {"total_distance_km": 27.2, "total_travel_minutes": 54, "total_handle_minutes": 375, "start_at": "2026-10-13 08:00:00", "finish_at": "2026-10-13 18:05:00", "on_time_rate_forecast": 57.1, "at_risk_count": 0, "breach_forecast_count": 3, "cluster_count": 4, "revisit_count": 0, "idle_minutes": 131, "break_minutes": 45, "tasks_total": 7, "tasks_forecast_completed": 6, "shift_end_at": "2026-10-13 17:30:00", "overload_minutes": 35, "generated_in_ms": 1}
+   #9 15:59-16:14 Thu bill trúng ngày (T) (tra_sau) đi 1′/0.7km role=inserted sla=ON_TIME
+   #10 16:16-17:16 T2 Logic 10:00 (bao_tri_logic, hẹn 10:00 - 12:00) đi 2′/0.7km role=main sla=WILL_BREACH
+   #11 17:20-18:20 T3 Swap 14:00 (swap, hẹn 14:00 - 16:00) đi 4′/2.2km role=main sla=WILL_BREACH
+   metrics: {"total_distance_km": 27.2, "total_travel_minutes": 54, "total_handle_minutes": 390, "start_at": "2026-10-13 08:00:00", "finish_at": "2026-10-13 18:20:00", "on_time_rate_forecast": 62.5, "at_risk_count": 0, "breach_forecast_count": 3, "cluster_count": 4, "revisit_count": 0, "idle_minutes": 131, "break_minutes": 45, "tasks_total": 8, "tasks_forecast_completed": 7, "shift_end_at": "2026-10-13 17:30:00", "overload_minutes": 50, "generated_in_ms": 1}
 
 === Case 31 — Chế độ SLA (so với Mặc định)
   [c31_mode0] statuscode 200
@@ -490,7 +490,7 @@
    DEFERRED Thu bill 5 trúng ngày (tra_sau) lý do=NO_CAPACITY
    #11 16:48-17:48 VL hẹn 16:30 (bao_tri_vat_ly, hẹn 16:30 - 18:30) đi 4′/2.2km role=main sla=ON_TIME
    DEFERRED Thu bill 1 trúng ngày (tra_sau) lý do=NO_CAPACITY
-   metrics: {"total_distance_km": 26.4, "total_travel_minutes": 53, "total_handle_minutes": 480, "start_at": "2026-10-13 08:00:00", "finish_at": "2026-10-13 17:48:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 0, "cluster_count": 9, "revisit_count": 0, "idle_minutes": 10, "break_minutes": 45, "tasks_total": 9, "tasks_forecast_completed": 8, "shift_end_at": "2026-10-13 17:30:00", "overload_minutes": 18, "generated_in_ms": 13}
+   metrics: {"total_distance_km": 26.4, "total_travel_minutes": 53, "total_handle_minutes": 480, "start_at": "2026-10-13 08:00:00", "finish_at": "2026-10-13 17:48:00", "on_time_rate_forecast": 100.0, "at_risk_count": 0, "breach_forecast_count": 0, "cluster_count": 9, "revisit_count": 0, "idle_minutes": 10, "break_minutes": 45, "tasks_total": 9, "tasks_forecast_completed": 8, "shift_end_at": "2026-10-13 17:30:00", "overload_minutes": 18, "generated_in_ms": 20}
 
 === Case 42 — Sang ngày hôm sau (14/10, ca hôm trước chưa làm)
   [c42] statuscode 200

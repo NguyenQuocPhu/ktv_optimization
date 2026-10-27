@@ -505,9 +505,14 @@ int main() {
         };
         for (int mode : {0, 1}) {
             const Outcome tight = day("08:00-09:40", mode);
-            CHECK(tight.deferred.size() == 1 && tight.deferred.count(9) && tight.deferred.at(9) == "NO_CAPACITY");
             CHECK(std::find(tight.order.begin(), tight.order.end(), 8) != tight.order.end());
-            CHECK(tight.out["data"]["metrics"]["tasks_total"] == 2);
+            if (mode == 0) {  // Mặc định: Thu bill lố 17′ → 1 ca quá giờ (11,67) + 17′ × 0,5 > bỏ (16,2) → NO_CAPACITY
+                CHECK(tight.deferred.size() == 1 && tight.deferred.count(9) && tight.deferred.at(9) == "NO_CAPACITY");
+                CHECK(tight.out["data"]["metrics"]["tasks_total"] == 2);
+            } else {  // 8.18 SLA: 1 + 17′ × 0,2 < bỏ (6,25), xong 09:57 ≤ hết ca + 30′ → được làm
+                CHECK(tight.deferred.empty() && tight.order.size() == 3);
+                CHECK(tight.out["data"]["metrics"]["finish_at"] <= std::string("2026-09-14 10:10:00"));
+            }
             const Outcome roomy = day("08:00-17:30", mode);  // đủ chỗ → không bỏ ca nào
             CHECK(roomy.deferred.empty() && roomy.order.size() == 3);
         }
@@ -541,6 +546,26 @@ int main() {
         box["task_sub_name"] = "giao_thiet_bi_cam";
         const json sub = find_row(run_day(day_message("2026-09-14 14:00:00", json::array({box}), json::array(), json::array(), 0)).out, 8);
         CHECK(sub["task_role"] == "inserted" && sub["handle_minutes"] == 60 && sub["projected_sla"] == "ON_TIME");
+    }
+    {  // 8.18 ngày tràn ca: 6 ca triển khai 120′ (ca trực 08:00–12:00) + Thu bill quá hạn gần ca đầu. Trước: mốc
+       // inserted_cap = giờ xong tuyến ca chính + 15′ → chèn vào chỗ trống trong ca thì đuôi lố mốc → NO_CAPACITY, chỉ được
+       // gắn cuối đuôi lúc nửa đêm. Nay: Thu bill xong trong ca (≤ 12:30), đuôi lùi ≤ 30′, số ca xong trong ca không giảm.
+        json mains = json::array();
+        for (int k = 0; k < 6; ++k)
+            mains.push_back(task(20 + k, "trien_khai", 1, 3, "trien_khai_net", 97, 3, 120, "", k * 0.8, 0, 120));
+        json m = day_message("2026-09-14 07:30:00", mains, json::array(),
+                             json::array({task(9, "hoa_don", 4, 2, "tra_sau", 0, 4, 0, "", 0.4, 0.3, 15, "2026-08-14 10:00:00")}), 0);
+        m["staff"]["available"] = "08:00-12:00";
+        const Outcome o = run_day(m);
+        CHECK(o.deferred.empty() && o.order.size() == 7);
+        for (const auto& cluster : o.out["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                if (row.value("task_id", 0LL) == 9) CHECK(row["end_at"] <= std::string("2026-09-14 12:30:00"));
+        m["tasks"]["hoa_don"] = json::array();
+        const Outcome mains_only = run_day(m);
+        const auto finish = [](const Outcome& x) { return *ktv::parse_datetime(x.out["data"]["metrics"]["finish_at"].get<std::string>()); };
+        CHECK(finish(o) - finish(mains_only) <= 30);
+        CHECK(o.out["data"]["metrics"]["tasks_forecast_completed"] >= mains_only.out["data"]["metrics"]["tasks_forecast_completed"]);
     }
     {  // 8.6 (case 37): KTV đang di chuyển tới VL (status 7) → VL đứng đầu dù có ca mới gần hơn, hẹn sớm hơn.
         for (int mode : {0, 1, 2}) {

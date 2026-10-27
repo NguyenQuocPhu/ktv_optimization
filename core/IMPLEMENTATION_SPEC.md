@@ -2031,6 +2031,31 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `task_sub_name` ở bản Mobix (sheet 09); `isblue` cuối dòng.
 - Kiểm: `test_api`, `test_pipeline`, `test_adapter`, `test_gateway_replan` (thứ tự field). ctest 21/21.
 
+### Phase 8.18 — Ca chèn ngày tràn ca: mốc cứng chỉ cho chính ca chèn + rule mềm OVERTIME_MINUTES
+
+**Lỗi (staging `00182951-46`, ảnh UAT SGABP4536 / SGH317472).** 8.5b `inserted_cap` = max(hết ca, giờ xong tuyến chỉ
+ca chính) + 15′, áp cho MỌI bước sau ca chèn. Ngày ca chính tràn (tuyến tới 04:51 sáng): chèn ca 15′ vào chỗ trống trong
+ca đẩy đuôi lố mốc → cấm → 3 thu hồi `NO_CAPACITY` dù trong ca còn dư 79′ (vét cạn: 5 chính + 3 thu hồi xong 16:56);
+ngược lại ca chèn gắn cuối đuôi lúc 03:46 sáng thì lọt.
+
+**Đã thử (nhánh thí nghiệm, đo 2.000 KTV + UAT):** bỏ cap + tăng `AFTER_SHIFT` (mặc định 60, SLA 20, Tuyến +20 tầng 1)
+→ ngày tràn đúng nhưng trễ hẹn +94 (AFTER_SHIFT đè trễ hẹn), case 41 quá ca 18 → 54′ (AFTER_SHIFT đếm SỐ ca: ca đã quá giờ
+đẩy thêm không tốn), case 30 km +48%. OVERTIME tính từ hết ca → 21 tuyến không có ca chèn tăng trễ hẹn (đổi trễ hẹn lấy
+phút quá giờ). → Mốc phải là giờ xong tuyến chỉ ca chính.
+
+**Nay.**
+- Cứng: chính ca chèn / tuỳ chọn xong ≤ hết ca + `inserted_overtime_minutes` = **30′** (người dùng nâng từ 15′). Không chặn
+  các bước sau → greedy không còn kẹt kiểu A1.
+- Mềm: rule mới `OVERTIME_MINUTES` = Σ phút mỗi bước vượt `overtime_base` = max(hết ca, giờ xong tuyến chỉ ca chính) (cộng
+  dồn = giờ xong cuối − mốc). Không có ca chèn → không tính (thứ tự ca chính như cũ). Trọng số hoà vốn ~30′ kéo dài với bỏ
+  ca chèn hạn hôm nay P4: mặc định 0,5 km/′ (16,2 km; case 41 đẩy 36′ → bỏ), SLA 0,2 tầng 2 (6,25), Tuyến 0,1 tầng 1 (3,2 km).
+  Kèm đẩy 1 ca chính mới ra sau giờ (AFTER_SHIFT) thì ngưỡng nhỏ hơn (mặc định ~9′). [GIẢ ĐỊNH]
+
+**Đo.** 2.000 KTV: 4 / 2.085 tuyến đổi; trễ hẹn, ca sau giờ, ca chèn được làm không đổi; km +2. Staging tràn ca: thu hồi
+13:59–14:29 (trước `DEFERRED`), 8 / 14 ca trong ca (trước 5 / 11). UAT: case 30 (Tuyến) thêm 1 Thu bill, đuôi +15′. fuzz
+300 IN: 0 lỗi. **Test.** `test_plan`: ngày tràn ca có Thu bill quá hạn gần → chèn trong ca (≤ hết ca + 30′), đuôi lùi ≤ 30′,
+số ca xong trong ca không giảm (fail trên code cũ); case 17 mode SLA: Thu bill lố 17′ được làm. ctest 20/20.
+
 ### Phase 8.17 — projected_sla của ca DEFERRED, Cam không có hạn B, tra loại theo task_sub
 
 - **DEFERRED quá hạn** (UAT: ca "dự kiến trễ 2 ngày" không ra ALREADY_BREACHED): `deferred_row` (7.20.2) ghi cứng

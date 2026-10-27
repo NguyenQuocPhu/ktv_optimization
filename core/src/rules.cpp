@@ -19,6 +19,7 @@ Rules default_rules() {
     rules.tiers = {
         {{LATE_CHECKIN, 1}},                       // Tầng 1: đúng hẹn khách hàng.
         {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1},   // Tầng 2: hoàn tất đúng hạn, trong ca.
+         {OVERTIME_MINUTES, 0.2},                  //   8.18: kéo tuyến dài 31′ ≈ bỏ ca chèn hạn hôm nay P4 6,25 (ngưỡng 30′)
          {SKIP_INSERTED, 1},                       //   8.5b: bỏ ca chèn: mỗi ngày gấp hơn 1 (0 ngày = 6) …
          {SKIP_INSERTED_PRIORITY, 0.25}},          //   … mỗi bậc ưu tiên 0,25 (ca chèn P2–P4: chênh ≤ 0,5 < 1 ngày)
         {{PRIORITY_ORDER, 1}},                     // Tầng 3 (8.5a): cùng khung hẹn thì ưu tiên cao trước, thắng km.
@@ -37,6 +38,7 @@ Rules default_rules() {
     rules.route_tiers = {
         // 8.7: SKIP_OPTIONAL 0,1 km / phút được phép (tối đa 2 km < trễ hẹn P1 4 km).
         {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 0.1}, {LATE_CHECKIN, 1},
+         {OVERTIME_MINUTES, 0.1},  // 8.18: kéo tuyến dài 32′ ≈ bỏ ca chèn hạn hôm nay P4 3,2 km (ngưỡng 30′)
          // 8.5 [GIẢ ĐỊNH]: đảo ưu tiên 1 cặp ≈ 2 km; bỏ ca chèn 0,5 km / ngày gấp + 0,2 km / bậc ưu tiên (hạn hôm nay
          // P4 3,2 · P2 3,6 km < trễ hẹn P1 4 km). Phải ở tầng km: ở tầng 2 thì bớt chút km là bỏ.
          {PRIORITY_ORDER, 2}, {SKIP_INSERTED, 0.5}, {SKIP_INSERTED_PRIORITY, 0.2}},
@@ -55,6 +57,7 @@ Tiers mix_tiers_from(double sla_share, double breach_km) {
         // 8.7: SKIP_OPTIONAL 0,5 km / phút được phép (tối đa 10 km < 1 ca hẹn P3 trễ ≈ 23 km).
         {{KM, 1}, {TRAVEL_MINUTES, 0.05}, {AREA_REENTRY, 2}, {SKIP_OPTIONAL, 0.5},
          {LATE_CHECKIN, breach}, {LATE_COMPLETION, breach}, {AFTER_SHIFT, breach},
+         {OVERTIME_MINUTES, 0.5},  // 8.18: kéo tuyến dài 32′ ≈ bỏ ca chèn hạn hôm nay P4 16,2 km (ngưỡng 30′; UAT case 41: 36′ → bỏ)
          // 8.5 [GIẢ ĐỊNH]: bỏ ca chèn 2,5 km / ngày gấp + 1,2 km / bậc ưu tiên (hạn hôm nay P4 16,2 · P2 18,6 km < 1 ca hẹn
          // P3 trễ ≈ 23 km; ngày gấp 2,5 > chênh ưu tiên P2–P4 2,4 → vẫn xét ngày trước); đảo ưu tiên 1 cặp ≈ nửa ca trễ.
          {SKIP_INSERTED, 2.5}, {SKIP_INSERTED_PRIORITY, 1.2}, {PRIORITY_ORDER, breach / 2}},

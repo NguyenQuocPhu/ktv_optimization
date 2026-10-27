@@ -599,6 +599,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         }
         q.shift_end = whole.shift_end;
         q.inserted_cap = whole.inserted_cap;
+        q.overtime_base = whole.overtime_base;
         for (size_t t = 0; t < keep.size(); ++t)
             if (keep[t] == whole.first) q.first = static_cast<int>(t);
         q.break_open = whole.break_open;
@@ -606,32 +607,32 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         q.break_minutes = whole.break_minutes;
         return q;
     };
-    // 8.5b: mốc giờ xong khi có ca chèn = max(giờ hết ca, giờ xong tuyến chỉ ca chính) + inserted_overtime_minutes.
-    // Ngày ca chính đã quá giờ sẵn: ca chèn chỉ được nhét vào chỗ trống, không kéo tuyến dài thêm quá X′.
-    // Ca bắt buộc toàn ca chính (chỉ có ca tuỳ chọn được bỏ) → dùng luôn giờ xong của lần giải ca bắt buộc bên dưới.
-    bool cap_after_mandatory = false;
+    // 8.18: ca chèn / tuỳ chọn tự nó phải xong ≤ hết ca + inserted_overtime_minutes (cứng, chỉ chính nó). Kéo tuyến dài
+    // thêm thì mềm: OVERTIME_MINUTES = phút xong sau mốc max(hết ca, giờ xong tuyến chỉ ca chính) — tuyến chỉ ca chính
+    // không bị phạt (thứ tự ca chính như cũ); ngày tràn ca, ca chèn nhét vào chỗ trống trong ca chỉ tốn phần đuôi lùi thêm.
+    whole.inserted_cap = whole.shift_end + rules.inserted_overtime_minutes;
+    bool base_after_mandatory = false;
     if (whole.inserted != 0) {
         std::vector<int> mains;
         for (int k = 0; k < n_mandatory; ++k)
             if (!whole.is_skippable(k)) mains.push_back(k);
         if (static_cast<int>(mains.size()) == n_mandatory) {
-            cap_after_mandatory = true;
+            base_after_mandatory = true;
         } else {
             double base = whole.shift_end;
             if (!mains.empty()) {
                 const Solution only_mains = solve(subproblem(mains), rules);
                 if (!only_mains.steps.empty()) base = std::max(base, only_mains.steps.back().done);
             }
-            whole.inserted_cap = base + rules.inserted_overtime_minutes;
+            whole.overtime_base = base;
         }
     }
     std::vector<int> kept(n_mandatory);  // kept[t] = chỉ số trong all_stops của việc t trong bài đang giải
     std::iota(kept.begin(), kept.end(), 0);
     p = subproblem(kept);
     Solution solution = solve(p, rules);
-    if (cap_after_mandatory)
-        whole.inserted_cap = std::max(whole.shift_end, solution.steps.empty() ? 0.0 : solution.steps.back().done) +
-                             rules.inserted_overtime_minutes;
+    if (base_after_mandatory)
+        whole.overtime_base = std::max(whole.shift_end, solution.steps.empty() ? 0.0 : solution.steps.back().done);
     // 8.7 (UAT case 14): phút còn trống của tuyến bắt buộc = các khoảng chờ (khung hẹn, nghỉ trưa) + từ việc cuối tới hết
     // ca. Rảnh nhiều → chịu đi thêm xa hơn, không quá trần.
     double spare_minutes = std::max(0.0, p.shift_end - (solution.steps.empty() ? 0.0 : solution.steps.back().done));

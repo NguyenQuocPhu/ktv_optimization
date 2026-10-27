@@ -80,11 +80,12 @@ struct Problem {
     // cộng 1 mỗi cặp. Rỗng = không xét.
     std::vector<Mask> outranks;
     // 8.5b: ca CHÈN trong K được bỏ khi hết chỗ: skip_cost[j] = điểm SKIP_INSERTED nếu bỏ (kNone = bắt buộc làm). Rỗng =
-    // mọi ca bắt buộc. Tuyến đã làm ca chèn thì mọi bước từ đó phải xong ≤ inserted_cap (ràng buộc cứng; kNone = không chặn).
+    // mọi ca bắt buộc. 8.18: ca chèn / tuỳ chọn tự nó phải xong ≤ inserted_cap (ràng buộc cứng; kNone = không chặn).
     std::vector<double> skip_cost;
     std::vector<double> skip_priority;  // điểm SKIP_INSERTED_PRIORITY nếu bỏ (Σ trọng số ưu tiên); rỗng = 0
     Mask inserted = 0;               // bit các ca chèn được bỏ: trong K (skip_cost) + tuỳ chọn (8.7) — chịu inserted_cap
     double inserted_cap = kNone;
+    double overtime_base = kNone;    // 8.18: mốc tính OVERTIME_MINUTES (kNone = không tính)
     // 8.6 (UAT case 37): việc KTV đang di chuyển tới — phải là điểm dừng thật đầu tiên (nghỉ trưa trước nó vẫn được).
     // -1 = không khóa.
     int first = -1;

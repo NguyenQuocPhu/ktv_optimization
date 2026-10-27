@@ -52,12 +52,13 @@ enum Rule {
     PRIORITY_ORDER,   // 8.5a: mỗi cặp ca có khung hẹn chồng nhau mà ca ưu tiên THẤP làm trước ca ưu tiên cao: cộng 1.
     SKIP_INSERTED,    // 8.5b: bỏ một ca CHÈN trong K (hết chỗ): cộng K + 1 − ngày làm việc còn lại (phần "gấp").
     SKIP_INSERTED_PRIORITY,  // 8.5b: bỏ ca chèn: cộng trọng số ưu tiên của ca (P2 3 … P4 1) — tách để mỗi mode chỉnh riêng.
+    OVERTIME_MINUTES, // 8.18: phút tuyến xong muộn hơn mốc max(hết ca, giờ xong tuyến chỉ ca chính) — chỉ khi có ca chèn.
     RULE_COUNT        // Không phải rule: số lượng rule.
 };
 inline constexpr const char* kRuleCodes[RULE_COUNT] = {
     "LATE_CHECKIN", "LATE_COMPLETION", "AFTER_SHIFT", "LATE_MINUTES", "KM",
     "TRAVEL_MINUTES", "AREA_REENTRY", "PRIORITY_DELAY", "FINISH", "DEADLINE_URGENCY", "SKIP_OPTIONAL",
-    "PRIORITY_ORDER", "SKIP_INSERTED", "SKIP_INSERTED_PRIORITY"};
+    "PRIORITY_ORDER", "SKIP_INSERTED", "SKIP_INSERTED_PRIORITY", "OVERTIME_MINUTES"};
 
 inline constexpr int kMaxTiers = 4;  // Tối đa 4 tầng.
 
@@ -105,9 +106,10 @@ struct Rules {
     // SKIP_OPTIONAL × mức đó. 0 = gạt hết. Tuyến có ca hẹn trễ → không chèn ca tuỳ chọn. [GIẢ ĐỊNH 20′ / 0,5]
     double optional_max_detour_minutes = 20;
     double optional_spare_ratio = 0.5;
-    // 8.5b: tuyến có ca chèn trong K → giờ xong việc cuối ≤ max(giờ hết ca, giờ xong tuyến chỉ ca chính) + ngần này phút
-    // (ràng buộc cứng; người dùng: "chấp nhận quá giờ, nhưng chỉ một mức nhỏ"). Không chèn được → DEFERRED NO_CAPACITY.
-    double inserted_overtime_minutes = 15;
+    // 8.18: ca chèn / tuỳ chọn được làm thì CHÍNH NÓ phải xong ≤ giờ hết ca + ngần này phút (ràng buộc cứng; người dùng:
+    // "chấp nhận quá giờ, nhưng chỉ một mức nhỏ" — 8.5b 15′, nâng 30′ 2026-10-27). Kéo ca khác lùi thì mềm (OVERTIME_MINUTES).
+    // Không chèn được → DEFERRED NO_CAPACITY.
+    double inserted_overtime_minutes = 30;
     std::vector<std::string> force_recompute_triggers;  // Trigger luôn tính lại dù IN không đổi. Mặc định rỗng.
 };
 
