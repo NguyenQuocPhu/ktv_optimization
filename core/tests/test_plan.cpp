@@ -576,6 +576,25 @@ int main() {
         const json sub = find_row(run_day(day_message("2026-09-14 14:00:00", json::array({box}), json::array(), json::array(), 0)).out, 8);
         CHECK(sub["task_role"] == "inserted" && sub["handle_minutes"] == 60 && sub["projected_sla"] == "ON_TIME");
     }
+    {  // 8.22: 13:00 còn chỗ ~4 ca. Ca đã trễ thành ca chèn: hoãn ca khung cũ ĐÃ QUA (08, 10 — dù trễ lâu hơn), giữ ca
+       // khung còn kịp; ca chưa trễ hẹn 14:00 đúng giờ. Mode Tuyến không áp (xếp hết, tràn ca như trước).
+        const json late = json::array({task(1, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 120, "2026-09-22 08:00:00", 1, 0.5, 60),
+                                       task(2, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 120, "2026-09-23 10:00:00", 1.5, -0.5, 60),
+                                       task(3, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 120, "2026-09-26 13:30:00", 2.5, 0.8, 60),
+                                       task(4, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 120, "2026-09-27 15:00:00", 3, -0.8, 60),
+                                       task(5, "bao_tri", 2, 2, "bao_tri_logic", 6, 2, 120, "2026-09-25 16:00:00", 2, -1.5, 60)});
+        const json fresh = json::array({task(10, "trien_khai", 1, 3, "trien_khai_net", 97, 3, 120, "2026-09-28 14:00:00", 2, 2, 60)});
+        for (int mode : {0, 1, 2}) {
+            const Outcome o = run_day(day_message("2026-09-28 13:00:00", fresh, late, json::array(), mode));
+            bool fresh_on_time = false;
+            for (const auto& cluster : o.out["data"]["clusters"])
+                for (const auto& row : cluster["schedule"])
+                    if (row.value("task_id", 0LL) == 10) fresh_on_time = row["projected_sla"] == "ON_TIME";
+            CHECK(fresh_on_time);
+            if (mode == 2) CHECK(o.deferred.empty());
+            else CHECK(o.deferred.size() == 2 && o.deferred.count(1) && o.deferred.count(2));
+        }
+    }
     {  // 8.18 ngày tràn ca: 6 ca triển khai 120′ (ca trực 08:00–12:00) + Thu bill quá hạn gần ca đầu. Trước: mốc
        // inserted_cap = giờ xong tuyến ca chính + 15′ → chèn vào chỗ trống trong ca thì đuôi lố mốc → NO_CAPACITY, chỉ được
        // gắn cuối đuôi lúc nửa đêm. Nay: Thu bill xong trong ca (≤ 12:30), đuôi lùi ≤ 30′, số ca xong trong ca không giảm.
