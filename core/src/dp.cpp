@@ -51,6 +51,9 @@ Visit visit(const Problem& p, Mask done_mask, int i, int j, double clock) {
     // 7.16.2: việc gấp (gần hạn) bị để muộn thì phạt theo giờ check-in; ca chính urgency = 0.
     const double urgency = !optional && j < static_cast<int>(p.urgency.size()) ? p.urgency[j] : 0;
     v.cost[DEADLINE_URGENCY] = urgency * v.checkin / 60;
+    if (j < static_cast<int>(p.old_open.size()) && !std::isnan(p.old_open[j]))
+        v.cost[OLD_WINDOW_MINUTES] = std::min(p.old_window_cap, std::max(0.0, p.old_open[j] - v.checkin) + std::max(0.0, v.checkin - p.old_close[j]));
+    if (j < static_cast<int>(p.overdue_outranks.size())) v.cost[OVERDUE_ORDER] = popcount(done_mask & p.overdue_outranks[j]);
     // 8.5a: các ca cùng khung hẹn mà ưu tiên thấp hơn j đã làm trước j → mỗi ca một lần đảo.
     if (j < static_cast<int>(p.outranks.size())) v.cost[PRIORITY_ORDER] = popcount(done_mask & p.outranks[j]);
     return v;
@@ -111,6 +114,8 @@ struct Search {
     double skip_inserted_weight = 0;
     int skip_priority_tier = -1;
     double skip_priority_weight = 0;
+    int old_window_tier = -1;        // ca có khung bị bỏ → cộng OLD_WINDOW_MINUTES mức lệch tệ nhất (bỏ không rẻ hơn làm lệch khung)
+    double old_window_weight = 0;
     int late_completion_tier = -1;   // 8.5b: bỏ ca đã quá hạn từ trước → cộng LATE_COMPLETION như khi làm (trễ)
     double late_completion_weight = 0;
     Mask mandatory = 0;          // bit các ca bắt buộc (phải có trong tuyến)
@@ -126,6 +131,7 @@ struct Search {
                 if (rule == SKIP_INSERTED) skip_inserted_tier = t, skip_inserted_weight = weight;
                 if (rule == SKIP_INSERTED_PRIORITY) skip_priority_tier = t, skip_priority_weight = weight;
                 if (rule == LATE_COMPLETION) late_completion_tier = t, late_completion_weight = weight;
+                if (rule == OLD_WINDOW_MINUTES) old_window_tier = t, old_window_weight = weight;
             }
         for (int j = 0; j < p.size(); ++j) {
             if (p.is_optional(j)) optional_tasks |= Mask{1} << j;
@@ -144,6 +150,8 @@ struct Search {
                 k[skip_priority_tier] += skip_priority_weight * p.skip_priority[j];
             // Ca đã quá hạn hoàn tất trước lúc xuất phát: làm cũng trễ → bỏ không được rẻ hơn làm.
             if (late_completion_tier >= 0 && p.complete_by[j] <= 0) k[late_completion_tier] += late_completion_weight;
+            if (old_window_tier >= 0 && j < static_cast<int>(p.old_open.size()) && !std::isnan(p.old_open[j]))
+                k[old_window_tier] += old_window_weight * p.old_window_cap;
         }
         return k;
     }

@@ -67,6 +67,9 @@ struct Problem {
     std::vector<double> due;          // Hạn check-in B. kNone = không có.
     std::vector<double> complete_by;  // Hạn làm xong. kNone = không có.
     std::vector<double> weight;       // Trọng số ưu tiên: P1 = 4 … P4 = 1.
+    std::vector<double> overdue_days;  // 8.22: ca đã trễ: số ngày đã trễ (0 = chưa trễ). Rỗng = không dùng.
+    std::vector<double> old_open, old_close;  // 8.22: ca chính đã trễ / có hạn B hôm nay: khung đặt sang hôm nay. kNone = không.
+    double old_window_cap = 240;              // OLD_WINDOW_MINUTES tối đa / ca; ca có khung bị bỏ tính đúng mức này
     std::vector<double> urgency;      // 7.16.2: độ gấp của ca chèn (0..K; ca chính = 0). Rỗng = không dùng (test cũ).
     std::vector<Mask> same_area;       // same_area[i]: các việc khác cùng lô với việc i (bit j = 1 nếu việc j cùng lô).
     double shift_end = kNone;         // Giờ hết ca.
@@ -79,6 +82,7 @@ struct Problem {
     // 8.5a: outranks[j] = các việc i có khung hẹn [A, B] chồng với j mà ưu tiên THẤP hơn j; làm i trước j → PRIORITY_ORDER
     // cộng 1 mỗi cặp. Rỗng = không xét.
     std::vector<Mask> outranks;
+    std::vector<Mask> overdue_outranks;  // overdue_outranks[j]: ca đã trễ ÍT hơn j, khung cũ chồng j (OVERDUE_ORDER). Rỗng = không xét.
     // 8.5b: ca CHÈN trong K được bỏ khi hết chỗ: skip_cost[j] = điểm SKIP_INSERTED nếu bỏ (kNone = bắt buộc làm). Rỗng =
     // mọi ca bắt buộc. 8.18: ca chèn / tuỳ chọn tự nó phải xong ≤ inserted_cap (ràng buộc cứng; kNone = không chặn).
     std::vector<double> skip_cost;

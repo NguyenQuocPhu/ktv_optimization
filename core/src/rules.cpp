@@ -30,7 +30,9 @@ Rules default_rules() {
          {PRIORITY_DELAY, 0.5},                    //   việc P1 làm muộn 1 giờ ≈ 2 km
          {DEADLINE_URGENCY, 0.5},                  //   việc gấp để muộn 1 giờ ≈ 0,5 km (7.16.2)
          {FINISH, 0.01},                           //   xong muộn 100 phút ≈ 1 km
-         {SKIP_OPTIONAL, 0.5}},                    //   8.7: bỏ 1 ca tuỳ chọn ≈ 0,5 km × phút được phép (30 km/h) [GIẢ ĐỊNH, BR-16]
+         {SKIP_OPTIONAL, 0.5},                     //   8.7: bỏ 1 ca tuỳ chọn ≈ 0,5 km × phút được phép (30 km/h) [GIẢ ĐỊNH, BR-16]
+         {OLD_WINDOW_MINUTES, 0.2},                //   8.22: ca đã trễ lệch giờ khung cũ 1 giờ ≈ 12 km (> LATE_MINUTES 6 km/giờ) [GIẢ ĐỊNH]
+         {OVERDUE_ORDER, 2}},                      //   8.22: ca trễ ít làm trước ca trễ nhiều cùng khung ≈ 2 km / cặp [GIẢ ĐỊNH]
     };
     // Mode Tuyến 100% (7.26, yêu cầu data — thay R2 của 7.23): quãng đường lên tầng 1, kèm trễ hẹn trọng số nhỏ
     // (1 ca trễ hẹn ≈ 1 km × trọng số ưu tiên: P4 1 km … P1 4 km) để phân xử các tuyến dài gần bằng nhau.
@@ -43,7 +45,7 @@ Rules default_rules() {
          // P4 3,2 · P2 3,6 km < trễ hẹn P1 4 km). Phải ở tầng km: ở tầng 2 thì bớt chút km là bỏ.
          {PRIORITY_ORDER, 2}, {SKIP_INSERTED, 0.5}, {SKIP_INSERTED_PRIORITY, 0.2}},
         {{LATE_COMPLETION, 1}, {AFTER_SHIFT, 1}},
-        {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},
+        {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},  // 8.22 không áp mode Tuyến
     };
     rules.mix_tiers = mix_tiers_from(rules.mix_sla_share, rules.mix_breach_km);
     return rules;
@@ -60,7 +62,9 @@ Tiers mix_tiers_from(double sla_share, double breach_km) {
          {OVERTIME_MINUTES, 0.5},  // 8.18: kéo tuyến dài 32′ ≈ bỏ ca chèn hạn hôm nay P4 16,2 km (ngưỡng 30′; UAT case 41: 36′ → bỏ)
          // 8.5 [GIẢ ĐỊNH]: bỏ ca chèn 2,5 km / ngày gấp + 1,2 km / bậc ưu tiên (hạn hôm nay P4 16,2 · P2 18,6 km < 1 ca hẹn
          // P3 trễ ≈ 23 km; ngày gấp 2,5 > chênh ưu tiên P2–P4 2,4 → vẫn xét ngày trước); đảo ưu tiên 1 cặp ≈ nửa ca trễ.
-         {SKIP_INSERTED, 2.5}, {SKIP_INSERTED_PRIORITY, 1.2}, {PRIORITY_ORDER, breach / 2}},
+         {SKIP_INSERTED, 2.5}, {SKIP_INSERTED_PRIORITY, 1.2}, {PRIORITY_ORDER, breach / 2},
+         // 8.22: ca đã trễ lệch khung cũ 1 giờ ≈ 3 km (0,2 thì đẩy ca chưa trễ ra sau giờ ca); đảo thứ tự trễ ≈ 2 km / cặp
+         {OLD_WINDOW_MINUTES, 0.05}, {OVERDUE_ORDER, 2}},
         {{LATE_MINUTES, 0.1}, {PRIORITY_DELAY, 0.5}, {DEADLINE_URGENCY, 0.5}, {FINISH, 0.01}},
     };
 }
@@ -137,6 +141,16 @@ Rules rules_from_json(const nlohmann::json& data) {
     number("optional_max_detour_minutes", rules.optional_max_detour_minutes, 0);
     number("optional_spare_ratio", rules.optional_spare_ratio, 0);
     number("inserted_overtime_minutes", rules.inserted_overtime_minutes, 0);
+    if (data.contains("overdue_as_inserted")) {  // 8.22
+        if (!data["overdue_as_inserted"].is_boolean()) fail("overdue_as_inserted cần true / false");
+        rules.overdue_as_inserted = data["overdue_as_inserted"].get<bool>();
+    }
+    number("overdue_skip_bonus", rules.overdue_skip_bonus, 0);
+    number("overdue_skip_per_day", rules.overdue_skip_per_day, 0);
+    number("overdue_skip_max_days", rules.overdue_skip_max_days, 0);
+    number("overdue_skip_window", rules.overdue_skip_window, 0);
+    number("old_window_cap_minutes", rules.old_window_cap_minutes, 1);
+    number("overdue_skip_window_decay", rules.overdue_skip_window_decay, 1);
     double group_wait = rules.stop_group_max_wait_minutes;
     number("stop_group_max_wait_minutes", group_wait, 0);
     rules.stop_group_max_wait_minutes = static_cast<int>(group_wait);
@@ -208,6 +222,13 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"optional_max_detour_minutes", rules.optional_max_detour_minutes},
         {"optional_spare_ratio", rules.optional_spare_ratio},
         {"inserted_overtime_minutes", rules.inserted_overtime_minutes},
+        {"overdue_as_inserted", rules.overdue_as_inserted},
+        {"overdue_skip_bonus", rules.overdue_skip_bonus},
+        {"overdue_skip_per_day", rules.overdue_skip_per_day},
+        {"overdue_skip_max_days", rules.overdue_skip_max_days},
+        {"overdue_skip_window", rules.overdue_skip_window},
+        {"overdue_skip_window_decay", rules.overdue_skip_window_decay},
+        {"old_window_cap_minutes", rules.old_window_cap_minutes},
         {"stop_group_max_wait_minutes", rules.stop_group_max_wait_minutes},
         {"current_task_minutes", rules.current_task_minutes},
         {"average_speed_kmh", rules.average_speed_kmh},

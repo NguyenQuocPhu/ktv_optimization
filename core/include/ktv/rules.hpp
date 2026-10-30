@@ -17,7 +17,7 @@
 //   ktv_core print-rules > rules.json       // in bộ đang dùng ra file để sửa
 //
 // Trong file này có:
-//   Rule, kRuleCodes – 14 rule mềm và tên chữ của chúng (dùng trong file JSON)
+//   Rule, kRuleCodes – các rule mềm và tên chữ của chúng (dùng trong file JSON)
 //   Rules            – toàn bộ cấu hình: các tầng, trọng số ưu tiên P1–P4, ngưỡng, giả định
 //   default_rules, load_rules, rules_from_json, rules_to_json – tạo / đọc / ghi Rules
 //   mix_tiers_from   – 7.26: sinh bộ tầng mode Kết nối từ tỷ trọng SLA + tỷ giá ca trễ ↔ km
@@ -35,7 +35,7 @@
 
 namespace ktv {
 
-// 14 rule mềm. Với mỗi bước đi tới một việc, dp::visit() tính ra một con số cho từng rule.
+// Các rule mềm. Với mỗi bước đi tới một việc, dp::visit() tính ra một con số cho từng rule.
 enum Rule {
     LATE_CHECKIN,     // Check-in sau hạn B: cộng trọng số ưu tiên của việc (P1 = 4 … P4 = 1).
     LATE_COMPLETION,  // Làm xong sau hạn hoàn tất: cộng 1.
@@ -53,12 +53,14 @@ enum Rule {
     SKIP_INSERTED,    // 8.5b: bỏ một ca CHÈN trong K (hết chỗ): cộng K + 1 − ngày làm việc còn lại (phần "gấp").
     SKIP_INSERTED_PRIORITY,  // 8.5b: bỏ ca chèn: cộng trọng số ưu tiên của ca (P2 3 … P4 1) — tách để mỗi mode chỉnh riêng.
     OVERTIME_MINUTES, // 8.18: phút tuyến xong muộn hơn mốc max(hết ca, giờ xong tuyến chỉ ca chính) — chỉ khi có ca chèn.
+    OLD_WINDOW_MINUTES,  // 8.22: ca CHÍNH đã trễ (hoặc có hạn B hôm nay): số phút check-in hôm nay lệch ra ngoài giờ khung cũ (cùng giờ, ngày hôm nay).
+    OVERDUE_ORDER,       // 8.22: mỗi cặp ca ĐÃ TRỄ có khung cũ chồng nhau (hoặc cùng không hẹn) mà ca trễ ít làm trước ca trễ nhiều: cộng 1.
     RULE_COUNT        // Không phải rule: số lượng rule.
 };
 inline constexpr const char* kRuleCodes[RULE_COUNT] = {
     "LATE_CHECKIN", "LATE_COMPLETION", "AFTER_SHIFT", "LATE_MINUTES", "KM",
     "TRAVEL_MINUTES", "AREA_REENTRY", "PRIORITY_DELAY", "FINISH", "DEADLINE_URGENCY", "SKIP_OPTIONAL",
-    "PRIORITY_ORDER", "SKIP_INSERTED", "SKIP_INSERTED_PRIORITY", "OVERTIME_MINUTES"};
+    "PRIORITY_ORDER", "SKIP_INSERTED", "SKIP_INSERTED_PRIORITY", "OVERTIME_MINUTES", "OLD_WINDOW_MINUTES", "OVERDUE_ORDER"};
 
 inline constexpr int kMaxTiers = 4;  // Tối đa 4 tầng.
 
@@ -110,6 +112,19 @@ struct Rules {
     // "chấp nhận quá giờ, nhưng chỉ một mức nhỏ" — 8.5b 15′, nâng 30′ 2026-10-27). Kéo ca khác lùi thì mềm (OVERTIME_MINUTES).
     // Không chèn được → DEFERRED NO_CAPACITY.
     double inserted_overtime_minutes = 30;
+    // 8.22 — ca CHÍNH đã trễ coi như ca chèn: hết chỗ thì được bỏ (DEFERRED NO_CAPACITY) thay vì tràn ca, ca chưa trễ
+    // không bị đẩy ra sau giờ ca. Phạt bỏ (đơn vị SKIP_INSERTED) = ca chèn hạn hôm nay (K + 1) + overdue_skip_bonus
+    // + overdue_skip_per_day × ngày đã trễ (≤ overdue_skip_max_days) + overdue_skip_window × phần khung cũ còn kịp
+    // (1 khi khung đặt sang hôm nay chưa qua, giảm về 0 khi đã qua overdue_skip_window_decay phút). Khung > ngày trễ
+    // (4 > 0,5 × 7). Phần trễ đã xảy ra không tính lại (không thì bỏ ca trễ "tiết kiệm" được phạt trễ). Mode Tuyến tắt.
+    // [GIẢ ĐỊNH, quét 40 bộ quá tải + 516 IN 2026-10-30]
+    bool overdue_as_inserted = true;
+    double overdue_skip_bonus = 1;
+    double overdue_skip_per_day = 0.5;
+    double overdue_skip_max_days = 7;
+    double overdue_skip_window = 4;
+    double overdue_skip_window_decay = 60;
+    double old_window_cap_minutes = 240;  // OLD_WINDOW_MINUTES tính tối đa ngần này phút / ca; ca có khung bị bỏ = mức này
     std::vector<std::string> force_recompute_triggers;  // Trigger luôn tính lại dù IN không đổi. Mặc định rỗng.
     // 8.21: giờ trong ngày (phút) của hạn "trong ngày / trong tháng". Không đọc từ rules.json: plan() gán = giờ hết ca
     // của KTV (staff.available) cho từng lần tính.

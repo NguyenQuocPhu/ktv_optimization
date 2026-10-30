@@ -346,6 +346,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     Rules rules = base_rules;
     if (message.priority_type == 0) rules.tiers = base_rules.mix_tiers;
     if (message.priority_type == 2) rules.tiers = base_rules.route_tiers;
+    if (message.priority_type == 2) rules.overdue_as_inserted = false;  // 8.22: mode Tuyến km thắng → bỏ oan ca trễ
     PlanResult result;
     const Staff& staff = message.staff;
     // 8.21: hạn "trong ngày / trong tháng" = giờ hết ca của KTV (trước 23:59).
@@ -476,7 +477,8 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         points.push_back(*stop_anchor(stop).latlng);
         int service = 0;
         std::optional<Minutes> opens, due, complete_by;
-        double weight = 0, urgency = 0, skip = 0, skip_priority = 0;
+        double weight = 0, urgency = 0, skip = 0, skip_priority = 0, overdue_days = 0, old_open = kNone, old_close = kNone;
+        bool all_overdue = true;
         bool inserted = true;  // 8.5b: điểm dừng toàn ca chèn → được bỏ khi hết chỗ
         for (const Task* task : stop.tasks) {
             const TaskKind& kind = kind_or_default(*task);  // Ngoài danh mục: chỉ lọt qua khi nới lỏng.
@@ -491,19 +493,48 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             const int days_left = d.complete_by ? workdays_until(now, *d.complete_by) : 0;
             const double own = kind.extra && d.complete_by ? static_cast<double>(std::max(0, rules.k_month_days - days_left)) : 0.0;
             urgency = std::max(urgency, own);
+            // 8.22: ca đã trễ (hạn B, không có thì hạn hoàn tất, đã qua lúc chạy) → số ngày trễ (OVERDUE_ORDER).
+            const auto deadline = d.due ? d.due : d.complete_by;
+            const bool overdue = deadline && *deadline < now;
+            if (overdue) overdue_days = std::max(overdue_days, static_cast<double>(now - *deadline) / 1440);
+            // Khung (cũ hoặc hôm nay) đặt sang hôm nay (OLD_WINDOW_MINUTES) — chỉ ca CHÍNH: đã trễ, hoặc có hạn B hôm nay
+            // (sẽ trễ thì cũng bị kéo về gần khung). Ca chèn (Cam, thu hồi, hoá đơn) giữ luật bỏ ca riêng (8.5b).
+            const Minutes shift_days = task->appointment ? start_of_day(now) - start_of_day(*task->appointment) : 0;
+            if (task->appointment && shift_days >= 0 && std::isnan(old_open) && !kind.extra && (overdue || d.due)) {
+                old_open = relative(*appointment_start(*task) + shift_days);
+                old_close = relative(*appointment_end(*task) + shift_days);
+            }
             // 8.5b: bỏ ca chèn phạt theo chuỗi phân xử UAT: ít ngày còn lại (SKIP_INSERTED) → ưu tiên
             // (SKIP_INSERTED_PRIORITY) → thuận tuyến (km). Trọng số từng mode giữ "1 ngày > chênh ưu tiên".
-            inserted &= kind.extra;
+            // 8.22: ca chính đã trễ cũng được bỏ, phạt nặng hơn ca chèn hạn hôm nay theo ngày trễ + khung còn kịp.
+            all_overdue &= overdue;
+            const bool late_main = rules.overdue_as_inserted && overdue && !kind.extra;
+            inserted &= kind.extra || late_main;
             const int days = std::clamp(d.complete_by ? days_left : rules.k_month_days, 0, rules.k_month_days);
             skip += rules.k_month_days + 1 - days;
+            if (late_main) {
+                double window_left = 0;  // khung đặt sang hôm nay chưa qua → 1; đã qua X phút → 1 − X / decay; không hẹn → 0
+                if (task->appointment) {
+                    const Minutes passed = start - (*appointment_end(*task) + shift_days);
+                    window_left = std::clamp(1 - static_cast<double>(passed) / rules.overdue_skip_window_decay, 0.0, 1.0);
+                }
+                skip += rules.overdue_skip_bonus +
+                        rules.overdue_skip_per_day * std::min(static_cast<double>(now - *deadline) / 1440, rules.overdue_skip_max_days) +
+                        rules.overdue_skip_window * window_left;
+            }
             skip_priority += rules.priority_weight[task->priority_in_day];
         }
+        // 8.22: điểm dừng toàn ca đã trễ → phần trễ đã xảy ra, không phạt lại (bỏ ca không được "rẻ" hơn làm).
+        if (rules.overdue_as_inserted && all_overdue) due = complete_by = std::nullopt;
         p.service.push_back(service);
         p.opens.push_back(relative(opens));
         p.due.push_back(relative(due));
         p.complete_by.push_back(relative(complete_by));
         p.weight.push_back(weight);
         p.urgency.push_back(urgency);
+        p.overdue_days.push_back(overdue_days);
+        p.old_open.push_back(old_open);
+        p.old_close.push_back(old_close);
         const bool optional = static_cast<int>(p.optional.size()) >= n_mandatory;
         p.optional.push_back(optional);
         // 8.6: KTV đang di chuyển tới (trạng thái "Đang di chuyển") → khóa đầu tuyến, không được bỏ. Nhiều ca → task_id nhỏ nhất.
@@ -533,6 +564,16 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                 mask |= Mask{1} << i;
         p.outranks.push_back(mask);
     }
+    // 8.22: ca đã trễ: cặp khung cũ chồng nhau (hoặc cùng không hẹn) mà ca trễ ít làm trước ca trễ nhiều → OVERDUE_ORDER.
+    for (int j = 0; j < static_cast<int>(all_stops.size()); ++j) {
+        Mask mask = 0;
+        for (int i = 0; i < static_cast<int>(all_stops.size()); ++i) {
+            if (!(p.overdue_days[i] > 0 && p.overdue_days[i] < p.overdue_days[j])) continue;
+            const bool both_open = std::isnan(p.old_open[i]) && std::isnan(p.old_open[j]);
+            if (both_open || (p.old_open[i] <= p.old_close[j] && p.old_open[j] <= p.old_close[i])) mask |= Mask{1} << i;
+        }
+        p.overdue_outranks.push_back(mask);
+    }
     // Khu vực cho rule "quay lại khu vực đã rời" (AREA_REENTRY): biết lô → theo lô; lô 0 → lùi xuống block
     // (workbook (3): "không có lô thì tính ưu tiên xuống block_id"), chỉ so với task lô 0 khác; lô 0 + block 0 → không
     // thuộc khu vực nào. Task biết lô không gộp với task lô 0 cùng block (thận trọng, giữ như trước 2026-10-02).
@@ -549,6 +590,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         p.same_area.push_back(mask);
     }
     p.shift_end = static_cast<double>(shift_end - start);
+    p.old_window_cap = rules.old_window_cap_minutes;
     // Nghỉ trưa: cần khi còn kịp bắt đầu nghỉ (chưa qua giờ chốt) và ca làm phủ khung trưa.
     const Minutes break_open = day + rules.break_start, break_latest = day + rules.break_end - static_cast<Minutes>(rules.break_minutes);
     if (rules.break_minutes > 0 && start <= break_latest && shift_start <= break_open && shift_end >= day + rules.break_end) {
@@ -595,19 +637,25 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             q.complete_by.push_back(whole.complete_by[k]);
             q.weight.push_back(whole.weight[k]);
             q.urgency.push_back(whole.urgency[k]);
+            q.overdue_days.push_back(whole.overdue_days[k]);
+            q.old_open.push_back(whole.old_open[k]);
+            q.old_close.push_back(whole.old_close[k]);
             q.optional.push_back(whole.optional[k]);
             q.skip_cost.push_back(whole.skip_cost[k]);
             q.skip_priority.push_back(whole.skip_priority[k]);
             if (whole.inserted >> k & 1) q.inserted |= Mask{1} << t;
-            Mask mask = 0, outranks = 0;
+            Mask mask = 0, outranks = 0, overdue = 0;
             for (size_t u = 0; u < keep.size(); ++u) {
                 if (whole.same_area[k] >> keep[u] & 1) mask |= Mask{1} << u;
                 if (whole.outranks[k] >> keep[u] & 1) outranks |= Mask{1} << u;
+                if (whole.overdue_outranks[k] >> keep[u] & 1) overdue |= Mask{1} << u;
             }
             q.same_area.push_back(mask);
             q.outranks.push_back(outranks);
+            q.overdue_outranks.push_back(overdue);
         }
         q.shift_end = whole.shift_end;
+        q.old_window_cap = whole.old_window_cap;
         q.inserted_cap = whole.inserted_cap;
         q.overtime_base = whole.overtime_base;
         for (size_t t = 0; t < keep.size(); ++t)
