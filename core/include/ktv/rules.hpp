@@ -109,9 +109,9 @@ struct Rules {
     double optional_max_detour_minutes = 20;
     double optional_spare_ratio = 0.5;
     // 8.18: ca chèn / tuỳ chọn được làm thì CHÍNH NÓ phải xong ≤ giờ hết ca + ngần này phút (ràng buộc cứng; người dùng:
-    // "chấp nhận quá giờ, nhưng chỉ một mức nhỏ" — 8.5b 15′, nâng 30′ 2026-10-27). Kéo ca khác lùi thì mềm (OVERTIME_MINUTES).
+    // "chấp nhận quá giờ, nhưng chỉ một mức nhỏ" — 8.5b 15′, nâng 30′ 2026-10-27, 60′ 2026-11-04). Kéo ca khác lùi thì mềm (OVERTIME_MINUTES).
     // Không chèn được → DEFERRED NO_CAPACITY.
-    double inserted_overtime_minutes = 30;
+    double inserted_overtime_minutes = 60;
     // 8.22 — ca CHÍNH đã trễ coi như ca chèn: hết chỗ thì được bỏ (DEFERRED NO_CAPACITY) thay vì tràn ca, ca chưa trễ
     // không bị đẩy ra sau giờ ca. Phạt bỏ (đơn vị SKIP_INSERTED) = ca chèn hạn hôm nay (K + 1) + overdue_skip_bonus
     // + overdue_skip_per_day × ngày đã trễ (≤ overdue_skip_max_days) + overdue_skip_window × phần khung cũ còn kịp
