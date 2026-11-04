@@ -7,7 +7,12 @@
 #include <string>
 #include <thread>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+#include <chrono>
 
 #include <hiredis/hiredis.h>
 
@@ -66,7 +71,49 @@ long long redis_int(const std::string& host, int port, std::vector<const char*> 
 
 }  // namespace
 
+// Kết nối "chết lặng": trả lời PING rồi im (như bị tường lửa cắt) → lệnh kế hết 5 giây timeout, nối lại và gửi lại
+// (Reply); kết nối mới trả lời bình thường → lệnh thành công, không treo, không ném.
+void silent_redis_times_out() {
+    const int listener = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t length = sizeof(address);
+    bind(listener, reinterpret_cast<sockaddr*>(&address), length);
+    listen(listener, 1);
+    getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length);
+    std::thread server([listener] {
+        char buffer[512];
+        const int silent = accept(listener, nullptr, nullptr);
+        if (read(silent, buffer, sizeof(buffer)) > 0 && write(silent, "+PONG\r\n", 7) < 0) {}
+        const int healthy = accept(listener, nullptr, nullptr);  // client nối lại sau timeout
+        if (read(healthy, buffer, sizeof(buffer)) > 0 && write(healthy, "+PONG\r\n", 7) < 0) {}
+        if (read(healthy, buffer, sizeof(buffer)) > 0 && write(healthy, "*2\r\n$-1\r\n$-1\r\n", 14) < 0) {}  // HMGET: không có
+        close(silent);
+        close(healthy);
+    });
+    ktv::RedisStore::Config config;
+    config.host = "127.0.0.1";
+    config.port = ntohs(address.sin_port);
+    const auto started = std::chrono::steady_clock::now();
+    bool threw = false, found = true;
+    try {
+        ktv::RedisStore store(config);
+        found = store.get_state("X").has_value();
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    CHECK(!threw);
+    CHECK(!found);
+    CHECK(seconds >= 4 && seconds < 8);
+    server.join();
+    close(listener);
+}
+
 int main() {
+    silent_redis_times_out();
+    if (failures) return 1;
     const char* address = std::getenv("KTV_TEST_REDIS");
     if (!address || !*address) {
         std::cout << "test_gateway_redis: SKIP (không có KTV_TEST_REDIS)\n";

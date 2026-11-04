@@ -108,6 +108,11 @@ void RedisStore::connect() const {
         fail(context_ ? context_->errstr : "không cấp được context");
         return;
     }
+    // Kết nối rảnh lâu bị tường lửa / NAT cắt im lặng → lệnh sau chờ trả lời mãi, worker đứng mà không thoát.
+    // Keepalive giữ kết nối không bị coi là rảnh; timeout 5 giây biến "chờ mãi" thành lỗi → Reply nối lại + gửi lại
+    // 1 lần (Redis còn sống thì lệnh thành công); vẫn lỗi thì ném như cũ (worker thoát, restart).
+    redisEnableKeepAlive(context_);
+    redisSetTimeout(context_, timeval{5, 0});
     {
         Reply reply(context_, {"PING"});
         if (!reply.ok()) {
