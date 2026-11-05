@@ -132,6 +132,9 @@ std::map<std::string, std::string> rdkafka_properties(const KafkaConfig& config,
         // 10 MB để không tự chặn OUT lớn mà nén xong vẫn lọt (OUT 1,7 MB → ~120 KB). Sự cố prod 2026-11-04.
         props["compression.type"] = "lz4";
         props["message.max.bytes"] = "10000000";
+        // 8.26: mỗi OUT một lô → Kafka phán xử TỪNG OUT. Gom lô thì một OUT quá cỡ làm cả lô bị từ chối, OUT nhẹ đi cùng
+        // bị đánh lỗi oan. OUT chỉ vài chục / giây nên bỏ gom lô không đáng kể (vẫn gửi song song, nén từng message).
+        props["batch.num.messages"] = "1";
     }
     if (!config.sasl_mechanism.empty()) {
         props["sasl.mechanism"] = config.sasl_mechanism;

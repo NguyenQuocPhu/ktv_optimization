@@ -25,7 +25,7 @@ void KafkaProducer::on_delivery(rd_kafka_t*, const rd_kafka_message_t* message, 
     auto* self = static_cast<KafkaProducer*>(opaque);
     const bool ok = message->err == RD_KAFKA_RESP_ERR_NO_ERROR;
     if (message->_private && self->on_delivered)  // 8.2: token = _private − 1 (0 = gửi không kèm token)
-        self->on_delivered(reinterpret_cast<std::uintptr_t>(message->_private) - 1, ok);
+        self->on_delivered(reinterpret_cast<std::uintptr_t>(message->_private) - 1, message->err);
     if (ok) return;
     ++self->failed_;
     nlohmann::ordered_json line = ktv::log_event("out_failed");  // Kafka báo không giao được OUT
@@ -65,7 +65,7 @@ void KafkaProducer::send(const std::string& key, const std::string& value, std::
         handle_, RD_KAFKA_V_TOPIC(topic_.c_str()), RD_KAFKA_V_KEY(key.data(), key.size()),
         RD_KAFKA_V_VALUE(const_cast<char*>(value.data()), value.size()), RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY),
         RD_KAFKA_V_OPAQUE(opaque), RD_KAFKA_V_END);
-    if (code != RD_KAFKA_RESP_ERR_NO_ERROR && opaque && on_delivered) on_delivered(token, false);
+    if (code != RD_KAFKA_RESP_ERR_NO_ERROR && opaque && on_delivered) on_delivered(token, code);
     if (code != RD_KAFKA_RESP_ERR_NO_ERROR) {  // không ném: gateway vẫn trả route; worker thấy qua flush()
         ++failed_;
         nlohmann::ordered_json line = ktv::log_event("out_failed");  // không đưa được vào hàng đợi
@@ -82,6 +82,35 @@ bool KafkaProducer::flush(int timeout_ms) {
     const bool clean = drained && now_failed == failed_at_flush_;
     failed_at_flush_ = now_failed;
     return clean;
+}
+
+bool out_error_is_system(rd_kafka_resp_err_t error) {
+    switch (error) {
+        case RD_KAFKA_RESP_ERR__MSG_TIMED_OUT:  // quá message.timeout.ms chưa được xác nhận (broker chậm / mất)
+        case RD_KAFKA_RESP_ERR__TIMED_OUT:
+        case RD_KAFKA_RESP_ERR__TRANSPORT:
+        case RD_KAFKA_RESP_ERR__ALL_BROKERS_DOWN:
+        case RD_KAFKA_RESP_ERR__QUEUE_FULL:
+        case RD_KAFKA_RESP_ERR__FATAL:
+        case RD_KAFKA_RESP_ERR__AUTHENTICATION:
+        case RD_KAFKA_RESP_ERR__DESTROY:
+        case RD_KAFKA_RESP_ERR__UNKNOWN_TOPIC:
+        case RD_KAFKA_RESP_ERR__UNKNOWN_PARTITION:
+        case RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART:
+        case RD_KAFKA_RESP_ERR_TOPIC_AUTHORIZATION_FAILED:
+        case RD_KAFKA_RESP_ERR_CLUSTER_AUTHORIZATION_FAILED:
+        case RD_KAFKA_RESP_ERR_LEADER_NOT_AVAILABLE:
+        case RD_KAFKA_RESP_ERR_NOT_LEADER_FOR_PARTITION:
+        case RD_KAFKA_RESP_ERR_REQUEST_TIMED_OUT:
+        case RD_KAFKA_RESP_ERR_BROKER_NOT_AVAILABLE:
+        case RD_KAFKA_RESP_ERR_NETWORK_EXCEPTION:
+        case RD_KAFKA_RESP_ERR_NOT_ENOUGH_REPLICAS:
+        case RD_KAFKA_RESP_ERR_NOT_ENOUGH_REPLICAS_AFTER_APPEND:
+        case RD_KAFKA_RESP_ERR_KAFKA_STORAGE_ERROR:
+            return true;
+        default:  // MSG_SIZE_TOO_LARGE, INVALID_MSG, RECORD_LIST_TOO_LARGE... và lỗi lạ: để OUT tối giản phân xử
+            return false;
+    }
 }
 
 }  // namespace ktv

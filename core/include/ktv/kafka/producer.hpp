@@ -43,10 +43,10 @@ public:
 
     // Bỏ vào hàng đợi, không chờ, không ném. Hàng đợi đầy / topic sai tên → log + đếm vào failed().
     void send(const std::string& key, const std::string& value);
-    // 8.2: như trên, kèm token; Kafka xác nhận (hoặc báo lỗi) → on_delivered(token, ok) trong poll() / flush().
-    // Không đưa được vào hàng đợi → on_delivered(token, false) ngay.
+    // 8.2: như trên, kèm token; Kafka xác nhận (hoặc báo lỗi) → on_delivered(token, mã lỗi) trong poll() / flush().
+    // Mã RD_KAFKA_RESP_ERR_NO_ERROR = tới nơi. Không đưa được vào hàng đợi → on_delivered(token, mã lỗi) ngay.
     void send(const std::string& key, const std::string& value, std::uint64_t token);
-    std::function<void(std::uint64_t token, bool ok)> on_delivered;
+    std::function<void(std::uint64_t token, rd_kafka_resp_err_t error)> on_delivered;
     // Chạy callback giao nhận đang chờ (worker nhiều luồng gọi đều ở luồng chính).
     void poll(int timeout_ms) { rd_kafka_poll(handle_, timeout_ms); }
     // Chờ mọi message đã send() được Kafka xác nhận. true = tất cả tới nơi và không có lỗi mới từ lần flush trước.
@@ -61,5 +61,9 @@ private:
     std::atomic<long long> failed_{0};
     long long failed_at_flush_ = 0;
 };
+
+// 8.26: OUT không tới nơi vì HỆ THỐNG (mất broker, quá giờ, thiếu quyền, sai topic...) → message sau cũng hỏng y vậy:
+// phải dừng chờ, đọc lại. false = có thể do CHÍNH message (quá cỡ, lỗi lạ) → worker thử OUT báo lỗi tối giản.
+bool out_error_is_system(rd_kafka_resp_err_t error);
 
 }  // namespace ktv

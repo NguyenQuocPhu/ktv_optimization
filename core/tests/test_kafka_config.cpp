@@ -88,6 +88,7 @@ int main() {
     CHECK(producer.count("group.id") == 0 && producer.count("enable.auto.commit") == 0);
     CHECK(producer.at("acks") == "all" && producer.at("enable.idempotence") == "true");
     CHECK(producer.at("compression.type") == "lz4" && producer.at("message.max.bytes") == "10000000");
+    CHECK(producer.at("batch.num.messages") == "1");
     CHECK(producer.at("sasl.username") == "user");
     auto gateway_env = base_env();
     gateway_env.erase("KAFKA_GROUP_ID");

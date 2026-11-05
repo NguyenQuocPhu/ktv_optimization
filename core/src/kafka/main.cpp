@@ -3,6 +3,8 @@
 // có --redis thì ghi thêm state + route vào Redis cho gateway trả Mobix (Phase 7.3, adapter/publish).
 // KAFKA_TOPIC_OUT có giá trị: route được ghi thì đẩy ra OUT (key = staff_id) và chờ Kafka xác nhận rồi mới
 // commit IN; không xác nhận trong 10 giây → thoát, không commit (Phase 7.5). Trống: không đẩy OUT.
+// 8.26: Kafka từ chối OUT không phải vì hệ thống (VD MSG_SIZE_TOO_LARGE) → gửi OUT báo lỗi tối giản (500, data null)
+// thay cho OUT đó; tới nơi → commit, đi tiếp (route đã ở Redis). OUT tối giản cũng hỏng / lỗi hệ thống → thoát như cũ.
 //
 //   ktv_worker [--env .env] [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"]
 //              [--out responses.jsonl] [--max N] [--health-port N]
@@ -38,6 +40,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -315,8 +318,10 @@ int main(int argc, char** argv) {
     };
     std::vector<std::unique_ptr<Lane>> lanes;
     for (int i = 0; i < threads; ++i) lanes.push_back(std::make_unique<Lane>());
-    std::mutex finished_mutex;  // message xong: (token, OUT tới nơi?) — luồng xử lý / callback producer ghi, luồng chính đọc
-    std::vector<std::pair<std::uint64_t, bool>> finished;
+    std::mutex finished_mutex;  // message xong: (token, mã lỗi OUT) — luồng xử lý / callback producer ghi, luồng chính đọc
+    std::vector<std::pair<std::uint64_t, rd_kafka_resp_err_t>> finished;
+    // 8.26: token OUT đang gửi → (key, OUT báo lỗi dựng sẵn) để thay khi Kafka từ chối. Ghi trước send() → không trễ hơn callback.
+    std::map<std::uint64_t, std::pair<std::string, nlohmann::ordered_json>> fallbacks;  // khóa bằng finished_mutex
     std::atomic<bool> stopping{false}, failed{false};
     std::mutex failure_mutex, out_mutex;
     std::string failure;
@@ -325,9 +330,9 @@ int main(int argc, char** argv) {
         if (!failed.exchange(true)) failure = text;
         for (auto& lane : lanes) lane->ready.notify_all();
     };
-    const auto finish = [&](std::uint64_t token, bool ok) {
+    const auto finish = [&](std::uint64_t token, rd_kafka_resp_err_t error) {
         std::lock_guard<std::mutex> lock(finished_mutex);
-        finished.emplace_back(token, ok);
+        finished.emplace_back(token, error);
     };
     if (producer) producer->on_delivered = finish;
 
@@ -344,7 +349,13 @@ int main(int argc, char** argv) {
         const ktv::Envelope envelope = ktv::local_envelope(in, position, now);
         ktv::SendOut send_out;
         if (producer)
-            send_out = [&](const std::string& key, const std::string& value) { producer->send(key, value, job.token); };
+            send_out = [&](const std::string& key, const std::string& value) {
+                {
+                    std::lock_guard<std::mutex> lock(finished_mutex);
+                    fallbacks[job.token] = {key, ktv::wrap_response(envelope, ktv::error_response("500", "", envelope.message_id, now))};
+                }
+                producer->send(key, value, job.token);
+            };
         ktv::Published published = ktv::plan_and_store(in, envelope, now, {record.timestamp_ms, record.offset},
                                                              rules, osrm_url, stores[index].get(), send_out);
         const double plan_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
@@ -358,7 +369,7 @@ int main(int argc, char** argv) {
             if (!*out) throw std::runtime_error("ghi response thất bại, không commit " + position);
         }
         // Xong = OUT được Kafka xác nhận (callback producer gọi finish) hoặc không có OUT.
-        if (!published.out_sent) finish(job.token, true);
+        if (!published.out_sent) finish(job.token, RD_KAFKA_RESP_ERR_NO_ERROR);
         {
             std::lock_guard<std::mutex> lock(health.mutex);
             ++health.processed;
@@ -463,26 +474,57 @@ int main(int argc, char** argv) {
     // Sổ + consumer khai ngoài try: consumer đóng (gọi on_revoke) phải trước khi sổ / lambda bị hủy — đóng tay ở dưới.
     ktv::OffsetTracker tracker;
     std::map<std::uint64_t, std::pair<int, long long>> inflight;  // token → (partition, offset)
+    std::set<std::uint64_t> probes;  // 8.26: token của OUT báo lỗi tối giản (hỏng nữa = hệ thống hỏng)
     std::uint64_t next_token = 0;
     std::unique_ptr<ktv::KafkaConsumer> owned;
     try {
         owned = std::make_unique<ktv::KafkaConsumer>(config);
         ktv::KafkaConsumer& consumer = *owned;
-        // Gom message đã xong vào sổ. OUT Kafka từ chối → dừng (không commit message đó).
+        // Gom message đã xong vào sổ. OUT Kafka từ chối: lỗi hệ thống → dừng (không commit message đó, restart đọc lại);
+        // lỗi do chính message → thay bằng OUT báo lỗi tối giản, nó tới nơi mới commit. OUT tối giản cũng hỏng → dừng.
         const auto collect = [&] {
             if (producer) producer->poll(0);
-            std::vector<std::pair<std::uint64_t, bool>> batch;
+            std::vector<std::pair<std::uint64_t, rd_kafka_resp_err_t>> batch;
+            std::map<std::uint64_t, std::pair<std::string, nlohmann::ordered_json>> spare;  // fallback của token trong batch
             {
                 std::lock_guard<std::mutex> lock(finished_mutex);
                 batch.swap(finished);
+                for (const auto& item : batch) {
+                    const auto it = fallbacks.find(item.first);
+                    if (it != fallbacks.end()) spare.insert(fallbacks.extract(it));
+                }
             }
-            for (const auto& [token, ok] : batch) {
+            for (const auto& [token, error] : batch) {
                 const auto it = inflight.find(token);
                 if (it == inflight.end()) continue;
-                if (!ok) fail("OUT không được Kafka xác nhận, không commit " + topic + "-" + std::to_string(it->second.first) +
-                              "-" + std::to_string(it->second.second));
-                else tracker.done(it->second.first, it->second.second);
+                const auto [partition, offset] = it->second;
                 inflight.erase(it);
+                const bool probe = probes.erase(token) > 0;
+                if (error == RD_KAFKA_RESP_ERR_NO_ERROR) {
+                    tracker.done(partition, offset);
+                    continue;
+                }
+                const std::string where = topic + "-" + std::to_string(partition) + "-" + std::to_string(offset);
+                const std::string reason = rd_kafka_err2str(error);
+                const auto fallback = spare.find(token);
+                if (probe || ktv::out_error_is_system(error) || fallback == spare.end()) {
+                    fail("OUT không được Kafka xác nhận (" + reason + (probe ? ", cả OUT báo lỗi tối giản" : "") +
+                         "), không commit " + where);
+                    continue;
+                }
+                auto& [key, out] = fallback->second;
+                out["message"] = "Kafka từ chối OUT (" + reason + "); tuyến vẫn lấy được qua /suggest";
+                const std::uint64_t next = next_token++;
+                inflight[next] = {partition, offset};
+                probes.insert(next);
+                producer->send(key, out.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace), next);
+                nlohmann::ordered_json line = ktv::log_event("out_degraded");
+                line["position"] = where;
+                line["staff_id"] = key;
+                line["message_id"] = out["message_id"];
+                line["reason"] = reason;
+                ktv::write_log(line);
+                health.metrics.add("ktv_out_degraded_total", "reason=\"" + reason + "\"");
             }
         };
         const auto commit = [&] { consumer.commit(topic, tracker.advance()); };
@@ -568,6 +610,10 @@ int main(int argc, char** argv) {
         pool.clear();
         if (producer) producer->flush(10'000);
         collect();
+        if (producer && !probes.empty() && !failed) {  // OUT báo lỗi vừa gửi trong collect(): chờ nốt rồi mới commit
+            producer->flush(10'000);
+            collect();
+        }
         commit();
     } catch (const std::exception& error) {
         fail(error.what());
