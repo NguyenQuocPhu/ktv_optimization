@@ -88,3 +88,6 @@ ISC_MobiX_PRD*.docx
 
 # Harness UAT: IN/OUT sinh ra mỗi lần chạy (python3 tests/uat/uat_cases.py)
 tests/uat/runs/
+
+# Repo bot-management-api (code prod của ktv nằm ở bot-management-api-main/ktv) — repo GitLab riêng, có .env, không commit vào đây
+bot-management-api-main/
