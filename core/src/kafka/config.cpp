@@ -127,6 +127,11 @@ std::map<std::string, std::string> rdkafka_properties(const KafkaConfig& config,
         props["enable.idempotence"] = "true";
         props["message.timeout.ms"] = "10000";  // quá 10 giây chưa xác nhận → báo lỗi giao nhận
         props["linger.ms"] = "5";
+        // Nén cả lô trước khi gửi; broker so giới hạn topic (max.message.bytes, prod 1 MB) với bản ĐÃ nén, consumer tự
+        // giải nén. message.max.bytes của producer lại đo bản CHƯA nén ngay lúc produce() (mặc định ~1 MB) → nâng lên
+        // 10 MB để không tự chặn OUT lớn mà nén xong vẫn lọt (OUT 1,7 MB → ~120 KB). Sự cố prod 2026-11-04.
+        props["compression.type"] = "lz4";
+        props["message.max.bytes"] = "10000000";
     }
     if (!config.sasl_mechanism.empty()) {
         props["sasl.mechanism"] = config.sasl_mechanism;
