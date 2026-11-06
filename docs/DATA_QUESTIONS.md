@@ -78,3 +78,16 @@ Vẫn trả `400` (không xếp được): JSON hỏng / không phải object; t
 | 2026-10-02 | Luật hạn của `onsite` | Workbook (4) sheet 05 nhóm 5: "rule như bao_tri" (SLA 60, P2) | `phieu_onsite` → check-in trước B, Phase 7.15 |
 | 2026-10-02 | Trạng thái `hoa_don` / `onsite` | Workbook (4) sheet 05: `hoa_don` 0 chưa thanh toán / 1 đã thanh toán; `onsite` 0 chưa xử lý / 10 đang xử lý / 1 đã hoàn tất | Thêm vào bảng trạng thái, Phase 7.11 |
 | 2026-10-02 | Tên topic IN | Sheet 00: prod `inside-par-…`, staging `stag-inside-par-…` | `.env.example`, README |
+
+## Prod 2026-11-06 — soi 110 IN (`/test/replay`) + 1.852 tuyến (`GET /{staff_id}`)
+
+- **IN chỉ là cập nhật từng việc**: 110/110 IN có đúng 1 task, `trigger` `CASE_BY_CASE`, **không có `planned_at`, không có
+  `message_id`** → lõi lập tuyến theo giờ chạy; worker không nhận ra IN tồn đọng theo `planned_at` (phải dùng timestamp
+  Kafka). Danh sách đầy đủ chỉ có ở cache IN của service. Có lúc gửi cả danh sách (00186970: 1 IN 1.481 task). Đúng không?
+- **97% dòng TASK prod là `ALREADY_BREACHED`** (21.863 / 22.578): thu hồi (11.459) + bill trả sau (9.045) loại "trong
+  tháng" có `create_date` tháng trước chưa đóng; bảo trì / triển khai hẹn 1–2 ngày trước. 1.488 / 1.806 tuyến đúng hạn dự
+  báo 0%. Việc tồn từ tháng trước có thật còn mở, hay OA chưa gửi cập nhật đóng việc?
+- **Tồn rất lớn mỗi KTV**: p90 145, max 435 việc; 00186970 có 1.273 bill mở, 1.193 thiếu toạ độ.
+- 110 tuyến KTV `status` 3 (off) vẫn được xếp (khung mặc định 08:00–17:30, 7.21).
+- Mã `task_status_id` 7 ở `thu_hoi` không có trong sheet 05 (75 lần) → coi là còn mở. Nghĩa là gì?
+- `CATALOG_MISMATCH thu_hoi.task_type_id` (danh mục ghi 1): OA gửi mã loại khác cho thu hồi.
