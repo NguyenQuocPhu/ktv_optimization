@@ -2031,6 +2031,40 @@ route mới hơn của worker thắng; Redis bị cắt kết nối → vẫn 20
   `task_sub_name` ở bản Mobix (sheet 09); `isblue` cuối dòng.
 - Kiểm: `test_api`, `test_pipeline`, `test_adapter`, `test_gateway_replan` (thứ tự field). ctest 21/21.
 
+### Phase 8.27 — Lọc ứng viên theo sức chứa trước bảng khoảng cách + QHĐ (chưa duyệt, 2026-11-06)
+
+**Vì sao.** Prod 06/11 (log 4 pod + 1.852 tuyến `GET /{staff_id}`): việc/KTV p50 31, p90 145, max 435, mà một ngày chỉ
+làm ~20–40 ca. OSRM partner-api từ chối bảng > 100 toạ độ (`TooBig`, dò 2026-11-06: 100 OK, 101 lỗi) → 4,4% OUT là 424 cả
+tuyến chim bay; bảng 100 điểm mất 2–3,7 s, 51 điểm 0,3 s. > 127 điểm bắt buộc → 422 (không có tuyến).
+
+**Thuật toán** (`plan.cpp`, sau khi tách điểm bắt buộc / tuỳ chọn, trước dựng `Problem`):
+1. Tổng điểm ≤ N → không đổi gì (≈ 90% IN).
+2. N = `candidate_factor` × C, chặn [`candidate_min`, `candidate_max`] và ≤ 99 (`kOsrmMaxStops`), ≤ `kMaxStops`.
+   C = (giờ hết ca + `inserted_overtime_minutes` − giờ xuất phát) ÷ phân vị 25% của (phút xử lý + phút đi tới điểm
+   gần nhất, chim bay × 1,3). Phân vị 25% chứ không phải trung vị: QHĐ chọn ca rẻ trước (trung vị ước 8 ca, KTV làm 19).
+   Sàn theo sức chứa: N ≥ ⌈`candidate_capacity_ratio` (1,3) × C⌉, tối đa `candidate_hard_max` (80; bảng OSRM 76 điểm
+   ~1,2 s, 100 điểm 2–3,7 s). Lý do (synth 648 KTV, `tools/prod_eval/synth.py`): KTV việc ngắn sát nhau C ~60 mà trần
+   45 → bỏ ca làm kịp (49 → 45 ca đúng hạn). Có sàn: tổng ca 7.730 → 8.090 (prod 8.868), ca trễ cũ dọn được
+   1.734 → 2.087, đúng hạn 2.200 → 2.197 (prod 2.109), thời gian tính 83 s → 126 s (prod 255 s).
+3. Giữ theo nhóm: 0 đang di chuyển tới · 1 còn kịp, hạn ≤ hết ca (+ phút được tràn) hoặc P1 · 2 còn kịp, hạn ngày sau ·
+   3 đã trễ · 4 không hạn · 5 tuỳ chọn. Nhóm 0–1 theo hạn sớm nhất; nhóm 2–5 tham lam theo (nhóm, ưu tiên, km tới KTV /
+   điểm đã giữ gần nhất).
+   Cách bỏ: xếp mọi ca theo hạn sớm nhất → ca đã trễ chiếm suất ca còn kịp (00173480 12:41: đúng hạn 9,1% → 0%);
+   nhóm 2 theo hạn → bill / thu hồi cuối tháng rải khắp nơi (00101265: 15 → 9 ca).
+4. Phần thừa: DEFERRED `NO_CAPACITY` (tuỳ chọn: `BEYOND_K`) + cảnh báo `STOP_LIMIT` (giữ N / tổng, C).
+5. Lưới an toàn: đã lọc mà tuyến xong sớm hơn giờ hết ca ≥ `candidate_idle_minutes` → tính lại với N gấp đôi (≤ 99).
+6. `candidate_max = 0` → tắt lọc theo sức chứa (còn trần 127 cùng thứ tự; > 127 không còn 422).
+Tham số [GIẢ ĐỊNH]: 30 / 45 / 3 / 60′. Trần 45 vì `travel.cpp` chờ đọc OSRM 3 s: 60 điểm → 8/47 KTV quá hạn chờ.
+
+**Đo** (`tools/prod_eval/eval.py`: dựng IN từ tuyến prod — OUT không echo `sla`, `create_date`, plots → mặc định danh
+mục; ca "trong tháng" prod báo ALREADY_BREACHED → `create_date` tháng trước). 1.852 KTV, chim bay, so HEAD:
+ca xếp 23.094 → 23.051, ca trễ 22.358 → 22.356, km 13.978 → 11.635 (−17%), thời gian tính −15% (85 KTV nặng −40%).
+47 KTV tốt hơn / 61 ít ca hơn — các ca lớn nhất là bản cũ vượt ca 709–2.585′ (1.122 km / ngày), bản mới ≤ 60′; 00377063
+(19 → 2 ca) là QHĐ làm 2 ca triển khai trễ còn kịp khung cũ (luật 8.22) thay 19 ca nhỏ. OSRM thật, 47 KTV từng TooBig:
+424 46 → 2 (2 còn lại: OSRM quá hạn chờ), +~1,3 s / KTV nặng (chờ bảng OSRM thay vì bị từ chối ngay).
+**Test.** `test_pipeline`: 128 điểm → 200 + ≤ 45 vào QHĐ; `candidate_max = 0`; ca còn kịp hạn (xa) không bị 60 ca đã
+trễ (gần) chiếm suất. UAT 0 dòng đổi. ctest 20/20.
+
 ### Phase 8.21 — Hạn "trong ngày / trong tháng" = giờ hết ca (trước 23:59)
 
 Người dùng chốt: hạn hoàn tất trong ngày hẹn / ngày tạo / trong tháng (cuối tháng) / ngày thu bill tính tới **giờ hết ca

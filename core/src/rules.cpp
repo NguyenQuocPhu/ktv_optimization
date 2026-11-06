@@ -141,6 +141,18 @@ Rules rules_from_json(const nlohmann::json& data) {
     number("optional_max_detour_minutes", rules.optional_max_detour_minutes, 0);
     number("optional_spare_ratio", rules.optional_spare_ratio, 0);
     number("inserted_overtime_minutes", rules.inserted_overtime_minutes, 0);
+    double candidate = rules.candidate_min;  // 8.27
+    number("candidate_min", candidate, 1);
+    rules.candidate_min = static_cast<int>(candidate);
+    candidate = rules.candidate_max;
+    number("candidate_max", candidate, 0);
+    rules.candidate_max = static_cast<int>(candidate);
+    number("candidate_factor", rules.candidate_factor, 0);
+    number("candidate_idle_minutes", rules.candidate_idle_minutes, 0);
+    number("candidate_capacity_ratio", rules.candidate_capacity_ratio, 0);
+    candidate = rules.candidate_hard_max;
+    number("candidate_hard_max", candidate, 0);
+    rules.candidate_hard_max = static_cast<int>(candidate);
     if (data.contains("overdue_as_inserted")) {  // 8.22
         if (!data["overdue_as_inserted"].is_boolean()) fail("overdue_as_inserted cần true / false");
         rules.overdue_as_inserted = data["overdue_as_inserted"].get<bool>();
@@ -222,6 +234,12 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"optional_max_detour_minutes", rules.optional_max_detour_minutes},
         {"optional_spare_ratio", rules.optional_spare_ratio},
         {"inserted_overtime_minutes", rules.inserted_overtime_minutes},
+        {"candidate_min", rules.candidate_min},
+        {"candidate_max", rules.candidate_max},
+        {"candidate_factor", rules.candidate_factor},
+        {"candidate_idle_minutes", rules.candidate_idle_minutes},
+        {"candidate_capacity_ratio", rules.candidate_capacity_ratio},
+        {"candidate_hard_max", rules.candidate_hard_max},
         {"overdue_as_inserted", rules.overdue_as_inserted},
         {"overdue_skip_bonus", rules.overdue_skip_bonus},
         {"overdue_skip_per_day", rules.overdue_skip_per_day},

@@ -4,8 +4,10 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <string>
+#include <tuple>
 
 #include "ktv/cluster.hpp"
 #include "ktv/normalization.hpp"
@@ -207,6 +209,9 @@ std::string one_decimal(double value) {
 
 // ---- 7.16.3: gom ca cùng địa chỉ thành một điểm dừng (chạy trước QHĐ) ----
 // Một điểm dừng: 1 ca lẻ, hoặc nhóm ca cùng địa chỉ (workbook không có mã nhóm → AI tự gom theo địa chỉ).
+// 8.27: OSRM partner-api từ chối bảng > 100 toạ độ ("Too many table coordinates", đo 2026-11-06) − 1 điểm xuất phát.
+constexpr int kOsrmMaxStops = 99;
+
 struct Stop {
     std::vector<const Task*> tasks;  // đã sắp thứ tự nội bộ (ưu tiên asc → TGXL asc → task_id)
 };
@@ -442,10 +447,126 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     };
     if (routed_stops.empty() && spare_stops.empty() && !deferred.empty()) return deferred_only();
     // ponytail: chỉ còn việc đang làm (không ca nào khác) vẫn 422 như trước — summarize_clusters cần ít nhất 1 ca có toạ độ.
-    if ((routed_stops.empty() && spare_stops.empty()) || routed_stops.size() > static_cast<size_t>(kMaxStops)) {
-        result.response = error_response("422", routed_stops.empty() ? "Không có công việc để dựng tuyến" : "Quá " + std::to_string(kMaxStops) + " điểm dừng cho một KTV",
-                                         message.message_id, server_now);
+    if (routed_stops.empty() && spare_stops.empty()) {
+        result.response = error_response("422", "Không có công việc để dựng tuyến", message.message_id, server_now);
         return result;
+    }
+
+    // ---- 8.27: lọc ứng viên theo sức chứa (trước bảng khoảng cách + QHĐ; rules.candidate_*). Ví dụ: KTV 434 điểm,
+    // còn 5 giờ ca, mỗi ca ~45′ xử lý + ~6′ đi → C ≈ 6 → N = 25 (trần dưới): giữ 25 điểm, 409 điểm còn lại DEFERRED.
+    // Trước: > kMaxStops → 422; ≤ kMaxStops → gửi cả trăm điểm cho OSRM → bị từ chối → cả tuyến chim bay (424).
+    const int total_stops = static_cast<int>(routed_stops.size() + spare_stops.size());
+    int stop_cap = kMaxStops;
+    double capacity = 0;  // C: số ca ước làm được (chỉ để ghi cảnh báo)
+    if (rules.candidate_max > 0 && total_stops > rules.candidate_min) {
+        std::vector<Point> at;
+        std::vector<int> service;
+        for (const auto* list : {&routed_stops, &spare_stops})
+            for (const Stop& stop : *list) {
+                at.push_back(*stop_anchor(stop).latlng);
+                int minutes = 0;
+                for (const Task* task : stop.tasks) minutes += stop_service(*task);
+                service.push_back(minutes);
+            }
+        std::vector<double> cost;  // phút / ca = xử lý + đi tới điểm gần nhất (chim bay × kRoadFactor)
+        for (size_t i = 0; i < at.size(); ++i) {
+            double nearest = distance_km(staff.latlng, at[i]);
+            for (size_t j = 0; j < at.size(); ++j)
+                if (j != i) nearest = std::min(nearest, distance_km(at[i], at[j]));
+            cost.push_back(service[i] + nearest * kRoadFactor / rules.average_speed_kmh * 60);
+        }
+        // Phân vị 25% (không phải trung vị): QHĐ chọn ca rẻ trước — đo prod 06/11, trung vị ước 8 ca trong khi KTV làm 19
+        // (bill 15′ sát nhau) → lọc mất ca làm kịp. Giờ còn lại tính cả phút được tràn ca (inserted_overtime_minutes).
+        const size_t q = cost.size() / 4;
+        std::nth_element(cost.begin(), cost.begin() + q, cost.end());
+        const Minutes left = std::max<Minutes>(0, shift_end + static_cast<Minutes>(rules.inserted_overtime_minutes) - start);
+        capacity = static_cast<double>(left) / std::max(cost[q], 1.0);
+        stop_cap = static_cast<int>(std::llround(rules.candidate_factor * capacity));
+        stop_cap = std::clamp(stop_cap, rules.candidate_min, std::max(rules.candidate_min, rules.candidate_max));
+        stop_cap = std::max(stop_cap, std::min(rules.candidate_hard_max,
+                                               static_cast<int>(std::ceil(rules.candidate_capacity_ratio * capacity))));
+        stop_cap = std::min({stop_cap, kOsrmMaxStops, kMaxStops});
+    }
+    const bool stop_filtered = total_stops > stop_cap;
+    if (stop_filtered) {
+        // Nhóm (nhỏ giữ trước): 0 đang di chuyển tới · 1 còn kịp, hạn ≤ hết ca (+ phút được tràn) hoặc P1 · 2 còn kịp,
+        // hạn sau · 3 đã trễ · 4 không hạn · 5 tuỳ chọn. Nhóm 0–1 theo hạn sớm nhất. Nhóm 2–5 theo ưu tiên rồi gần nhất
+        // (KTV hoặc điểm đã giữ): hạn ngày sau (bill / thu hồi cuối tháng) theo hạn thì rải khắp nơi — đo prod 06/11 KTV
+        // 00101265: 15 → 9 ca, thêm 2 ca trễ; theo khoảng cách thì giữ được cụm ca rẻ mà QHĐ vốn chọn.
+        // Cách thử bỏ: xếp mọi ca theo hạn sớm nhất → ca đã trễ (hạn "sớm" nhất) chiếm hết suất của ca còn kịp
+        // (KTV 00173480 12:41: đúng hạn 9,1% → 0%).
+        struct Candidate {
+            int tier;
+            Minutes deadline;
+            int level;
+            long long task_id;
+            Point at;
+            bool spare;
+            size_t index;
+        };
+        std::vector<Candidate> pool;
+        const Minutes today_end = shift_end + static_cast<Minutes>(rules.inserted_overtime_minutes);
+        for (const auto* list : {&routed_stops, &spare_stops})
+            for (size_t i = 0; i < list->size(); ++i) {
+                const Stop& stop = (*list)[i];
+                bool moving = false;
+                Minutes deadline = std::numeric_limits<Minutes>::max();
+                int level = 9;
+                for (const Task* task : stop.tasks) {
+                    const TaskStatus* status = find_status(task->task_group_name, task->task_status_id);
+                    moving |= status && std::string(status->name) == "Đang di chuyển";
+                    const TaskKind& kind = kind_or_default(*task);
+                    const Deadlines d = resolve_deadlines(*task, kind, now, rules.day_end_minute);
+                    if (const auto due = d.due ? d.due : d.complete_by) deadline = std::min(deadline, *due);
+                    level = std::min(level, task->priority_in_day > 0 ? task->priority_in_day : kind.priority);
+                }
+                const bool spare = list == &spare_stops;
+                const bool has_deadline = deadline != std::numeric_limits<Minutes>::max();
+                const int tier = spare ? 5 : moving ? 0 : !has_deadline ? 4 : deadline < start ? 3
+                                       : (deadline <= today_end || level == 1) ? 1 : 2;
+                pool.push_back({tier, deadline, level, stop.tasks.front()->task_id, *stop_anchor(stop).latlng, spare, i});
+            }
+        std::vector<char> keep(pool.size(), 0);
+        std::vector<double> near(pool.size());  // km tới KTV / điểm đã giữ gần nhất
+        for (size_t i = 0; i < pool.size(); ++i) near[i] = distance_km(staff.latlng, pool[i].at);
+        auto take = [&](size_t i) {
+            keep[i] = 1;
+            for (size_t j = 0; j < pool.size(); ++j) near[j] = std::min(near[j], distance_km(pool[i].at, pool[j].at));
+        };
+        std::vector<size_t> order(pool.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            return std::tie(pool[a].tier, pool[a].deadline, pool[a].level, pool[a].task_id) <
+                   std::tie(pool[b].tier, pool[b].deadline, pool[b].level, pool[b].task_id);
+        });
+        int kept = 0;
+        for (size_t i : order)
+            if (pool[i].tier <= 1 && kept < stop_cap) take(i), ++kept;
+        while (kept < stop_cap) {
+            size_t best = pool.size();
+            for (size_t i = 0; i < pool.size(); ++i) {
+                if (keep[i] || pool[i].tier <= 1) continue;
+                if (best == pool.size() || std::tie(pool[i].tier, pool[i].level, near[i], pool[i].task_id) <
+                                               std::tie(pool[best].tier, pool[best].level, near[best], pool[best].task_id))
+                    best = i;
+            }
+            if (best == pool.size()) break;
+            take(best), ++kept;
+        }
+        std::vector<Stop> keep_routed, keep_spare;
+        for (size_t i = 0; i < pool.size(); ++i) {  // giữ thứ tự cũ (tất định)
+            Stop& stop = pool[i].spare ? spare_stops[pool[i].index] : routed_stops[pool[i].index];
+            if (keep[i]) {
+                (pool[i].spare ? keep_spare : keep_routed).push_back(std::move(stop));
+                continue;
+            }
+            for (const Task* task : stop.tasks) deferred.push_back({task, pool[i].spare ? "BEYOND_K" : "NO_CAPACITY"});
+        }
+        routed_stops = std::move(keep_routed);
+        spare_stops = std::move(keep_spare);
+        result.warnings.push_back({"", "lọc ứng viên: giữ " + std::to_string(kept) + "/" + std::to_string(total_stops) +
+                                       " điểm dừng (sức chứa ước ~" + std::to_string(std::llround(capacity)) + " ca)", "STOP_LIMIT"});
+        if (routed_stops.empty() && spare_stops.empty()) return deferred_only();
     }
 
     // ---- Bài toán số: mọi mốc giờ đổi về phút kể từ lúc xuất phát. Mỗi điểm dừng = một "việc" của QHĐ.
@@ -906,6 +1027,14 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     }
 
     const Minutes finish = at(visits.back()->done);  // Xong việc cuối (nghỉ ở cuối tuyến không tính).
+    // 8.27 lưới an toàn: bộ lọc ứng viên đã bỏ điểm mà KTV còn rảnh ≥ candidate_idle_minutes trước giờ hết ca → đã ước
+    // sức chứa thấp → tính lại với N gấp đôi (≤ 99 điểm, OSRM). Hữu hạn: mỗi lần N tăng, dừng ở trần.
+    const int cap_limit = std::min({kOsrmMaxStops, kMaxStops, total_stops});
+    if (stop_filtered && stop_cap < cap_limit && finish + static_cast<Minutes>(rules.candidate_idle_minutes) <= shift_end) {
+        Rules wider = base_rules;
+        wider.candidate_min = wider.candidate_max = std::min(2 * stop_cap, cap_limit);
+        return plan(message, wider, server_now, osrm_url, explain);
+    }
     ojson metrics = {
         {"total_distance_km", round_to(km, 1)},
         {"total_travel_minutes", travel},

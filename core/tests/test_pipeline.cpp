@@ -191,13 +191,69 @@ int main() {
         auto r = run(message("2026-09-10 09:00:00", none, tasks, none, none, none));
         CHECK(r && r->response["statuscode"] == "200");
     }
-    {  // Quá 127 điểm dừng → 422.
+    // 8.27 lọc ứng viên: đếm dòng theo (entry_type, insert_reason) + có cảnh báo STOP_LIMIT không.
+    auto rows = [](const ktv::PlanResult& r, const char* type, const char* reason) {
+        int n = 0;
+        for (const auto& cluster : r.response["data"]["clusters"])
+            for (const auto& row : cluster["schedule"])
+                n += row["entry_type"] == type && (!reason || row.value("insert_reason", "") == reason);
+        return n;
+    };
+    auto stop_limit = [](const ktv::PlanResult& r) {
+        for (const auto& w : r.warnings)
+            if (w.code == "STOP_LIMIT") return true;
+        return false;
+    };
+    {  // Trước 8.27: quá 127 điểm dừng → 422. Nay lọc ứng viên: ≤ candidate_max (45) điểm vào QHĐ, còn lại NO_CAPACITY.
         json tasks = json::array();
         for (int i = 0; i < 128; ++i)
             tasks.push_back(task(200 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "",
                                  ("21." + std::to_string(30 + i) + ",105.82").c_str(), ""));
         auto r = run(message("2026-09-10 09:00:00", none, tasks, none, none, none));
-        CHECK(r && r->response["statuscode"] == "422" && r->response["data"].is_null());
+        CHECK(r && r->response["statuscode"] == "200" && stop_limit(*r));
+        CHECK(r && rows(*r, "TASK", nullptr) + rows(*r, "DEFERRED", "NO_CAPACITY") == 128);
+        CHECK(r && rows(*r, "DEFERRED", "NO_CAPACITY") >= 128 - ktv::default_rules().candidate_max);
+        // candidate_max = 0 → tắt lọc theo sức chứa, chỉ còn trần kMaxStops (127): 1 điểm thừa.
+        ktv::Rules off = ktv::default_rules();
+        off.candidate_max = 0;
+        auto r2 = run(message("2026-09-10 09:00:00", none, tasks, none, none, none), off);
+        CHECK(r2 && r2->response["statuscode"] == "200" && stop_limit(*r2));
+        tasks.erase(tasks.end() - 1);
+        auto r3 = run(message("2026-09-10 09:00:00", none, tasks, none, none, none), off);
+        CHECK(r3 && r3->response["statuscode"] == "200" && !stop_limit(*r3));
+    }
+    {  // 8.27: ca còn kịp hạn hôm nay (xa) không bị 60 ca đã trễ (gần, hạn "sớm" hơn) chiếm suất — lỗi của cách xếp mọi
+       // ca theo hạn sớm nhất (thử trên prod: KTV 00173480 đúng hạn 9,1% → 0%).
+        json tasks = json::array();
+        for (int i = 0; i < 60; ++i)
+            tasks.push_back(task(300 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "2026-09-09 08:00:00",
+                                 ("21." + std::to_string(1000 + 10 * i) + ",105.80").c_str(), ""));  // cách 111 m: không gom điểm
+        tasks.push_back(task(999, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "2026-09-10 15:00:00", "21.20,105.80", ""));
+        auto r = run(message("2026-09-10 09:00:00", none, tasks, none, none, none));
+        bool kept = false;
+        if (r)
+            for (const auto& cluster : r->response["data"]["clusters"])
+                for (const auto& row : cluster["schedule"])
+                    kept |= row.value("task_id", 0LL) == 999 && row["entry_type"] == "TASK";
+        CHECK(r && stop_limit(*r) && kept);
+    }
+    {  // 8.27 sàn sức chứa: 150 việc 10′ cách nhau 111 m (C ~55 ca) — trần 45 cũ bỏ ca làm kịp (synth 06/11: "giữ
+       // 45/249, sức chứa ~63 ca"). Nay giữ ≥ 1,3 × C, ≤ candidate_hard_max. Tắt lưới an toàn để thấy đúng bộ lọc.
+        json tasks = json::array();
+        for (int i = 0; i < 150; ++i)
+            tasks.push_back(task(400 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "",
+                                 ("21." + std::to_string(1000 + 10 * i) + ",105.80").c_str(), 10));
+        ktv::Rules rules = ktv::default_rules();
+        rules.candidate_idle_minutes = 100000;
+        auto r = run(message("2026-09-10 09:00:00", none, tasks, none, none, none), rules);
+        int kept = 0, capacity = 0;
+        if (r)
+            for (const auto& w : r->warnings)
+                if (w.code == "STOP_LIMIT") {
+                    std::sscanf(w.problem.c_str() + w.problem.find("giữ ") + 5, "%d", &kept);
+                    std::sscanf(w.problem.c_str() + w.problem.find("~") + 1, "%d", &capacity);
+                }
+        CHECK(r && capacity > 45 && kept >= capacity && kept <= rules.candidate_hard_max);
     }
     {  // Không có việc nào → 422.
         auto r = run(message("2026-09-10 09:00:00", none, none, none, none, none));

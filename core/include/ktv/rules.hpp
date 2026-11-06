@@ -124,6 +124,26 @@ struct Rules {
     double overdue_skip_max_days = 7;
     double overdue_skip_window = 4;
     double overdue_skip_window_decay = 60;
+    // 8.27 — lọc ứng viên theo sức chứa TRƯỚC bảng khoảng cách + QHĐ: KTV có quá nhiều điểm (prod 06/11: tới 434
+    // điểm / KTV, OSRM từ chối bảng > 100 điểm → cả tuyến tính chim bay, mã 424; 1/3 KTV > 60 điểm ngốn 69% thời gian
+    // tính) mà một ngày chỉ làm được ~20–40 ca. Giữ N = candidate_factor × C điểm, chặn [candidate_min, candidate_max]
+    // và ≤ 99 (OSRM); C = phút còn lại của ca (+ phút được tràn) ÷ phân vị 25% (phút xử lý + phút đi tới điểm gần
+    // nhất). Thứ tự giữ: ca đang
+    // di chuyển tới → ca còn kịp hạn (hôm nay trước, theo hạn) → ca đã trễ → ca không hạn → ca tuỳ chọn; 3 nhóm sau
+    // theo ưu tiên rồi gần KTV / gần điểm đã giữ. Phần thừa: DEFERRED NO_CAPACITY (ca tuỳ chọn: BEYOND_K).
+    // candidate_max = 0 → tắt (chỉ còn trần kMaxStops, cùng thứ tự). [GIẢ ĐỊNH 30 / 45 / 3, quét 1.036 KTV prod 06/11: trần 45 để bảng OSRM
+    // ≤ ~1,3 s (60 điểm: 8/47 KTV quá hạn chờ đọc 3 s của travel.cpp)]
+    int candidate_min = 30;
+    int candidate_max = 45;
+    double candidate_factor = 3;
+    // Sàn theo sức chứa: N ≥ candidate_capacity_ratio × C (≤ candidate_hard_max). candidate_max chỉ là trần cho phần
+    // "dư 3 lần"; KTV việc ngắn, sát nhau (bill 10′ trong 3 km: C ~60) mà N = 45 < C → bỏ ca làm kịp (synth 06/11:
+    // "giữ 45/249, sức chứa ~63 ca", KTV làm được 49 ca chỉ còn 45). candidate_hard_max: bảng OSRM 76 điểm ~1,2 s,
+    // 100 điểm 2–3,7 s (chờ đọc 3 s ở travel.cpp) → 80.
+    double candidate_capacity_ratio = 1.3;
+    int candidate_hard_max = 80;
+    // Lưới an toàn: đã lọc mà tuyến xong sớm hơn giờ hết ca ≥ ngần này phút → tính lại với N gấp đôi (≤ 99).
+    double candidate_idle_minutes = 60;
     double old_window_cap_minutes = 240;  // OLD_WINDOW_MINUTES tính tối đa ngần này phút / ca; ca có khung bị bỏ = mức này
     std::vector<std::string> force_recompute_triggers;  // Trigger luôn tính lại dù IN không đổi. Mặc định rỗng.
     // 8.21: giờ trong ngày (phút) của hạn "trong ngày / trong tháng". Không đọc từ rules.json: plan() gán = giờ hết ca
