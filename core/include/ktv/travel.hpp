@@ -44,8 +44,8 @@ double distance_km(Point a, Point b);                                           
 Matrix haversine_matrix(const std::vector<Point>& points, double speed_kmh, double factor = 1);  // Phút = km / tốc độ.
 
 // Gọi OSRM /table một lần cho mọi điểm. Lỗi mạng / HTTP / JSON → không có + lý do trong error.
-// Cặp điểm OSRM không tìm được đường → ô đó dùng chim bay × 1,3.
+// Cặp điểm OSRM không tìm được đường → ô đó dùng chim bay × 1,3. timeout_seconds: chờ đọc tối đa (rules.osrm_timeout_seconds).
 std::optional<Matrix> osrm_matrix(const std::string& url, const std::vector<Point>& points, double speed_kmh,
-                                  std::string& error);
+                                  std::string& error, double timeout_seconds = 3);
 
 }  // namespace ktv

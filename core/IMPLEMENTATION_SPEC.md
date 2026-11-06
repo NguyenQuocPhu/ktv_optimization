@@ -2065,6 +2065,18 @@ ca xếp 23.094 → 23.051, ca trễ 22.358 → 22.356, km 13.978 → 11.635 (�
 **Test.** `test_pipeline`: 128 điểm → 200 + ≤ 45 vào QHĐ; `candidate_max = 0`; ca còn kịp hạn (xa) không bị 60 ca đã
 trễ (gần) chiếm suất. UAT 0 dòng đổi. ctest 20/20.
 
+### Phase 8.28 — Thời gian chờ OSRM thành rule `osrm_timeout_seconds` (2026-11-06)
+
+**Vì sao.** `travel.cpp` chờ đọc OSRM cứng 3 s; bảng 100 điểm mất 2–3,7 s (đo partner-api 06/11) → KTV nặng hay quá hạn
+chờ → cả tuyến chim bay (424). Không ai chờ worker Kafka — chờ lâu hơn để có đường thật đáng hơn; `/suggest` thì Mobix
+đang chờ response nên phải ngắn hơn.
+
+**Làm.** `rules.osrm_timeout_seconds` (mặc định 3, ≥ 0,1) → `osrm_matrix(..., timeout_seconds)`. Service đặt 2 mức qua
+rule: worker `KTV_CORE_OSRM_TIMEOUT_WORKER` = 8, `/suggest` `KTV_CORE_OSRM_TIMEOUT_SUGGEST` = 5 (file rule ghi rõ thì
+thắng). Bản lõi cũ gặp khóa lạ → bỏ qua (vẫn 3 s), deploy service trước / sau đều an toàn.
+
+**Test.** `test_travel`: OSRM giả trả sau 1,5 s — chờ 1 s → lỗi, chờ 3 s → có bảng; đọc / mặc định rule.
+
 ### Phase 8.21 — Hạn "trong ngày / trong tháng" = giờ hết ca (trước 23:59)
 
 Người dùng chốt: hạn hoàn tất trong ngày hẹn / ngày tạo / trong tháng (cuối tháng) / ngày thu bill tính tới **giờ hết ca

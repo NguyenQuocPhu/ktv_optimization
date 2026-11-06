@@ -150,6 +150,7 @@ Rules rules_from_json(const nlohmann::json& data) {
     number("candidate_factor", rules.candidate_factor, 0);
     number("candidate_idle_minutes", rules.candidate_idle_minutes, 0);
     number("candidate_capacity_ratio", rules.candidate_capacity_ratio, 0);
+    number("osrm_timeout_seconds", rules.osrm_timeout_seconds, 0.1);
     candidate = rules.candidate_hard_max;
     number("candidate_hard_max", candidate, 0);
     rules.candidate_hard_max = static_cast<int>(candidate);
@@ -240,6 +241,7 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"candidate_idle_minutes", rules.candidate_idle_minutes},
         {"candidate_capacity_ratio", rules.candidate_capacity_ratio},
         {"candidate_hard_max", rules.candidate_hard_max},
+        {"osrm_timeout_seconds", rules.osrm_timeout_seconds},
         {"overdue_as_inserted", rules.overdue_as_inserted},
         {"overdue_skip_bonus", rules.overdue_skip_bonus},
         {"overdue_skip_per_day", rules.overdue_skip_per_day},

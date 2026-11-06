@@ -141,6 +141,9 @@ struct Rules {
     // "giữ 45/249, sức chứa ~63 ca", KTV làm được 49 ca chỉ còn 45). candidate_hard_max: bảng OSRM 76 điểm ~1,2 s,
     // 100 điểm 2–3,7 s (chờ đọc 3 s ở travel.cpp) → 80.
     double candidate_capacity_ratio = 1.3;
+    // Chờ OSRM trả bảng tối đa ngần này giây; quá → cả tuyến chim bay × 1,3 (mã 424). Bảng 100 điểm 2–3,7 s (06/11).
+    // Service tách 2 mức: worker Kafka (không ai chờ, cần đúng) dài hơn; /suggest (Mobix chờ) ngắn hơn.
+    double osrm_timeout_seconds = 3;
     int candidate_hard_max = 80;
     // Lưới an toàn: đã lọc mà tuyến xong sớm hơn giờ hết ca ≥ ngần này phút → tính lại với N gấp đôi (≤ 99).
     double candidate_idle_minutes = 60;

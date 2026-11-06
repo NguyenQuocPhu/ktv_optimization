@@ -3,6 +3,7 @@
 #include <httplib.h>
 
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 
 namespace ktv {
@@ -27,7 +28,7 @@ Matrix haversine_matrix(const std::vector<Point>& points, double speed_kmh, doub
 }
 
 std::optional<Matrix> osrm_matrix(const std::string& url, const std::vector<Point>& points, double speed_kmh,
-                                  std::string& error) {
+                                  std::string& error, double timeout_seconds) {
     // url có thể kèm đường dẫn (OSRM sau proxy): "http://host:5000/osrm" → host + tiền tố "/osrm".
     size_t scheme = url.find("://");
     size_t slash = url.find('/', scheme == std::string::npos ? 0 : scheme + 3);
@@ -43,7 +44,7 @@ std::optional<Matrix> osrm_matrix(const std::string& url, const std::vector<Poin
 
     httplib::Client client(host);
     client.set_connection_timeout(1);
-    client.set_read_timeout(3);
+    client.set_read_timeout(std::chrono::milliseconds(static_cast<long long>(timeout_seconds * 1000)));
     auto response = client.Get(path);
     if (!response) {
         error = "OSRM không phản hồi: " + httplib::to_string(response.error());

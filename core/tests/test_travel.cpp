@@ -2,6 +2,7 @@
 #include <httplib.h>
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <thread>
 
@@ -46,6 +47,14 @@ int main() {
         for (size_t i = 0; i < n; ++i) distances.push_back(0), durations.push_back(json::array({0}));
         res.set_content(json{{"code", "Ok"}, {"distances", distances}, {"durations", durations}}.dump(), "application/json");
     });
+    server.Get("/slow/table/v1/driving/.*", [](const httplib::Request& req, httplib::Response& res) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // OSRM chậm (bảng lớn)
+        size_t n = std::count(req.path.begin(), req.path.end(), ';') + 1;
+        json distances, durations;
+        for (size_t i = 0; i < n; ++i)
+            for (size_t j = 0; j < n; ++j) distances[i][j] = i == j ? 0 : 1000, durations[i][j] = i == j ? 0 : 120;
+        res.set_content(json{{"code", "Ok"}, {"distances", distances}, {"durations", durations}}.dump(), "application/json");
+    });
     int port = server.bind_to_any_port("127.0.0.1");
     std::thread thread([&] { server.listen_after_bind(); });
     std::string url = "http://127.0.0.1:" + std::to_string(port);
@@ -68,6 +77,13 @@ int main() {
     CHECK(!osrm_matrix(url + "/malformed", points, 30, error) && error.find("sai kích thước") != std::string::npos);
     error.clear();
     CHECK(!osrm_matrix("http://127.0.0.1:1", points, 30, error) && !error.empty());  // Không có server.
+    // rules.osrm_timeout_seconds: OSRM trả sau 1,5 s — chờ 1 s → lỗi (plan về chim bay 424), chờ 3 s → có bảng.
+    error.clear();
+    CHECK(!osrm_matrix(url + "/slow", points, 30, error, 1) && !error.empty());
+    error.clear();
+    CHECK(osrm_matrix(url + "/slow", points, 30, error, 3) && error.empty());
+    CHECK(rules_from_json(json{{"osrm_timeout_seconds", 8}}).osrm_timeout_seconds == 8);
+    CHECK(default_rules().osrm_timeout_seconds == 3);
 
     // plan với OSRM hỏng: vẫn trả tuyến, mã 424.
     json data = json::parse(R"({

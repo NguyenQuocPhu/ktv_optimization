@@ -723,7 +723,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     std::string travel_error;
     if (osrm_url.empty()) {
         p.travel = haversine_matrix(points, rules.average_speed_kmh);
-    } else if (auto road = osrm_matrix(osrm_url, points, rules.average_speed_kmh, travel_error)) {
+    } else if (auto road = osrm_matrix(osrm_url, points, rules.average_speed_kmh, travel_error, rules.osrm_timeout_seconds)) {
         p.travel = std::move(*road);
         result.travel = "OSRM";
     } else {
