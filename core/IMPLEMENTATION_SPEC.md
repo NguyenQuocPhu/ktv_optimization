@@ -2065,6 +2065,41 @@ ca xếp 23.094 → 23.051, ca trễ 22.358 → 22.356, km 13.978 → 11.635 (�
 **Test.** `test_pipeline`: 128 điểm → 200 + ≤ 45 vào QHĐ; `candidate_max = 0`; ca còn kịp hạn (xa) không bị 60 ca đã
 trễ (gần) chiếm suất. UAT 0 dòng đổi. ctest 20/20.
 
+### Phase 8.29 — Cache bảng OSRM giữa các điểm việc (2026-11-07)
+
+**Vì sao.** Mỗi lần tính lõi hỏi OSRM **cả bảng N×N** (99 điểm: 2,5–5,6 s, đo partner-api 07/11) — ~65% thời gian một lần
+`/suggest`. Nhưng khi Mobix gửi vị trí mới chỉ điểm 0 (chỗ KTV) đổi; khoảng cách giữa các việc vẫn vậy. Một hàng
+(`sources=0`) chỉ 0,1–0,2 s.
+
+**Làm.** `TravelCache {points (point_key "lat,lng" 6 số lẻ), meters, seconds}` giữa các ĐIỂM VIỆC (không gồm điểm 0);
+`kUnknown` −1e6 / `kNoRoute` −2e6 (OSRM có trả số âm nhỏ, VD −0,4 m, nên không dùng −1 / −2).
+`osrm_matrix(..., TravelCache* cache)`:
+- ô đã biết lấy từ cache;
+- điểm cần hỏi = phủ mọi cặp chưa biết bằng ít điểm nhất (tham lam theo số cặp thiếu → điểm mới được chọn, điểm cũ
+  không bị hỏi lại);
+- gọi OSRM hàng `{0} ∪ thiếu` × mọi điểm, rồi cột mọi điểm việc × thiếu (`sources` / `destinations`);
+- thiếu ≥ nửa → cả bảng một lần.
+- Cột điểm 0 (về chỗ KTV) không dùng ở đâu (dp chỉ đọc hàng `origin`, chỉ số đích luôn ≥ 1) → giữ chim bay × 1,3.
+
+Thành công → cache cập nhật: điểm lần này đứng đầu, điểm cũ khác phía sau (bên lưu cắt đuôi). `fetched_cells` /
+`added_cells` CỘNG DỒN (lưới an toàn 8.27 gọi lại `plan`, lần sau chỉ hỏi điểm mới thêm). OSRM lỗi → cache giữ nguyên.
+`plan(..., travel_cache)`. Service lưu `mx:{staff_id}` (int32 0,1 m / 0,1 s xếp lại byte + nén: chính xác, ÷3,9).
+
+**Đo.** 25 KTV chậm 07/11, KTV dời 300 m: 2.124 → 735 ms / KTV (÷2,9), TB 46 ô / KTV. Tuyến giống hệt bản hỏi cả bảng
+(bỏ bước lưu: 12/12; qua lưu chính xác: 24/25 — KTV còn lại do OSRM partner tự trả khác giữa 2 lần gọi giống nhau).
+Làm tròn 10 m / 1 s nhỏ hơn (÷6,4) nhưng đổi tuyến 8/12 (LNS nhạy) → không dùng.
+
+**Test.** `test_travel`: OSRM giả theo tọa độ hiểu `sources` / `destinations`:
+- cache rỗng → cả bảng;
+- KTV di chuyển → 1 hàng;
+- thêm việc → hàng + cột việc mới;
+- bỏ / đổi thứ tự việc → không hỏi thêm, thứ tự cache;
+- ô null → `kNoRoute` không hỏi lại;
+- OSRM lỗi → cache nguyên;
+- `plan` lần 2 chỉ 1 truy vấn, cùng tuyến.
+
+Mọi trường hợp bảng ghép = bảng hỏi cả bảng. ctest 20/20.
+
 ### Phase 8.28 — Thời gian chờ OSRM thành rule `osrm_timeout_seconds` (2026-11-06)
 
 **Vì sao.** `travel.cpp` chờ đọc OSRM cứng 3 s; bảng 100 điểm mất 2–3,7 s (đo partner-api 06/11) → KTV nặng hay quá hạn

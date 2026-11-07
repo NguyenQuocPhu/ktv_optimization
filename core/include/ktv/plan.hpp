@@ -47,8 +47,10 @@ struct PlanResult {
 // osrm_url rỗng: chim bay. Có: gọi OSRM; lỗi thì chim bay × 1,3 và trả mã 424 (vẫn có tuyến).
 // explain = true: thêm data.score (chi phí từng tầng/rule + vài phương án so sánh) — cho bước giải thích,
 // không đổi thứ tự; mặc định false để OUT giữ nguyên contract.
+// travel_cache (8.29, có thể null): bảng OSRM đã biết giữa các điểm việc — chỉ hỏi OSRM phần thiếu; thành công thì
+// được cập nhật (service lưu lại cho lần sau). OSRM lỗi / chim bay → giữ nguyên.
 PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, const std::string& osrm_url = "",
-                bool explain = false);
+                bool explain = false, TravelCache* travel_cache = nullptr);
 
 // Response lỗi (sheet 07): success = false, data = null.
 nlohmann::ordered_json error_response(const std::string& statuscode, const std::string& text,

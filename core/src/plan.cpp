@@ -344,7 +344,8 @@ ojson error_response(const std::string& statuscode, const std::string& text, con
 }
 
 PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_now, const std::string& osrm_url,
-                bool explain) {
+                bool explain,
+                TravelCache* travel_cache) {
     auto clock = std::chrono::steady_clock::now();
     // Chế độ sắp xếp = bộ tầng rule (không sửa dp): 0 mặc định = Kết nối 70/30 → mix_tiers (7.26);
     // 1 SLA → tiers; 2 Tuyến → route_tiers (km tầng 1).
@@ -723,7 +724,8 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     std::string travel_error;
     if (osrm_url.empty()) {
         p.travel = haversine_matrix(points, rules.average_speed_kmh);
-    } else if (auto road = osrm_matrix(osrm_url, points, rules.average_speed_kmh, travel_error, rules.osrm_timeout_seconds)) {
+    } else if (auto road = osrm_matrix(osrm_url, points, rules.average_speed_kmh, travel_error, rules.osrm_timeout_seconds,
+                                         travel_cache)) {
         p.travel = std::move(*road);
         result.travel = "OSRM";
     } else {
@@ -1033,7 +1035,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     if (stop_filtered && stop_cap < cap_limit && finish + static_cast<Minutes>(rules.candidate_idle_minutes) <= shift_end) {
         Rules wider = base_rules;
         wider.candidate_min = wider.candidate_max = std::min(2 * stop_cap, cap_limit);
-        return plan(message, wider, server_now, osrm_url, explain);
+        return plan(message, wider, server_now, osrm_url, explain, travel_cache);  // cache: chỉ hỏi điểm mới thêm
     }
     ojson metrics = {
         {"total_distance_km", round_to(km, 1)},

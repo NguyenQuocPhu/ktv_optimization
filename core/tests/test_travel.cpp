@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 #include "ktv/plan.hpp"
@@ -53,6 +54,45 @@ int main() {
         json distances, durations;
         for (size_t i = 0; i < n; ++i)
             for (size_t j = 0; j < n; ++j) distances[i][j] = i == j ? 0 : 1000, durations[i][j] = i == j ? 0 : 120;
+        res.set_content(json{{"code", "Ok"}, {"distances", distances}, {"durations", durations}}.dump(), "application/json");
+    });
+    // OSRM giả theo tọa độ (8.29): hiểu sources / destinations; giá trị chỉ phụ thuộc 2 tọa độ (thứ tự điểm nào cũng
+    // ra cùng số) → so được bảng ghép từ cache với bảng hỏi đầy đủ. Điểm lat 21.5 không có đường (null).
+    std::vector<std::string> rect_queries;
+    server.Get("/rect/table/v1/driving/.*", [&](const httplib::Request& req, httplib::Response& res) {
+        std::vector<Point> pts;
+        std::stringstream list(req.path.substr(req.path.rfind('/') + 1));
+        for (std::string item; std::getline(list, item, ';');) {
+            const size_t comma = item.find(',');
+            pts.push_back({std::stod(item.substr(comma + 1)), std::stod(item.substr(0, comma))});
+        }
+        auto indices = [&](const char* name) {
+            std::vector<int> out;
+            if (!req.has_param(name)) {
+                for (size_t i = 0; i < pts.size(); ++i) out.push_back(static_cast<int>(i));
+                return out;
+            }
+            std::stringstream text(req.get_param_value(name));
+            for (std::string item; std::getline(text, item, ';');) out.push_back(std::stoi(item));
+            return out;
+        };
+        const std::vector<int> rows = indices("sources"), cols = indices("destinations");
+        rect_queries.push_back((req.has_param("sources") ? req.get_param_value("sources") : "*") + "|" +
+                               (req.has_param("destinations") ? req.get_param_value("destinations") : "*"));
+        json distances = json::array(), durations = json::array();
+        for (int i : rows) {
+            json d = json::array(), t = json::array();
+            for (int j : cols) {
+                const Point a = pts[i], b = pts[j];
+                if ((a.lat == 21.5 || b.lat == 21.5) && i != j) {
+                    d.push_back(nullptr), t.push_back(nullptr);
+                    continue;
+                }
+                const double meters = std::round(1e5 * (std::abs(a.lat - b.lat) + std::abs(a.lng - b.lng))) + (a.lat < b.lat ? 7 : 0);
+                d.push_back(i == j ? 0.0 : meters), t.push_back(i == j ? 0.0 : meters / 8);
+            }
+            distances.push_back(d), durations.push_back(t);
+        }
         res.set_content(json{{"code", "Ok"}, {"distances", distances}, {"durations", durations}}.dump(), "application/json");
     });
     int port = server.bind_to_any_port("127.0.0.1");
@@ -106,6 +146,82 @@ int main() {
     PlanResult good = plan(message, default_rules(), *parse_datetime("2026-09-10 09:20:00"), url);
     CHECK(good.response["statuscode"] == "200" && std::string(good.travel) == "OSRM");
     CHECK(good.response["data"]["metrics"]["total_distance_km"] == 1.0 && good.response["data"]["metrics"]["total_travel_minutes"] == 2);
+
+    // ---- 8.29: cache bảng OSRM giữa các điểm việc ----
+    {
+        const std::string rect = url + "/rect";
+        auto same = [](const Matrix& a, const Matrix& b, bool row0) {  // so mọi ô trừ cột 0 (về chỗ KTV: không dùng)
+            for (size_t i = row0 ? 0 : 1; i < a.km.size(); ++i)
+                for (size_t j = 1; j < a.km.size(); ++j)
+                    if (std::abs(a.km[i][j] - b.km[i][j]) > 1e-9 || std::abs(a.minutes[i][j] - b.minutes[i][j]) > 1e-9)
+                        return false;
+            return true;
+        };
+        std::vector<Point> tasks{{21.0122, 105.7995}, {21.0043, 105.8021}, {21.0301, 105.7800}, {21.0200, 105.8100}};
+        auto with_start = [&](Point start, std::vector<Point> extra = {}) {
+            std::vector<Point> pts{start};
+            pts.insert(pts.end(), tasks.begin(), tasks.end());
+            pts.insert(pts.end(), extra.begin(), extra.end());
+            return pts;
+        };
+        TravelCache cache;
+        // Lần đầu (cache rỗng): cả bảng một lần; cache = 4 điểm việc, đủ 4×3 ô.
+        std::vector<Point> p1 = with_start({21.0248, 105.7961});
+        rect_queries.clear();
+        auto m1 = osrm_matrix(rect, p1, 30, error, 3, &cache);
+        auto full1 = osrm_matrix(rect, p1, 30, error);
+        CHECK(m1 && full1 && same(*m1, *full1, true) && rect_queries.size() == 2 && rect_queries[0] == "*|*");
+        CHECK(cache.points.size() == 4 && cache.points[0] == "21.012200,105.799500" && cache.added_cells == 12);
+        CHECK(cache.meters[0][1] == full1->km[1][2] * 1000 && cache.seconds[1][0] == full1->minutes[2][1] * 60);
+        // KTV di chuyển, việc không đổi: chỉ hỏi hàng điểm 0; bảng = bảng hỏi đầy đủ; cache không đổi nội dung.
+        std::vector<Point> p2 = with_start({21.0400, 105.7700});
+        rect_queries.clear();
+        cache.fetched_cells = cache.added_cells = 0;
+        auto m2 = osrm_matrix(rect, p2, 30, error, 3, &cache);
+        auto full2 = osrm_matrix(rect, p2, 30, error);
+        CHECK(m2 && same(*m2, *full2, true) && rect_queries.front() == "0|0;1;2;3;4" && cache.added_cells == 0);
+        CHECK(rect_queries.size() == 2 && cache.fetched_cells == 5);  // 1 hàng × 5 ô
+        // Thêm 1 việc: hàng (0 + việc mới) và cột việc mới; còn lại từ cache.
+        std::vector<Point> p3 = with_start({21.0400, 105.7700}, {{21.0010, 105.8200}});
+        rect_queries.clear();
+        cache.fetched_cells = cache.added_cells = 0;
+        auto m3 = osrm_matrix(rect, p3, 30, error, 3, &cache);
+        auto full3 = osrm_matrix(rect, p3, 30, error);
+        CHECK(m3 && same(*m3, *full3, true) && cache.added_cells == 8 && cache.points.size() == 5);
+        CHECK(rect_queries.size() == 3 && rect_queries[0] == "0;5|0;1;2;3;4;5" && rect_queries[1] == "1;2;3;4;5|5");
+        // Bỏ 2 việc + đổi thứ tự: không hỏi gì ngoài hàng 0; điểm lần này đứng đầu cache, điểm cũ giữ phía sau.
+        tasks = {{21.0200, 105.8100}, {21.0122, 105.7995}};
+        std::vector<Point> p4 = with_start({21.0400, 105.7700});
+        rect_queries.clear();
+        cache.fetched_cells = cache.added_cells = 0;
+        auto m4 = osrm_matrix(rect, p4, 30, error, 3, &cache);
+        auto full4 = osrm_matrix(rect, p4, 30, error);
+        CHECK(m4 && same(*m4, *full4, true) && rect_queries.front() == "0|0;1;2" && cache.points.size() == 5);
+        CHECK(cache.points[0] == "21.020000,105.810000" && cache.points[1] == "21.012200,105.799500");
+        // Điểm không có đường (null): ghi kNoRoute, lần sau không hỏi lại, ô dùng chim bay × 1,3.
+        tasks.push_back({21.5, 105.9});
+        std::vector<Point> p5 = with_start({21.0400, 105.7700});
+        cache.fetched_cells = cache.added_cells = 0;
+        auto m5 = osrm_matrix(rect, p5, 30, error, 3, &cache);
+        CHECK(m5 && cache.meters[0][2] == kNoRoute && std::abs(m5->km[1][3] - distance_km(p5[1], p5[3]) * kRoadFactor) < 1e-9);
+        rect_queries.clear();
+        cache.fetched_cells = cache.added_cells = 0;
+        auto m6 = osrm_matrix(rect, p5, 30, error, 3, &cache);
+        CHECK(m6 && rect_queries.size() == 1 && rect_queries[0] == "0|0;1;2;3" && same(*m5, *m6, true));
+        // OSRM lỗi: không có bảng, cache giữ nguyên.
+        const TravelCache before = cache;
+        error.clear();
+        tasks.push_back({21.0700, 105.8300});
+        CHECK(!osrm_matrix(url + "/broken", with_start({21.0400, 105.7700}), 30, error, 3, &cache) && !error.empty());
+        CHECK(cache.points == before.points && cache.meters == before.meters);
+        // plan() nhận cache: lần 2 cùng việc chỉ hỏi 1 hàng, kết quả giống hệt lần đầu.
+        TravelCache plan_cache;
+        PlanResult first = plan(message, default_rules(), *parse_datetime("2026-09-10 09:20:00"), rect, false, &plan_cache);
+        rect_queries.clear();
+        PlanResult second = plan(message, default_rules(), *parse_datetime("2026-09-10 09:20:00"), rect, false, &plan_cache);
+        CHECK(std::string(second.travel) == "OSRM" && rect_queries.size() == 1 && rect_queries[0].rfind("0|", 0) == 0);
+        CHECK(first.response["data"]["clusters"] == second.response["data"]["clusters"]);  // cùng tuyến (ms tính khác)
+    }
 
     server.stop();
     thread.join();
