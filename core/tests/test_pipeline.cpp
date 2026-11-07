@@ -3,6 +3,7 @@
 #include <cmath>
 #include <iostream>
 #include <map>
+#include <set>
 #include <string>
 
 #include "ktv/plan.hpp"
@@ -409,6 +410,84 @@ int main() {
             for (const auto& c : r->response["data"]["clusters"])
                 for (const auto& row : c["schedule"]) idle |= row["entry_type"] == "IDLE";
         CHECK(r && idle);
+    }
+    {  // 8.30 tính tiếp (warm start) từ thứ tự lần trước (order_hint).
+        auto plan_at = [](const json& msg, const char* at, const std::vector<long long>* hint) {
+            std::vector<ktv::Error> errors;
+            ktv::Message parsed = ktv::parse_message(msg, errors);
+            for (const auto& e : errors) std::cerr << "  lỗi không mong đợi: " << e.path << " " << e.problem << "\n";
+            if (!errors.empty()) ++failures;
+            return ktv::plan(parsed, ktv::default_rules(), *ktv::parse_datetime(at), "", true, nullptr, hint);
+        };
+        auto order_of = [](const ktv::PlanResult& r) {
+            std::vector<long long> order;
+            for (const auto& cluster : r.response["data"]["clusters"])
+                for (const auto& row : cluster["schedule"]) {
+                    if (row["entry_type"] == "TASK") order.push_back(row["task_id"].get<long long>());
+                    else if (row["entry_type"] == "BREAK") order.push_back(ktv::kBreakHint);
+                }
+            return order;
+        };
+        auto shown = [](const ktv::PlanResult& r) {  // task_id có dòng TASK / DEFERRED
+            std::set<long long> ids;
+            for (const auto& cluster : r.response["data"]["clusters"])
+                for (const auto& row : cluster["schedule"])
+                    if (row.contains("task_id") && row["task_id"].is_number_integer()) ids.insert(row["task_id"].get<long long>());
+            return ids;
+        };
+        auto tier1 = [](const ktv::PlanResult& r) { return r.response["data"]["score"]["tiers"][0]["total"].get<double>(); };
+        auto spread = [](int i) {  // toạ độ rải ~1–3 km, không gom điểm dừng
+            char text[40];
+            std::snprintf(text, sizeof text, "21.%04d,105.%04d", 100 + (i * 37) % 300, 7800 + (i * 53) % 400);
+            return std::string(text);
+        };
+        json tasks = json::array();
+        std::set<long long> all;
+        for (int i = 0; i < 24; ++i) {  // > max_exact_tasks: LNS; vài ca hẹn để có khung giờ
+            char at[24] = "";
+            if (i % 6 == 0) std::snprintf(at, sizeof at, "2026-09-10 %02d:00:00", 9 + i / 6);
+            tasks.push_back(task(500 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, at, spread(i).c_str(), ""));
+            all.insert(500 + i);
+        }
+        json m = message("2026-09-10 08:00:00", none, tasks, none, none, none);
+        const ktv::PlanResult cold = plan_at(m, "2026-09-10 08:00:00", nullptr);
+        const std::vector<long long> hint = order_of(cold);
+        CHECK(cold.source == ktv::Source::Heuristic && hint.size() > 13);
+        // 1. Cùng input, hint = tuyến vừa tính: tính tiếp, không tệ hơn (solve_from chỉ nhận nước làm khóa giảm), cùng tập việc.
+        const ktv::PlanResult same = plan_at(m, "2026-09-10 08:00:00", &hint);
+        CHECK(same.source == ktv::Source::Warm && tier1(same) <= tier1(cold) + 1e-6 && shown(same) == shown(cold));
+        // 2. Giờ trôi qua khung trưa (chỗ nghỉ cũ hết hợp lệ), việc đầu đã xong (bỏ khỏi IN, KTV đứng đó), 2 việc mới,
+        // hint có id rác + trùng: vẫn tính tiếp (không rơi về tính từ đầu), mọi việc của IN có dòng TASK / DEFERRED.
+        const long long done = hint.front() == ktv::kBreakHint ? hint[1] : hint.front();
+        json later = m;
+        json kept = json::array();
+        for (const auto& t : later["tasks"]["bao_tri"])
+            if (t["task_id"] != done) kept.push_back(t);
+            else later["staff"]["latlng"] = t["latlng"];
+        std::set<long long> later_ids = all;
+        later_ids.erase(done);
+        for (int i = 0; i < 2; ++i) {
+            kept.push_back(task(900 + i, "bao_tri", 2, "bao_tri_vat_ly", 1, 60, 1, "", spread(40 + i).c_str(), ""));
+            later_ids.insert(900 + i);
+        }
+        later["tasks"]["bao_tri"] = kept;
+        later["planned_at"] = "2026-09-10 11:30:00";
+        std::vector<long long> messy = hint;
+        messy.insert(messy.begin(), 123456789);
+        messy.push_back(hint[2]);
+        const ktv::PlanResult moved = plan_at(later, "2026-09-10 11:30:00", &messy);
+        CHECK(moved.source == ktv::Source::Warm && moved.response["statuscode"] == "200" && shown(moved) == later_ids);
+        // 3. Hint rỗng: dựng tuyến bằng chèn từng việc, vẫn đủ việc.
+        const std::vector<long long> empty;
+        const ktv::PlanResult blank = plan_at(m, "2026-09-10 08:00:00", &empty);
+        CHECK(blank.source == ktv::Source::Warm && shown(blank) == shown(cold));
+        // 4. ≤ max_exact_tasks việc: QHĐ chính xác như cũ (tính tiếp không cần).
+        json small = message("2026-09-10 08:00:00", none, json::array({tasks[0], tasks[1], tasks[2]}), none, none, none);
+        const std::vector<long long> small_hint{502, 501, 500};
+        CHECK(plan_at(small, "2026-09-10 08:00:00", &small_hint).source == ktv::Source::Optimal);
+        // 5. Tất định.
+        const ktv::PlanResult again = plan_at(later, "2026-09-10 11:30:00", &messy);
+        CHECK(again.response["data"]["clusters"] == moved.response["data"]["clusters"]);
     }
     {  // Tất định: cùng input cho cùng output.
         json m = message("2026-09-10 09:00:00", none,

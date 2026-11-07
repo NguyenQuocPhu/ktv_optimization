@@ -85,6 +85,11 @@ struct Rules {
     std::string large_method = "lns_window";  // Người dùng chốt 2026-10-08 theo bảng quét Phase 8.
     int lns_iterations = 1000;  // Số vòng phá – dựng lại (điểm gãy: 13–20 việc gần tối ưu, ≤ ~0,11 s).
     int window_size = 8;       // Số phần tử (việc + nghỉ trưa) QHĐ sắp lại mỗi cửa sổ.
+    // 8.30 — tính tiếp (warm start) từ thứ tự lần tính trước (plan(..., order_hint)): số vòng LNS thay lns_iterations
+    // (cả bước chèn ca tuỳ chọn khi phần chính tính tiếp). Đo 682 KTV thật, giờ trôi 20–60′ (tools/prod_eval/warm_check.py):
+    // 300 vòng nhanh 2,3–2,5× so với tính từ đầu 1.000 vòng, Σ mục tiêu tầng 1 ngang (−0,28…+0,08%); 100 vòng 3–3,6× nhưng
+    // kém +0,1…+0,3%; 1.000 vòng tốt hơn −0,1…−0,4% nhưng không nhanh hơn.
+    int warm_lns_iterations = 300;
     int k_month_days = 5;          // 7.16.1: ca "hoàn tất trong tháng" còn hơn ngần này ngày làm việc thì không xếp (K theo catalogue). [GIẢ ĐỊNH]
     // 7.16.3 — gộp điểm dừng cùng địa chỉ (catalogue mục C; workbook không có mã nhóm → AI tự gom theo địa chỉ).
     double stop_group_radius_m = 50;       // Bán kính coi là cùng địa chỉ (tham số cấu hình catalogue, sheet 1).

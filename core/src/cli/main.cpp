@@ -1,6 +1,9 @@
 // CLI của lõi C++ (adapter local, chưa có Kafka).
 // Input: một object JSON (pretty-printed) hoặc file JSONL, mỗi record là một message API (một KTV).
 //   ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at "YYYY-MM-DD HH:mm:ss"] [--out responses.jsonl] [--explain]
+//                         [--hints previous_responses.jsonl]
+//   --hints (8.30): file OUT của lần chạy trước (--out) → KTV có tuyến trong đó được TÍNH TIẾP từ thứ tự cũ
+//   (rules.warm_lns_iterations vòng LNS) thay vì tính từ đầu. "cách xếp: WARM n" = số KTV đã tính tiếp.
 //   ktv_core validate <input>
 //   ktv_core print-rules
 // Output mỗi record là một response OUT prototype (message_id, run_code, trigger, ..., data).
@@ -21,8 +24,30 @@ namespace {
 
 int usage() {
     std::cerr << "cách dùng:\n  ktv_core plan <input> [--rules rules.json] [--osrm URL] [--at \"YYYY-MM-DD HH:mm:ss\"] [--out responses.jsonl] [--explain]\n"
+                 "                        [--hints previous_responses.jsonl]\n"
                  "  ktv_core validate <input>\n  ktv_core print-rules\n";
     return 2;
+}
+
+// --hints: mỗi dòng một OUT (ktv_core plan --out) → staff_id → task_id theo thứ tự tuyến (kBreakHint = nghỉ trưa).
+std::map<std::string, std::vector<long long>> read_hints(std::istream& in) {
+    std::map<std::string, std::vector<long long>> hints;
+    for (std::string line; std::getline(in, line);) {
+        ktv::json out = ktv::json::parse(line, nullptr, false);
+        if (!out.is_object() || !out.contains("data")) continue;
+        ktv::json data = out["data"].is_array() && !out["data"].empty() ? out["data"][0] : out["data"];
+        if (!data.is_object() || !data.contains("staff_id") || !data.contains("clusters")) continue;
+        std::vector<long long> order;
+        for (const auto& cluster : data["clusters"])
+            for (const auto& row : cluster.value("schedule", ktv::json::array())) {
+                const std::string type = row.value("entry_type", "");
+                if (type == "TASK" && row.contains("task_id") && row["task_id"].is_number_integer()) order.push_back(row["task_id"]);
+                else if (type == "BREAK") order.push_back(ktv::kBreakHint);
+            }
+        const ktv::json& id = data["staff_id"];
+        hints[id.is_string() ? id.get<std::string>() : id.dump()] = std::move(order);
+    }
+    return hints;
 }
 
 }  // namespace
@@ -30,7 +55,7 @@ int usage() {
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
     std::string command = argv[1];
-    std::string input, rules_path, out_path, osrm_url, at;
+    std::string input, rules_path, out_path, osrm_url, at, hints_path;
     bool explain = false;
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -39,6 +64,7 @@ int main(int argc, char** argv) {
         else if (arg == "--osrm" && i + 1 < argc) osrm_url = argv[++i];
         else if (arg == "--at" && i + 1 < argc) at = argv[++i];
         else if (arg == "--explain") explain = true;
+        else if (arg == "--hints" && i + 1 < argc) hints_path = argv[++i];
         else if (input.empty() && arg[0] != '-') input = arg;
         else return usage();
     }
@@ -75,6 +101,16 @@ int main(int argc, char** argv) {
         }
     }
 
+    std::map<std::string, std::vector<long long>> hints;
+    if (!hints_path.empty()) {
+        std::ifstream hint_file(hints_path);
+        if (!hint_file) {
+            std::cerr << "không mở được " << hints_path << "\n";
+            return 2;
+        }
+        hints = read_hints(hint_file);
+    }
+
     std::ofstream file;
     if (!out_path.empty()) file.open(out_path);
     std::ostream* out = command == "plan" && !out_path.empty() ? &file : nullptr;
@@ -97,7 +133,9 @@ int main(int argc, char** argv) {
             if (shown++ < 20) std::cerr << "record " << i + 1 << ": " << response["message"].get<std::string>() << "\n";
         } else if (command == "plan") {
             try {
-                ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url, explain);
+                auto hint = hints.find(message.staff.staff_id);
+                ktv::PlanResult result = ktv::plan(message, rules, server_now, osrm_url, explain, nullptr,
+                                                   hint == hints.end() ? nullptr : &hint->second);
                 response = std::move(result.response);
                 for (const ktv::Error& warning : result.warnings) ++issues[ktv::issue_key(warning)];
                 if (response["success"]) {

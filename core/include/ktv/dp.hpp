@@ -115,8 +115,9 @@ enum class Source {
     Optimal,      // QHĐ, tốt nhất theo rules.
     Approximate,  // QHĐ nhưng phải bỏ bớt nhãn (vượt max_labels): gần tốt nhất.
     Heuristic,    // Quá max_exact_tasks việc: tham lam + or-opt/2-opt (+ LNS / cửa sổ, Phase 8) — gần đúng.
+    Warm,         // 8.30: tính tiếp từ thứ tự lần trước (solve_warm) + LNS ngắn — gần đúng.
 };
-inline constexpr const char* kSourceNames[] = {"OPTIMAL", "APPROXIMATE", "HEURISTIC"};
+inline constexpr const char* kSourceNames[] = {"OPTIMAL", "APPROXIMATE", "HEURISTIC", "WARM"};
 
 struct Solution {
     std::vector<int> order;    // Chỉ số việc theo thứ tự làm; kBreak = chỗ nghỉ trưa.
@@ -131,6 +132,12 @@ Solution solve(const Problem& p, const Rules& rules);
 // → không bao giờ tệ hơn start. Dùng khi đã có tuyến tốt (VD QHĐ chính xác) mà còn thêm ca tuỳ chọn ngoài giới hạn.
 // Phase 8: rules.large_method ≠ "improve" → chạy tiếp LNS (mặc định lns_window) từ kết quả đó.
 Solution solve_from(const Problem& p, const Rules& rules, const std::vector<int>& start);
+
+// 8.30 — tính tiếp từ thứ tự lần tính trước (warm start; hint = chỉ số việc, kBreak = nghỉ trưa): dựng tuyến xuất phát
+// (giữ nguyên tuyến cũ nếu còn hợp lệ; không thì giữ thứ tự ca bắt buộc, chèn lại nghỉ trưa + ca được bỏ), chèn việc mới
+// vào chỗ rẻ nhất, rồi solve_from với rules.warm_lns_iterations vòng LNS → source Warm. ≤ max_exact_tasks việc hoặc không
+// dựng được tuyến hợp lệ → solve() như thường.
+Solution solve_warm(const Problem& p, const Rules& rules, const std::vector<int>& hint);
 
 // Mô phỏng một thứ tự có sẵn (kể cả phương án so sánh): từng bước + giờ, dùng đúng luật của solve().
 // Thứ tự phạm luật nghỉ trưa vẫn ra số; chỉ objective() mới biết hợp lệ hay không (trả vô cực).

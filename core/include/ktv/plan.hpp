@@ -50,7 +50,11 @@ struct PlanResult {
 // travel_cache (8.29, có thể null): bảng OSRM đã biết giữa các điểm việc — chỉ hỏi OSRM phần thiếu; thành công thì
 // được cập nhật (service lưu lại cho lần sau). OSRM lỗi / chim bay → giữ nguyên.
 PlanResult plan(const Message& message, const Rules& rules, Minutes server_now, const std::string& osrm_url = "",
-                bool explain = false, TravelCache* travel_cache = nullptr);
+                bool explain = false, TravelCache* travel_cache = nullptr,
+                const std::vector<long long>* order_hint = nullptr);
+// order_hint (8.30, có thể null): task_id theo thứ tự tuyến lần tính trước (kBreakHint = chỗ nghỉ trưa) → tính tiếp từ
+// đó (dp solve_warm, rules.warm_lns_iterations vòng LNS) thay vì dựng lại từ đầu. Việc mới / không còn tự xử lý.
+inline constexpr long long kBreakHint = -1;
 
 // Response lỗi (sheet 07): success = false, data = null.
 nlohmann::ordered_json error_response(const std::string& statuscode, const std::string& text,

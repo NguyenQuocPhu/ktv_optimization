@@ -2065,6 +2065,55 @@ ca xếp 23.094 → 23.051, ca trễ 22.358 → 22.356, km 13.978 → 11.635 (�
 **Test.** `test_pipeline`: 128 điểm → 200 + ≤ 45 vào QHĐ; `candidate_max = 0`; ca còn kịp hạn (xa) không bị 60 ca đã
 trễ (gần) chiếm suất. UAT 0 dòng đổi. ctest 20/20.
 
+### Phase 8.30 — Tính tiếp từ tuyến lần trước (warm start) (2026-11-07)
+
+**Vì sao.** Sau cache bảng OSRM (8.29), phần chậm còn lại của một lần tính là LNS 1.000 vòng **dựng lại từ đầu** — kể
+cả khi Mobix gọi `/suggest` lần nữa sau vài phút (chỉ vị trí KTV đổi) hay IN chỉ thêm 1 việc. Tuyến lần trước (cache OUT
+của service) đã là kết quả 1.000 vòng; xếp tuyến động trong tài liệu (Pillac 2013, Gendreau 1999) tối ưu tiếp từ kế
+hoạch đang chạy thay vì giải lại. Phụ: tính lại từ đầu hay đảo tuyến dù tình hình gần như không đổi.
+
+**Làm.**
+- `plan(..., order_hint)`: task_id theo thứ tự tuyến cũ (`kBreakHint` = nghỉ trưa) → chỉ số điểm dừng.
+- `dp::solve_warm`: dựng tuyến xuất phát hai tầng:
+  1. giữ NGUYÊN tuyến cũ (cả nghỉ trưa + ca được bỏ);
+  2. không hợp lệ (giờ đã trôi: chỗ nghỉ cũ phạm khung trưa, ca chèn có mốc cứng `inserted_cap` không còn kịp — đo
+     chuỗi 8 bước: 64% tuyến) → chỉ giữ thứ tự ca bắt buộc, chèn lại nghỉ trưa + ca được bỏ từng cái vào chỗ tốt nhất.
+- Việc mới chèn vào chỗ rẻ nhất; id lạ / trùng bỏ qua. Rồi `solve_from` với `rules.warm_lns_iterations` (mặc định 300).
+  Bước chèn ca tuỳ chọn cũng dùng số vòng đó — chỉ khi phần chính thực sự tính tiếp.
+- Ca bắt buộc ≤ `max_exact_tasks` → QHĐ chính xác như cũ. Không dựng được tuyến hợp lệ → `solve` như cũ.
+- `Source::Warm`; `--explain`: `score.warm` = WARM · EXACT · FALLBACK.
+- CLI `ktv_core plan --hints <OUT lần trước>`.
+
+**Đo** (`tools/prod_eval/warm_check.py`). Dữ liệu thật: 682 KTV ≥ 13 việc, gồm 300 KTV prod 06/11, 25 KTV nặng 07/11
+và 357 KTV giả lập; chim bay. Chấm bằng mục tiêu lõi (`--explain`), so với tính từ đầu 1.000 vòng. Tình huống:
+- `/suggest` +20′, KTV đang đi;
+- việc mới +20′;
+- xong việc đầu +60′;
+- chuỗi 4 bước × 30′, KTV đi theo tuyến tính tiếp.
+
+| warm_lns_iterations | nhanh | Σ tầng 1 | kém > 5% |
+|---|---|---|---|
+| 100 | 3,1–3,6× | −0,12…+0,28% | ≤ 8 / 681 |
+| **300** | **2,3–2,5×** | **−0,28…+0,08%** | ≤ 7 / 681 |
+| 1.000 | 1,0–1,2× | −0,09…−0,42% | ≤ 3 / 681 |
+
+- 0 KTV rơi về tính từ đầu. Ổn định (cặp việc liền nhau giữ như tuyến trước) 0,55–0,70 → 0,62–0,76.
+- Cùng số vòng, xuất phát từ tuyến cũ tốt hơn tuyến tham lam.
+- Hybrid (so tuyến cũ với tuyến tham lam dựng mới) như không có, chậm hơn → bỏ.
+- Giảm LNS khi tính từ đầu (300 vòng): kém hơn ~200 / 473 KTV, tăng việc không xếp được → bỏ.
+
+**Bài học đo.** Lượt thử đầu chỉ đổi giờ máy chủ, không đổi `planned_at` của IN (lõi lấy `planned_at` làm "bây giờ")
+→ giờ không trôi, tính tiếp trông tốt quá (100 vòng: 5×, −0,04%). `warm_check.py` đổi `planned_at`.
+
+**Test.** `test_pipeline` (dữ liệu dựng tay):
+- hint = tuyến vừa tính → WARM, không tệ hơn;
+- +3,5 giờ qua khung trưa + việc xong + 2 việc mới + id rác / trùng → WARM, đủ việc;
+- hint rỗng;
+- ≤ 12 việc → OPTIMAL;
+- tất định.
+
+Trên dữ liệu thật: `warm_check.py` (6 điều kiện ĐẠT / KHÔNG ĐẠT). ctest 20/20.
+
 ### Phase 8.29 — Cache bảng OSRM giữa các điểm việc (2026-11-07)
 
 **Vì sao.** Mỗi lần tính lõi hỏi OSRM **cả bảng N×N** (99 điểm: 2,5–5,6 s, đo partner-api 07/11) — ~65% thời gian một lần

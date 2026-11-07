@@ -1,6 +1,7 @@
 #include "ktv/dp.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <array>
 #include <limits>
@@ -699,6 +700,55 @@ Solution solve_from(const Problem& p, const Rules& rules, const std::vector<int>
         if (Key k = s.evaluate(candidate); k < best_key) best.swap(candidate), best_key = k;
     }
     return {best, walk(p, best), Source::Heuristic};
+}
+
+Solution solve_warm(const Problem& p, const Rules& rules, const std::vector<int>& hint) {
+    if (p.size() <= rules.max_exact_tasks) return solve(p, rules);  // QHĐ chính xác vốn nhanh: không cần tính tiếp
+    Search s(p, rules);
+    const bool needs_break = !std::isnan(p.break_open);
+    auto insert_best = [&](std::vector<int>& order, int j, bool may_skip) {  // như bước dựng lại của LNS
+        std::vector<int> chosen = order;
+        Key chosen_key = may_skip ? s.evaluate(order, true) : kInfeasible;
+        bool have = may_skip;
+        for (size_t b = 0; b <= order.size(); ++b) {
+            std::vector<int> candidate = order;
+            candidate.insert(candidate.begin() + static_cast<long>(b), j);
+            if (Key key = s.evaluate(candidate, true); !have || key < chosen_key) chosen.swap(candidate), chosen_key = key, have = true;
+        }
+        order.swap(chosen);
+    };
+    // Dựng tuyến xuất phát từ hint. keep_all: giữ nguyên cả nghỉ trưa + ca được bỏ của tuyến cũ ở chỗ cũ (ổn định nhất);
+    // không thì chỉ giữ thứ tự CA BẮT BUỘC, nghỉ trưa và ca được bỏ chèn lại từng cái vào chỗ tốt nhất (khi giờ đã trôi,
+    // chỗ nghỉ cũ / ca chèn có mốc cứng inserted_cap hay hết hợp lệ — đo chuỗi 8 bước: 64% tuyến giữ nguyên phạm luật).
+    auto build = [&](bool keep_all) {
+        std::vector<char> seen(p.size(), 0);
+        bool has_break = false;
+        std::vector<int> order, later;
+        for (int j : hint) {
+            if (j == kBreak) {
+                if (keep_all && needs_break && !has_break) has_break = true, order.push_back(j);
+                continue;
+            }
+            if (j < 0 || j >= p.size() || seen[j]) continue;
+            seen[j] = 1;
+            (keep_all || !p.may_drop(j) ? order : later).push_back(j);
+        }
+        for (int j = 0; j < p.size(); ++j)
+            if (!seen[j] && !p.may_drop(j)) insert_best(order, j, false);
+        if (needs_break && !has_break) insert_best(order, kBreak, true);
+        for (int j : later) insert_best(order, j, true);
+        for (int j = 0; j < p.size(); ++j)
+            if (!seen[j] && p.may_drop(j)) insert_best(order, j, true);
+        return order;
+    };
+    std::vector<int> order = build(true);
+    if (std::isinf(s.evaluate(order)[0])) order = build(false);
+    if (std::isinf(s.evaluate(order)[0])) return solve(p, rules);
+    Rules warm = rules;
+    warm.lns_iterations = rules.warm_lns_iterations;
+    Solution result = solve_from(p, warm, order);
+    result.source = Source::Warm;
+    return result;
 }
 
 std::vector<Visit> simulate(const Problem& p, const std::vector<int>& order) { return walk(p, order); }

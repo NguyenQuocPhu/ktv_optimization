@@ -8,6 +8,7 @@
 #include <numeric>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 
 #include "ktv/cluster.hpp"
 #include "ktv/normalization.hpp"
@@ -345,7 +346,7 @@ ojson error_response(const std::string& statuscode, const std::string& text, con
 
 PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_now, const std::string& osrm_url,
                 bool explain,
-                TravelCache* travel_cache) {
+                TravelCache* travel_cache, const std::vector<long long>* order_hint) {
     auto clock = std::chrono::steady_clock::now();
     // Chế độ sắp xếp = bộ tầng rule (không sửa dp): 0 mặc định = Kết nối 70/30 → mix_tiers (7.26);
     // 1 SLA → tiers; 2 Tuyến → route_tiers (km tầng 1).
@@ -811,7 +812,26 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     std::vector<int> kept(n_mandatory);  // kept[t] = chỉ số trong all_stops của việc t trong bài đang giải
     std::iota(kept.begin(), kept.end(), 0);
     p = subproblem(kept);
-    Solution solution = solve(p, rules);
+    // 8.30: có thứ tự lần trước → tính tiếp từ đó (ít vòng LNS); bước chèn ca tuỳ chọn phía dưới cũng dùng số vòng đó.
+    Rules solve_rules = rules;
+    std::vector<int> hint_order;
+    if (order_hint) {
+        std::unordered_map<long long, int> stop_of;  // task_id → chỉ số điểm dừng trong p
+        for (int t = 0; t < static_cast<int>(kept.size()); ++t)
+            for (const Task* task : all_stops[kept[t]].tasks) stop_of.emplace(task->task_id, t);
+        for (long long id : *order_hint) {
+            if (id == kBreakHint) hint_order.push_back(kBreak);
+            else if (auto it = stop_of.find(id); it != stop_of.end()) hint_order.push_back(it->second);
+        }
+    }
+    Solution solution = order_hint ? solve_warm(p, rules, hint_order) : solve(p, rules);
+    const bool warm = solution.source == Source::Warm;  // không rơi về solve() (bước chèn ca tuỳ chọn trả Heuristic)
+    // Bước chèn ca tuỳ chọn chỉ dùng ít vòng khi phần chính THỰC SỰ tính tiếp: ca bắt buộc ≤ max_exact_tasks (QHĐ chính
+    // xác) hoặc rơi về tính từ đầu → giữ đủ vòng như cũ (đo 682 KTV: 42 KTV loại này, giảm vòng chỉ làm kém đi).
+    if (warm) solve_rules.lns_iterations = rules.warm_lns_iterations;
+    // explain: trạng thái tính tiếp — WARM · EXACT (ca bắt buộc ít, QHĐ chính xác) · FALLBACK (không dựng được tuyến
+    // hợp lệ từ thứ tự cũ, tính từ đầu).
+    const char* warm_state = !order_hint ? nullptr : warm ? "WARM" : p.size() <= rules.max_exact_tasks ? "EXACT" : "FALLBACK";
     if (base_after_mandatory)
         whole.overtime_base = std::max(whole.shift_end, solution.steps.empty() ? 0.0 : solution.steps.back().done);
     // 8.7 (UAT case 14): phút còn trống của tuyến bắt buộc = các khoảng chờ (khung hẹn, nghỉ trưa) + từ việc cuối tới hết
@@ -856,7 +876,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
             if (used < candidates.size()) {  // 4. phần còn lại: chèn / gỡ cục bộ từ tuyến hiện có (chỉ số cũ giữ nguyên)
                 for (; used < candidates.size(); ++used) keep.push_back(candidates[used].second);
                 p = subproblem(keep);
-                solution = solve_from(p, rules, solution.order);
+                solution = solve_from(p, solve_rules, solution.order);
                 kept = keep;
             }
         }
@@ -875,7 +895,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
         if (t != kBreak) result.routed += static_cast<int>(routed_stops[t].tasks.size());
     if (result.routed == 0) return deferred_only();  // chỉ có ca tuỳ chọn và không ca nào đáng chèn
     close_deferred();
-    result.source = solution.source;
+    result.source = warm ? Source::Warm : solution.source;
     const std::vector<Visit>& steps = solution.steps;
 
     // ---- Dòng lịch (chưa gắn seq; seq đánh lại theo từng cụm sau khi chia).
@@ -1035,7 +1055,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     if (stop_filtered && stop_cap < cap_limit && finish + static_cast<Minutes>(rules.candidate_idle_minutes) <= shift_end) {
         Rules wider = base_rules;
         wider.candidate_min = wider.candidate_max = std::min(2 * stop_cap, cap_limit);
-        return plan(message, wider, server_now, osrm_url, explain, travel_cache);  // cache: chỉ hỏi điểm mới thêm
+        return plan(message, wider, server_now, osrm_url, explain, travel_cache, order_hint);  // cache: chỉ hỏi điểm mới thêm
     }
     ojson metrics = {
         {"total_distance_km", round_to(km, 1)},
@@ -1078,8 +1098,9 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
                                     {"raw", alt.explained.feasible ? alt.explained.raw : ojson(nullptr)},
                                     {"verdict", verdict_of(chosen, alt)}});
         }
-        data["score"] = {{"sequence_source", kSourceNames[static_cast<int>(solution.source)]},
+        data["score"] = {{"sequence_source", kSourceNames[static_cast<int>(result.source)]},
                          {"tiers", tiers}, {"raw", chosen.raw}, {"alternatives", alternatives}};
+        if (warm_state) data["score"]["warm"] = warm_state;
     }
     result.response = {{"success", true}, {"statuscode", estimated ? "424" : "200"},
                        {"message", estimated ? "Không lấy được dữ liệu bản đồ, khoảng cách là ước lượng đường chim bay (" + travel_error + ")" : ""},
