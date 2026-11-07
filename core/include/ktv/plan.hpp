@@ -34,7 +34,9 @@ namespace ktv {
 
 struct PlanResult {
     nlohmann::ordered_json response;    // Response JSON, giữ đúng thứ tự field của file API.
-    Source source = Source::Optimal;    // Thứ tự do QHĐ tốt nhất / gần đúng / tham lam.
+    Source source = Source::Optimal;    // Thứ tự do QHĐ tốt nhất / gần đúng / tham lam / tính tiếp.
+    const char* warm = nullptr;         // Có order_hint (8.30): "WARM" tính tiếp · "EXACT" ca bắt buộc ít, QHĐ chính
+                                        // xác · "FALLBACK" không dựng được tuyến từ thứ tự cũ, tính từ đầu. Không: null.
     int routed = 0;                     // Số việc được xếp.
     int excluded = 0;                   // Số việc bị loại (thiếu tọa độ).
     const char* travel = "HAVERSINE";   // OSRM, HAVERSINE, hoặc ESTIMATED (OSRM lỗi → chim bay × 1,3).

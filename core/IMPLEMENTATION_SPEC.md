@@ -2082,6 +2082,11 @@ hoạch đang chạy thay vì giải lại. Phụ: tính lại từ đầu hay �
   Bước chèn ca tuỳ chọn cũng dùng số vòng đó — chỉ khi phần chính thực sự tính tiếp.
 - Ca bắt buộc ≤ `max_exact_tasks` → QHĐ chính xác như cũ. Không dựng được tuyến hợp lệ → `solve` như cũ.
 - `Source::Warm`; `--explain`: `score.warm` = WARM · EXACT · FALLBACK.
+- `PlanResult.warm` (cùng giá trị, null khi không có hint) cho service log/giám sát: ca EXACT có thể có `source` =
+  HEURISTIC (bước chèn ca tuỳ chọn) — đọc `source` để đếm FALLBACK là sai (đo service 07/11: 142/2714 lượt
+  "HEURISTIC + có hint" đều là EXACT).
+- Rule `warm_max_age_minutes` (120, 0 = tắt): lõi không đọc; service chỉ đưa tuyến cache OUT làm gợi ý khi bản đó cùng
+  ngày, mã 200/424, `planned_at` lệch ≤ ngần này phút (cùng chỗ với `cache_max_age_minutes`).
 - CLI `ktv_core plan --hints <OUT lần trước>`.
 
 **Đo** (`tools/prod_eval/warm_check.py`). Dữ liệu thật: 682 KTV ≥ 13 việc, gồm 300 KTV prod 06/11, 25 KTV nặng 07/11

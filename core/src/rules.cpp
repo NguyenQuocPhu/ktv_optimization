@@ -128,12 +128,15 @@ Rules rules_from_json(const nlohmann::json& data) {
         rules.large_method = method.get<std::string>();
     }
     double iterations = rules.lns_iterations, window = rules.window_size, warm = rules.warm_lns_iterations;
+    double warm_age = rules.warm_max_age_minutes;
     number("lns_iterations", iterations, 0);
     number("warm_lns_iterations", warm, 0);
+    number("warm_max_age_minutes", warm_age, 0);
     number("window_size", window, 2);
     if (window > 12) fail("window_size tối đa 12");  // QHĐ cửa sổ 2^w ô
     rules.lns_iterations = static_cast<int>(iterations);
     rules.warm_lns_iterations = static_cast<int>(warm);
+    rules.warm_max_age_minutes = static_cast<int>(warm_age);
     rules.window_size = static_cast<int>(window);
     double k_month = rules.k_month_days;
     number("k_month_days", k_month, 0);
@@ -231,6 +234,7 @@ nlohmann::json rules_to_json(const Rules& rules) {
         {"large_method", rules.large_method},
         {"lns_iterations", rules.lns_iterations},
         {"warm_lns_iterations", rules.warm_lns_iterations},
+        {"warm_max_age_minutes", rules.warm_max_age_minutes},
         {"window_size", rules.window_size},
         {"k_month_days", rules.k_month_days},
         {"stop_group_radius_m", rules.stop_group_radius_m},

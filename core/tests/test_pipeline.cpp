@@ -484,7 +484,9 @@ int main() {
         // 4. ≤ max_exact_tasks việc: QHĐ chính xác như cũ (tính tiếp không cần).
         json small = message("2026-09-10 08:00:00", none, json::array({tasks[0], tasks[1], tasks[2]}), none, none, none);
         const std::vector<long long> small_hint{502, 501, 500};
-        CHECK(plan_at(small, "2026-09-10 08:00:00", &small_hint).source == ktv::Source::Optimal);
+        const ktv::PlanResult exact = plan_at(small, "2026-09-10 08:00:00", &small_hint);
+        CHECK(exact.source == ktv::Source::Optimal && exact.warm && std::string(exact.warm) == "EXACT");
+        CHECK(moved.warm && std::string(moved.warm) == "WARM" && !plan_at(small, "2026-09-10 08:00:00", nullptr).warm);
         // 5. Tất định.
         const ktv::PlanResult again = plan_at(later, "2026-09-10 11:30:00", &messy);
         CHECK(again.response["data"]["clusters"] == moved.response["data"]["clusters"]);

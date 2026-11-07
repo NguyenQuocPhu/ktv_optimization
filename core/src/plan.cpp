@@ -829,8 +829,8 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     // Bước chèn ca tuỳ chọn chỉ dùng ít vòng khi phần chính THỰC SỰ tính tiếp: ca bắt buộc ≤ max_exact_tasks (QHĐ chính
     // xác) hoặc rơi về tính từ đầu → giữ đủ vòng như cũ (đo 682 KTV: 42 KTV loại này, giảm vòng chỉ làm kém đi).
     if (warm) solve_rules.lns_iterations = rules.warm_lns_iterations;
-    // explain: trạng thái tính tiếp — WARM · EXACT (ca bắt buộc ít, QHĐ chính xác) · FALLBACK (không dựng được tuyến
-    // hợp lệ từ thứ tự cũ, tính từ đầu).
+    // Trạng thái tính tiếp (PlanResult.warm, explain score.warm) — WARM · EXACT (ca bắt buộc ít, QHĐ chính xác; source
+    // có thể là HEURISTIC do bước chèn ca tuỳ chọn) · FALLBACK (không dựng được tuyến hợp lệ từ thứ tự cũ, tính từ đầu).
     const char* warm_state = !order_hint ? nullptr : warm ? "WARM" : p.size() <= rules.max_exact_tasks ? "EXACT" : "FALLBACK";
     if (base_after_mandatory)
         whole.overtime_base = std::max(whole.shift_end, solution.steps.empty() ? 0.0 : solution.steps.back().done);
@@ -896,6 +896,7 @@ PlanResult plan(const Message& message, const Rules& base_rules, Minutes server_
     if (result.routed == 0) return deferred_only();  // chỉ có ca tuỳ chọn và không ca nào đáng chèn
     close_deferred();
     result.source = warm ? Source::Warm : solution.source;
+    result.warm = warm_state;
     const std::vector<Visit>& steps = solution.steps;
 
     // ---- Dòng lịch (chưa gắn seq; seq đánh lại theo từng cụm sau khi chia).

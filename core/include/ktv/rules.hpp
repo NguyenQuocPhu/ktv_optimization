@@ -90,6 +90,9 @@ struct Rules {
     // 300 vòng nhanh 2,3–2,5× so với tính từ đầu 1.000 vòng, Σ mục tiêu tầng 1 ngang (−0,28…+0,08%); 100 vòng 3–3,6× nhưng
     // kém +0,1…+0,3%; 1.000 vòng tốt hơn −0,1…−0,4% nhưng không nhanh hơn.
     int warm_lns_iterations = 300;
+    // Service (worker / API) chỉ đưa tuyến cache OUT làm gợi ý khi bản đó cùng ngày, mã 200/424 và planned_at lệch ≤ ngần
+    // này phút; 0 = luôn tính từ đầu. Chuỗi 4 × 30′ trên dữ liệu thật vẫn ngang tính từ đầu (warm_check.py).
+    int warm_max_age_minutes = 120;
     int k_month_days = 5;          // 7.16.1: ca "hoàn tất trong tháng" còn hơn ngần này ngày làm việc thì không xếp (K theo catalogue). [GIẢ ĐỊNH]
     // 7.16.3 — gộp điểm dừng cùng địa chỉ (catalogue mục C; workbook không có mã nhóm → AI tự gom theo địa chỉ).
     double stop_group_radius_m = 50;       // Bán kính coi là cùng địa chỉ (tham số cấu hình catalogue, sheet 1).
